@@ -1,3 +1,7 @@
+#project specific files
+user_uploads/
+*.db
+.DS_Store
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

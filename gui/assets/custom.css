@@ -1,0 +1,4 @@
+.scroll-highlight {
+    background-color: yellow !important;
+    transition: background-color 1s ease;
+}
