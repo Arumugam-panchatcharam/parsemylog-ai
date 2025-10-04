@@ -12,11 +12,13 @@ from logai.pattern import Pattern
 from logai.utils.constants import (
     UPLOAD_DIRECTORY
 )
-
-def save_result_df(result_df, project_dir, filename="result_df.parquet"):
-    file_path = os.path.join(project_dir, filename)
-    result_df.to_parquet(file_path, index=False)
-    return file_path
+def save_result_df(result_df, file_path):
+    if result_df is None or result_df.empty:
+        return None
+    result_file = Path(file_path).stem + ".parquet"
+    result_file_path = os.path.join(Path(file_path).parent, result_file)
+    result_df.to_parquet(result_file_path, index=False)
+    return result_file_path
 
 def load_result_df(file_path):
     if not os.path.exists(file_path):
@@ -111,7 +113,7 @@ def click_run(
                 
                 summary_div = summary(result_df)
                 fig = summary_graph(result_df)
-                result_df_path = save_result_df(result_df, project_dir)
+                result_df_path = save_result_df(result_df, file_path)
                 return result_df_path, summary_div, fig, False, ""
             
             elif prop_id == "pattern_exception_modal_close":

@@ -1,6 +1,7 @@
 import re
 import os
 import pandas as pd
+from pathlib import Path
 from datetime import datetime, timedelta
 from dateutil import parser as dateparser
 
@@ -38,12 +39,20 @@ class Pattern:
         persistence = FilePersistence(f"{project_dir}/drain3_state.json") if project_dir and os.path.exists(project_dir) else None
         self.template_miner = TemplateMiner(persistence,config=config)
         self.log_df = pd.DataFrame()
-        self.result_table = pd.DataFrame()
-        self.logs = []
-        self.results = []
+        self.results = pd.DataFrame()
 
     def parse_logs(self, fpath):
+        # Check if already parsed file exists
+        result_file = Path(fpath).stem + ".parquet"
+        result_file_path = os.path.join(Path(fpath).parent, result_file)
+        #print(f"Result file path: {result_file_path}")
+        if os.path.exists(result_file_path):
+            return pd.read_parquet(result_file_path)
+
         self.log_df = self._read_logs(fpath)
+        if self.log_df.empty:
+            return pd.DataFrame()
+        
         self.results = pd.DataFrame()
 
         def extract_template_and_args(logline):

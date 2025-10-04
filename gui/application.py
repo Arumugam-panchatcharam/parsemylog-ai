@@ -1154,7 +1154,7 @@ def logout(n_clicks):
 def update_nav_active(pathname):
     if not pathname or not pathname.startswith("/workspace/"):
         # FIXED: Default to log viewer when not in workspace
-        return True, False, False, False, False, False
+        return True, False, False, False
 
     page = pathname.split("/workspace/")[-1]
 
