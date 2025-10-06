@@ -103,7 +103,7 @@ def click_run(
                 
                 # Parse logs and extract patterns
                 parser = Pattern(project_dir=project_dir)
-                result_df = parser.parse_logs(file_path)
+                result_df, result_df_path = parser.parse_logs(file_path)
 
                 if result_df is None or result_df.empty:
                     return None,dash.no_update,dash.no_update, True, "No patterns were extracted from the log file."
@@ -113,8 +113,8 @@ def click_run(
                 
                 summary_div = summary(result_df)
                 fig = summary_graph(result_df)
-                result_df_path = save_result_df(result_df, file_path)
-                return result_df_path, summary_div, fig, False, ""
+
+                return str(result_df_path), summary_div, fig, False, ""
             
             elif prop_id == "pattern_exception_modal_close":
                 return None,dash.no_update,dash.no_update, False, ""

@@ -1,5 +1,6 @@
 #project specific files
 user_uploads/
+data/
 *.db
 .DS_Store
 # Byte-compiled / optimized / DLL files

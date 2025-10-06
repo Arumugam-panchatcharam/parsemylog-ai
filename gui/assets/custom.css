@@ -2,3 +2,19 @@
     background-color: yellow !important;
     transition: background-color 1s ease;
 }
+
+.graph-container {
+    width: 100%;
+    max-width: 100%;
+}
+
+.js-plotly-plot, .plotly {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+@media (max-width: 992px) {
+    .graph-container {
+        height: 40vh;
+    }
+}

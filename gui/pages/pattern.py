@@ -46,23 +46,61 @@ def create_control_card():
         ],
     )
 
-
 def create_summary_graph_layout():
     return html.Div(
-        dcc.Graph(id="summary-scatter"),
-        # style={'width': '39%', 'display': 'inline-block', 'padding': '0 20'}
+        dcc.Graph(
+        id="summary-scatter",
+        style={
+            "height": "45vh", 
+            "width": "100%", 
+            "margin": "0", 
+            "padding": "0"},
+        config={
+            "responsive": True,
+            "displayModeBar": True, 
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"]
+            },
+        ),
+        style={
+            "width": "100%",
+            #"border": "1px solid #e0e0e0",
+            #"borderRadius": "8px",
+            #"boxShadow": "0 1px 3px rgba(0,0,0,0.08)",
+            "padding": "5px",
+            "backgroundColor": "#fff",
+            "overflow": "hidden",
+        },
+        className="graph-container"
     )
 
 
 def create_timeseries_grapy_layout():
     return html.Div(
-        children=[
-            dcc.Graph(id="pattern-time-series"),
-        ],
-        # style={
-        #     'display': 'inline-block',
-        #     'width': '59%'
-        # },
+        dcc.Graph(
+        id="pattern-time-series",
+        style={
+            "height": "45vh", 
+            "width": "100%", 
+            "margin": "0", 
+            "padding": "0"},
+        config={
+            "responsive": True,
+            "displayModeBar": True, 
+            "displaylogo": False,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"]
+            },
+        ),
+        style={
+            "width": "100%",
+            #"border": "1px solid #e0e0e0",
+            #"borderRadius": "8px",
+            #"boxShadow": "0 1px 3px rgba(0,0,0,0.08)",
+            "padding": "5px",
+            "backgroundColor": "#fff",
+            "overflow": "hidden",
+        },
+        className="graph-container"
     )
 
 
@@ -177,7 +215,13 @@ def create_pattern_layout():
 
 def pattern_page():
     return html.Div(
-        style={"height": "100vh", "overflowY": "auto", "padding": "15px"},
+        style={
+        "height": "100vh",
+        "overflowY": "auto",
+        "padding": "15px",
+        "fontSize": "14px",
+        "fontFamily": "consolas, Arial, sans-serif",
+        },
         children=[
             create_pattern_layout(),
         ]

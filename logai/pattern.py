@@ -25,7 +25,7 @@ class Pattern:
     def __init__(self, project_dir=None, sim_th=None, depth=None):
         config = TemplateMinerConfig()
         config.load("drain3.ini")  # load from external ini file
-        self.datetime_regex = re.compile(
+        self.preprocess_regex = re.compile(
                 r"^(?P<timestamp>("
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"          # 2023-10-02T12:34:56
                 r"|\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}"         # 2023-10-02-12-34-56
@@ -38,20 +38,22 @@ class Pattern:
         self.headers = ["timestamp", "loglines"]
         persistence = FilePersistence(f"{project_dir}/drain3_state.json") if project_dir and os.path.exists(project_dir) else None
         self.template_miner = TemplateMiner(persistence,config=config)
+        #self.template_miner = TemplateMiner(config=config)
         self.log_df = pd.DataFrame()
         self.results = pd.DataFrame()
 
     def parse_logs(self, fpath):
         # Check if already parsed file exists
-        result_file = Path(fpath).stem + ".parquet"
-        result_file_path = os.path.join(Path(fpath).parent, result_file)
+        result_file_path = Path(fpath + ".parquet")
+        tmp_result_file_path = Path(fpath + ".parquet.tmp")
+        
         #print(f"Result file path: {result_file_path}")
         if os.path.exists(result_file_path):
-            return pd.read_parquet(result_file_path)
+            return pd.read_parquet(result_file_path), result_file_path
 
         self.log_df = self._read_logs(fpath)
         if self.log_df.empty:
-            return pd.DataFrame()
+            return pd.DataFrame(), None
         
         self.results = pd.DataFrame()
 
@@ -79,8 +81,15 @@ class Pattern:
             )
         
         self.results = self.log_df[['timestamp', 'loglines', 'template', 'parameter_list']].copy()
+        self.results.to_parquet(tmp_result_file_path, index=False)
+        os.replace(str(tmp_result_file_path), str(result_file_path))
 
-        return self.results
+        try:
+            self.template_miner.save_state()
+        except Exception:
+            pass
+        
+        return self.results, result_file_path
     
     def _read_logs(self, fpath):
         try:
@@ -94,7 +103,7 @@ class Pattern:
 
     def _logs_to_dataframe(self, log_lines):
         # Step 1: Extract timestamp and logline using regex
-        matches = [self.datetime_regex.match(log) for log in log_lines]
+        matches = [self.preprocess_regex.match(log) for log in log_lines]
         data = []
         for i, m in enumerate(matches):
             if m:

@@ -116,7 +116,6 @@ def create_login_layout():
                                     ], id="register-btn", color="secondary", outline=True)
                                 ], className="mb-3")
                             ])
-                            # REMOVED: Admin credentials display for security
                         ])
                     ], style={"max-width": "400px"})
                 ], width={"size": 6, "offset": 3})
@@ -220,13 +219,22 @@ def create_dashboard_layout(username, user_id=None, is_admin=False):
                                     ])
                                 ]),
                                 dbc.CardBody([
-                                    html.Div(id="projects-matrix", style={"min-height": "400px"})
-                                ])
+                                    html.Div(id="projects-matrix", 
+                                            style={
+                                                "overflowY": "auto",
+                                                "overflowX": "hidden",
+                                                "maxHeight": "calc(100vh - 220px)",
+                                                "width": "100%",
+                                                "whiteSpace": "nowrap",
+                                                "padding": "0.5rem"
+                                            }
+                                        )
+                                    ])
                             ])
                         ])
                     ])
                 ], fluid=True, className="py-4")
-            ], width=10),
+            ], width=10, style={"height": "100vh"}),
         ], className="g-0"),
 
         # Modals
@@ -350,13 +358,22 @@ def create_admin_layout(username):
                                     ])
                                 ]),
                                 dbc.CardBody([
-                                    html.Div(id="users-list", style={"min-height": "500px"})
+                                    html.Div(id="users-list", 
+                                        style={
+                                            "overflowY": "auto",
+                                            "overflowX": "hidden",
+                                            "maxHeight": "calc(100vh - 220px)",
+                                            "width": "100%",
+                                            "whiteSpace": "nowrap",
+                                            "padding": "0.5rem"
+                                        }
+                                    )
                                 ])
                             ])
                         ])
                     ])
                 ], fluid=True, className="py-4")
-            ], width=9)
+            ], width=9, style={"height": "100vh"})
         ], className="g-0"),
 
         # User Delete Confirmation Modal

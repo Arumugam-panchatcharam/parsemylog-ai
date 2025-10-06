@@ -22,6 +22,7 @@ from logai.utils.constants import (
 )
 
 from gui.app_instance import dbm
+from logai.pattern_scheduler import PatternScheduler
 
 CODE_STYLE = {
     'background': '#2d3748',
@@ -61,7 +62,7 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
     project_id = project_data["project_id"]
     project_name = project_data["project_name"]
     user_id = project_data.get("user_id")
-
+    project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
 
     if ctx.triggered_id == 'file-upload':
         if contents_list and filenames_list:
@@ -74,7 +75,7 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
                 content_type, content_string = content.split(',')
                 decoded = base64.b64decode(content_string)
 
-                project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
+                #project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
                 project_dir.mkdir(parents=True, exist_ok=True)
                 file_path = project_dir / filename
 
@@ -102,7 +103,8 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
     
     # remove the uploaded files after processing
     files = dbm.get_project_files(project_id)
-    #print("Project file",files)
+    scheduler = PatternScheduler(max_workers=2)
+    scheduler.schedule_files(project_dir=project_dir, files=files)
 
     # Load notes if exist
     project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
@@ -123,6 +125,9 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
 
     file_items = []
     for filename, _, original_name, file_size, _ in files:
+        if file_size == 0:
+            continue
+
         size_mb = round(file_size / (1024 * 1024), 2) if file_size else 0
         download_url = f"/download/{project_id}/{filename}"
 
@@ -364,7 +369,7 @@ def update_file_content(pagination_data, file_name, project_data):
         if total_pages > 1:
             return highlighted_content, page, page_info, paginator
         else:
-            return highlighted_content, page, "Single page file"
+            return highlighted_content, page, "Single page file", dash.no_update
     
     return dash.no_update, dash.no_update, dash.no_update
 
