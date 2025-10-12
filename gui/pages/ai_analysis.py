@@ -132,13 +132,10 @@ def ai_analysis_layout():
                     html.Hr(),
                     html.H5("AI Summarization of your logs"),
                     dbc.Row([
-                        dbc.Col(
-                            dbc.Card(
-                                dbc.CardBody([
-                                    html.Div(id="ai-search-results", style={"overflowX": "auto"})
-                                ]),
-                            ), width=12,
-                        ),
+                        dbc.Col([
+                            dbc.Alert(id="ai-status-display", color="info", className="mt-3"),
+                            html.Pre(id="ai-search-results", className="mt-3 bg-light p-3 border rounded")
+                        ], width=12)
                     ], className="mb-4"),
                 ])
             ),

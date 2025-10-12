@@ -1,0 +1,4 @@
+dash
+celery
+redis
+requests

@@ -71,7 +71,8 @@ app.layout = dbc.Container([
     dcc.Store(id="pattern-result-store", storage_type="session", clear_data=False),
 
     # For Ai analysis
-    dcc.Interval(id="ai-analysis-status-interval", interval=3000, n_intervals=0),  # every 3 seconds
+    dcc.Store(id="ai-task-id-store"),
+    dcc.Interval(id="ai-summary-interval", interval=2000, n_intervals=0),  # every 3 seconds
 
     # For embedding
     dcc.Interval(id="emdedding-status-interval", interval=5000, n_intervals=0),  # every 5 seconds

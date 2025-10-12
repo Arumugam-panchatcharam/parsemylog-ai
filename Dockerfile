@@ -10,4 +10,4 @@ VOLUME ["/app"]
 EXPOSE 40901
 
 # Gunicorn: 4 workers, binds to 0.0.0.0:40901
-CMD ["gunicorn", "-w", "8", "-b", "0.0.0.0:40901", "--timeout", "360", "logai_wsgi:server"]
+#CMD ["gunicorn", "-w", "8", "-b", "0.0.0.0:40901", "--timeout", "360", "logai_wsgi:server"]

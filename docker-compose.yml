@@ -4,20 +4,74 @@ services:
   rdk-logai-app:
     build: .
     image: logai-app:1.0
+    container_name: rdk-logai-app
+    command: ["gunicorn", "-w", "8", "-b", "0.0.0.0:40901", "--timeout", "360", "logai_wsgi:server"]
     volumes:
       - .:/app
     ports:
-      - "40901:40901"
+      - "${APP_PORT}:${APP_PORT}"
     environment:
       - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - LLAMA_API_URL=${LLAMA_API_URL}
+    depends_on:
+      - redis
+      - llama-service
     restart: always
+    env_file:
+      - .env
+
+  celery-worker:
+    build: ./services/celery_worker
+    image: logai-app:1.0
+    container_name: logai-celery-worker
+    command: ["celery", "-A", "logai.celery_app", "worker", "--loglevel=INFO"]
+    environment:
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - LLAMA_API_URL=${LLAMA_API_URL}
+    depends_on:
+      - redis
+      - llama-service
+    volumes:
+      - ./services/celery_worker:/app
+    restart: always
+    env_file:
+      - .env
+
+  redis:
+    image: redis:7-alpine
+    container_name: logai-redis
+    ports:
+      - "${REDIS_PORT}:6379"
+    restart: always
+    env_file:
+      - .env
+
+  llama-service:
+    build: ./services/llama
+    image: llama-service:1.0
+    container_name: logai-llama-service
+    volumes:
+      - ./services/llama:/app
+      - /var/run/ollama.sock:/var/run/ollama.sock
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "41030"]
+    ports:
+      - "${LLAMA_PORT}:8000"
+    restart: always
+    env_file:
+      - .env
 
   nginx:
     image: nginx:alpine
+    container_name: nginx
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "8091:80" # host:container
+      - "${NGINX_PORT}:80"
     depends_on:
       - rdk-logai-app
     restart: always
+    env_file:
+      - .env
