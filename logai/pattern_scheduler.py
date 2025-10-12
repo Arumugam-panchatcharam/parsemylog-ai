@@ -5,11 +5,12 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional
 import pandas as pd
+from filelock import FileLock
 
 from logai.pattern import Pattern
 
 #MAX_WORKERS = max(1, (os.cpu_count() or 2) - 1)
-MAX_WORKERS = 2  # limit to 2 workers for now due to memory constraints
+MAX_WORKERS = 2  # limit to 4 workers for now due to memory constraints
 
 # ---------- Helpers ----------
 def status_file(project_dir: Path) -> Path:
@@ -42,7 +43,7 @@ def update_file_status(project_dir: Path, filename: str, state: str, meta: Optio
         status[filename].update(meta)
     write_status_atomically(project_dir, status)
 
-
+'''
 class FileLockTimeout(Exception):
     pass
 
@@ -93,7 +94,7 @@ class FileLock:
                 return False
 
     def acquire(self, block=True):
-        print(f"Acquiring lock for {self.filename} at {self.lockdir}")
+        #print(f"Acquiring lock for {self.filename} at {self.lockdir}")
         attempts = 0
         while True:
             try:
@@ -102,7 +103,7 @@ class FileLock:
                 # write metadata
                 self._write_meta()
                 self.acquired = True
-                print(f"Acquired lock for {self.filename}")
+                #print(f"Acquired lock for {self.filename}")
                 return True
             except FileExistsError:
                 # check stale
@@ -172,31 +173,40 @@ class FileLock:
             self.release()
         except Exception:
             pass
-
+'''
 # ---------- Worker function (must be importable at top-level for ProcessPool) ----------
-def _parse_file_worker(project_dir: Path, filename: str, file_path) -> Dict[str,Any]:
+def _parse_file_worker(project_dir: Path, filename: str, original_filename: str, file_path) -> Dict[str,Any]:
     """
     Worker executed in subprocess. Parses file with Drain3 and writes parquet result atomically.
     Returns status dict (state, message).
     """
     try:
-        with FileLock(project_dir, filename, stale_after=600, wait=0.1, attempts=200):
-            print(f"Parsing {filename} in {project_dir}")
+        #with FileLock(project_dir, filename, stale_after=600, wait=0.1, attempts=200):
+        
+        lock_file= file_path + ".lock"
+        #print("lock file",lock_file)
+        lock = FileLock(lock_file=lock_file)
+        with lock:
+            #print(f"Parsing {filename} in {project_dir}")
             parser = Pattern(project_dir=project_dir)
-            _, result_df_path = parser.parse_logs(file_path)
-            print(f"Parsed {filename}, result at {result_df_path}")
+            parser.parse_logs(file_path)
+            #print(f"Parsed {filename}, result at {result_df_path}")
 
             return {"state": "done", "message": "Parsed and saved"}
-    except FileLockTimeout:
-        # couldn't acquire lock in time, treat as skipped
-        return {"state": "skipped", "message": "lock_acquire_timeout"}
     except Exception as e:
+        #print("Exception occured")
         return {"state": "error", "message": str(e)}
-
+    finally:
+        if lock.is_locked:
+            #print("release lock")
+            lock.release()
+        if os.path.exists(lock_file):
+            #print("Error Lock file still Exists, need manual removal")
+            os.remove(lock_file)
 
 class PatternScheduler:
     non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-    ignore_filename_list = ['telemetry2']
+    ignore_filename_list = ['telemetry2', 'snapshot']
     """Holds a process pool and schedules parse jobs per project."""
     def __init__(self, max_workers: int = MAX_WORKERS):
         self.pool = ProcessPoolExecutor(max_workers=max_workers)
@@ -210,39 +220,39 @@ class PatternScheduler:
         if not os.path.exists(project_dir) or not files:
             return {}
         # ensure lock dir exists
-        (project_dir / "locks").mkdir(parents=True, exist_ok=True)
+        #(project_dir / "locks").mkdir(parents=True, exist_ok=True)
         results = {}
 
-        for filename, file_path, original_name, file_size, _ in files:
-            if file_size == 0:
-                results[filename] = "skipped_zero_size"
+        for filename, file_path, original_name, _, _ in files:
+            if not os.path.exists(file_path):
                 continue
+
+            if not os.path.getsize(file_path):
+                continue
+
             if any(filename.endswith(ext) for ext in self.non_text_extensions):
-                results[filename] = "skipped_non_text"
                 continue
 
             if any(ign.lower() in original_name.lower() for ign in self.ignore_filename_list):
-                results[filename] = "skipped_ignored_file"
                 continue
 
             result_path = Path(file_path + ".parquet")
-            print(f"Checking if result exists at {result_path}")
+            #print(f"Checking if result exists at {result_path}")
             if result_path.exists():
-                results[filename] = "already_parsed"
+                results[original_name] = "parsed"
                 continue
 
             # if already processing according to status.json, skip
-            status = read_status(project_dir).get(filename, {})
-            if status.get("state") == "processing":
-                results[filename] = "already_processing"
+            status = read_status(project_dir).get(original_name, {})
+            if status.get("state") == "queued":
                 continue
 
             # mark queued and release the lock (worker will re-acquire). We keep a tiny window:
-            update_file_status(project_dir, filename, "queued", {"queued_at": time.time()})
+            update_file_status(project_dir, original_name, "queued", {"queued_at": time.time()})
 
             # schedule worker in pool
             #print(f"Scheduling parsing for {filename}")
-            future = self.pool.submit(_parse_file_worker, project_dir, filename, file_path)
+            future = self.pool.submit(_parse_file_worker, project_dir, filename, original_name, file_path)
             self._futures[future] = (project_dir, filename)
             #print(f"Scheduled parsing for {filename}")
             results[filename] = "scheduled"

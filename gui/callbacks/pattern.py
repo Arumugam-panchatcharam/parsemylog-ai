@@ -8,6 +8,7 @@ from dash import ctx, html, Input, Output, State, callback, dash_table
 import dash
 from gui.app_instance import dbm
 from logai.pattern import Pattern
+import plotly.graph_objects as go
 
 from logai.utils.constants import (
     UPLOAD_DIRECTORY
@@ -48,6 +49,7 @@ def summary_graph(result_df):
     count_table = result_df["template"].value_counts()
     scatter_df = pd.DataFrame(count_table)
     scatter_df.columns = ["counts"]
+    
     scatter_df["ratio"] = scatter_df["counts"] * 1.0 / sum(scatter_df["counts"])
     scatter_df["order"] = np.array(range(scatter_df.shape[0]))
 
@@ -243,19 +245,29 @@ def update_logline(data, result_df_path):
         return dash_table.DataTable()
 
 def create_time_series(dff, axis_type, title):
-    fig = px.scatter(
-        dff,
-        x="timestamp",
-        y="count",
-        labels={"count": "Occurrence", "timstamp": "Time"},
-        title=title,
+    if dff.empty:
+        return go.Figure()
+    
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=dff["timestamp"],
+            y=dff["count"],
+            mode="lines+markers",
+            marker=dict(size=4, color="blue"),
+            line=dict(width=2),
+            hovertemplate="Time: %{x}<br>Count: %{y}<extra></extra>"
+        )
     )
-
-    fig.update_traces(mode="lines+markers")
     fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(type="linear" if axis_type == "Linear" else "log")
-    fig.update_layout(margin={"l": 20, "b": 30, "r": 10, "t": 30})
+    fig.update_yaxes(type="linear" if axis_type=="Linear" else "log")
+    fig.update_layout(
+        title=title,
+        margin={"l":20, "b":30, "r":10, "t":30},
+        hovermode="closest"
+    )
     return fig
+
 
 @callback(
     Output("pattern-time-series", "figure"),
@@ -264,27 +276,37 @@ def create_time_series(dff, axis_type, title):
     [State("pattern-result-store", "data")],
     prevent_initial_call=True,
 )
-
 def update_y_timeseries(data, interval, result_df_path):
-    if data is not None and result_df_path is not None:
-        df_logs = load_result_df(result_df_path)
+    if data is None or result_df_path is None:
+        return go.Figure()
 
-        interval_map = {0: "1s", 1: "1min", 2: "1h", 3: "1d"}
-        pattern = data["points"][0]["customdata"]
-        freq = interval_map[interval]
-        dff = df_logs[df_logs["template"] == pattern][
-            ["timestamp", "template"]
-        ]
-        df_clean = dff.dropna(subset=["timestamp"])
-        #print(dff)
-        ts_df = (
-            df_clean[["timestamp", "template"]]
-            .groupby(pd.Grouper(key="timestamp", freq=freq, offset=0, label="right"))
-            .size()
-            .reset_index(name="count")
-        )
+    df_logs = load_result_df(result_df_path)
+    if df_logs.empty:
+        return go.Figure()
 
-        title = "Trend of Occurrence at Freq({})".format(freq)
-        return create_time_series(ts_df, "Linear", title)
-    else:
-        return px.scatter()
+    interval_map = {0: "1s", 1: "1min", 2: "1h", 3: "1d"}
+    freq = interval_map.get(interval, "1min")
+    pattern = data["points"][0]["customdata"]
+
+    # Filter only timestamp column
+    df_pattern = df_logs.loc[df_logs["template"]==pattern, ["timestamp"]].dropna()
+    if df_pattern.empty:
+        return go.Figure()
+
+    # Ensure datetime
+    df_pattern["timestamp"] = pd.to_datetime(df_pattern["timestamp"])
+
+    # Group by interval
+    ts_df = (
+        df_pattern.groupby(pd.Grouper(key="timestamp", freq=freq))
+        .size()
+        .reset_index(name="count")
+    )
+
+    # downsampling if too many points - user can adjust freq to control points
+    max_points = 5000
+    if len(ts_df) > max_points:
+        ts_df = ts_df.iloc[::len(ts_df)//max_points + 1]
+
+    title = f"Trend of Occurrence at Freq({freq})"
+    return create_time_series(ts_df, "Linear", title)

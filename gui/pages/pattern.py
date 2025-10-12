@@ -11,8 +11,8 @@ def create_file_setting_layout():
         children=[
             html.Label("Log File"),
             dbc.Button([html.I(className="fas fa-sync-alt")], 
-                                                         id="refresh-filelist-icon", color="outline-secondary", size="sm", 
-                                                         title="Log Files"),
+                        id="refresh-filelist-icon", color="outline-secondary", size="sm", 
+                        title="Log Files"),
             dcc.Dropdown(id="file-select", 
                          options=["No File Selected!"],
                          value=None,
@@ -56,7 +56,7 @@ def create_summary_graph_layout():
             "margin": "0", 
             "padding": "0"},
         config={
-            "responsive": True,
+            #"responsive": True,
             "displayModeBar": True, 
             "displaylogo": False,
             "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"]
@@ -85,7 +85,7 @@ def create_timeseries_grapy_layout():
             "margin": "0", 
             "padding": "0"},
         config={
-            "responsive": True,
+            #"responsive": True,
             "displayModeBar": True, 
             "displaylogo": False,
             "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"]
@@ -219,7 +219,7 @@ def pattern_page():
         "height": "100vh",
         "overflowY": "auto",
         "padding": "15px",
-        "fontSize": "14px",
+        "fontSize": "12px",
         "fontFamily": "consolas, Arial, sans-serif",
         },
         children=[

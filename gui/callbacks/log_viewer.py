@@ -101,8 +101,13 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
             feedback = dbc.Alert([html.P(r, className="mb-0 small") for r in results], 
                             color="success" if all("✅" in r for r in results) else "warning")
     
+    try:
     # remove the uploaded files after processing
-    files = dbm.get_project_files(project_id)
+        files = dbm.get_project_files(project_id)
+    except Exception as e:
+        print(f"Viewer Temporary Error retriving data {e}")
+        return no_files_uploaded(), "0 files", dash.no_update, dash.no_update
+    
     scheduler = PatternScheduler(max_workers=2)
     scheduler.schedule_files(project_dir=project_dir, files=files)
 
@@ -118,10 +123,7 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
         note_content = ""
 
     if not files:
-        return html.Div([
-            html.I(className="fas fa-file fa-2x text-muted mb-2"),
-            html.P("No files uploaded yet", className="text-muted")
-        ], className="text-center py-3"), "0 files", note_content, dash.no_update
+        return no_files_uploaded(), "0 files", note_content, dash.no_update
 
     file_items = []
     for filename, _, original_name, file_size, _ in files:
@@ -318,8 +320,12 @@ def update_file_content(pagination_data, file_name, project_data):
     #print("page", page)
     #print("file id",file_name)
     project_id = project_data["project_id"]
+    try:
+        filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
+    except Exception as e:
+        print(f"Viewer file content Temporary Error retriving data {e}")
+        return dash.no_update, dash.no_update, dash.no_update
     
-    filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
     if not filename or not filepath or not os.path.exists(filepath):
         return dbc.Alert("File not found", color="danger"), dash.no_update, dash.no_update
     
@@ -420,7 +426,11 @@ def handle_search(search_clicks, error_clicks, warn_clicks, ip_clicks, time_clic
     
     project_id = project_data["project_id"]
     
-    filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
+    try:
+        filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
+    except Exception as e:
+        print(f"Viewer search Temporary Error retriving data {e}")
+        return dash.no_update, dash.no_update
     if not filename or not filepath or not os.path.exists(filepath):
         return dbc.Alert("File not found", color="danger"), dash.no_update
         

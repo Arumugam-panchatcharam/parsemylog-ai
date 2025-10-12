@@ -11,9 +11,10 @@ from gui.pages import log_viewer as log_viewer_page
 from gui.pages import pattern as pattern_page
 from gui.pages import telemetry as telemetry_page
 from gui.pages import ai_analysis as ai_analysis_page
-from gui.callbacks import pattern, telemetry, utils, ai_analysis, log_viewer
+from gui.pages import embedding as embedding_page
+from gui.callbacks import pattern, telemetry, utils, ai_analysis, log_viewer, embedding
 from gui.file_manager import FileManager
-from gui.db_manager import db as dbm
+from gui.user_db_mngr import db as dbm
 from gui.app_instance import create_app, BASE_DIR
 
 app, flask_server = create_app()
@@ -68,6 +69,17 @@ app.layout = dbc.Container([
 
     # For Pattern
     dcc.Store(id="pattern-result-store", storage_type="session", clear_data=False),
+
+    # For Ai analysis
+    dcc.Interval(id="ai-analysis-status-interval", interval=3000, n_intervals=0),  # every 3 seconds
+
+    # For embedding
+    dcc.Interval(id="emdedding-status-interval", interval=5000, n_intervals=0),  # every 5 seconds
+
+    # for hiding error for periodic status interval
+    html.Div(id="embed-queued-card", style={"display": "none"}),
+    html.Div(id="embed-parsed-card", style={"display": "none"}),
+    html.Div(id="embed-done-card", style={"display": "none"}),
 
     html.Div(id="page-content", style={"min-height": "100vh"}),
 ], fluid=True, className="p-0")
@@ -453,13 +465,15 @@ def create_workspace_layout(project_name, project_id):
                         # Navigation
                         html.H6([html.I(className="fas fa-compass me-2"), "Tools"], className="mb-2"),
                         dbc.Nav([
-                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-search me-1"), "Log Viewer"], 
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-search me-2"), "Log Viewer"], 
                                                  href="/workspace/viewer", id="nav-viewer", active=True, className="small")),
-                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-search me-1"), "Parsing"], 
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-diagram-project me-2"), "Parsing"], 
                                                  href="/workspace/pattern", id="nav-pattern", active=False, className="small")),
-                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-chart-area me-1"), "Telemetry"], 
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-layer-group me-2"), "Embedding"], 
+                                                 href="/workspace/embed", id="nav-embed", active=False, className="small")),                                           
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-chart-area me-2"), "Telemetry"], 
                                                   href="/workspace/telemetry", id="nav-telemetry", active=False, className="small")),
-                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-brain me-1"), "AI Analysis"], 
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-brain me-2"), "AI Analysis"], 
                                                   href="/workspace/ai_analysis", id="nav-ai", active=False, className="small")),
                         ], vertical=True, pills=True, className="mb-3"),
 
@@ -543,6 +557,8 @@ def update_workspace_content(pathname, project_data):
         return log_viewer_page.layout
     elif page == "pattern":
         return pattern_page.layout
+    elif page == "embed":
+        return embedding_page.layout
     elif page == "telemetry":
         return telemetry_page.layout
     elif page == "ai_analysis":
@@ -1163,6 +1179,7 @@ def logout(n_clicks):
 @callback(
     [Output("nav-viewer", "active"),
      Output("nav-pattern", "active"),
+     Output("nav-embed", "active"),
      Output("nav-telemetry", "active"),
      Output("nav-ai", "active")],
     Input("url", "pathname"),
@@ -1171,13 +1188,13 @@ def logout(n_clicks):
 def update_nav_active(pathname):
     if not pathname or not pathname.startswith("/workspace/"):
         # FIXED: Default to log viewer when not in workspace
-        return True, False, False, False
+        return True, False, False, False, False
 
     page = pathname.split("/workspace/")[-1]
-
     return (
         page == "viewer" or page == "",  # Default to log viewer
         page == "pattern",
+        page == "embed",
         page == "telemetry",
         page == "ai_analysis"
     )

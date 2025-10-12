@@ -19,7 +19,7 @@ def update_file_list(n_clicks, project_data):
 
     options = []
     non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-    ignore_filename_list = ['telemetry2']
+    ignore_filename_list = ['telemetry2', 'snapshot']
     for filename, _, original_name, file_size, _ in files:
         if file_size == 0:
             continue   
@@ -39,14 +39,13 @@ def update_file_list(n_clicks, project_data):
         return options, ""
     
 @callback(
-Output("ai-file-select", "options"),
-Output("ai-file-select", "value"),
-[
-    Input("ai-refresh-filelist-icon", "n_clicks"),
-    Input("current-project-store", "data"),
+    Output("embed-file-select", "options"),
+    Output("embed-file-select", "value"),
+    [
+        Input("current-project-store", "data"),
     ],
 )
-def update_ai_analysis_file_list(n_clicks, project_data):
+def update_ai_analysis_file_list(project_data):
     if not project_data or not project_data.get("project_id"):
         return [], ""
     
@@ -55,7 +54,7 @@ def update_ai_analysis_file_list(n_clicks, project_data):
 
     options = []
     non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-    ignore_filename_list = ['telemetry2']
+    ignore_filename_list = ['telemetry2', 'snapshot']
     for filename, _, original_name, file_size, _ in files:
         if file_size == 0:
             continue   
