@@ -26,7 +26,7 @@ services:
     build: ./services/celery_worker
     image: logai-app:1.0
     container_name: logai-celery-worker
-    command: ["celery", "-A", "logai.celery_app", "worker", "--loglevel=INFO"]
+    command: ["celery", "-A", "celery_app", "worker", "--loglevel=INFO"]
     environment:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -55,10 +55,12 @@ services:
     container_name: logai-llama-service
     volumes:
       - ./services/llama:/app
+      - ./ollama_data:/root/.ollama
       - /var/run/ollama.sock:/var/run/ollama.sock
-    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "41030"]
+    environment:
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
     ports:
-      - "${LLAMA_PORT}:8000"
+      - "${LLAMA_HOST_PORT}:8000"
     restart: always
     env_file:
       - .env

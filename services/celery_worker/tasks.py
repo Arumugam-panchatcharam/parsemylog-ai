@@ -2,9 +2,9 @@ import requests
 from .celery_app import celery
 import os
 
-LLAMA_API_URL = os.environ.get("LLAMA_API_URL", "http://localhost:41030/query")
+LLAMA_API_URL = os.environ.get("LLAMA_API_URL", "http://localhost:41030/generate")
 
-@celery.task(bind=True)
+@celery.task
 def process_llama_query(self, embed_templates, max_tokens=256):
     prompt_parts = []
     prompt_parts = [
@@ -22,9 +22,9 @@ def process_llama_query(self, embed_templates, max_tokens=256):
         + "\n\nRespond clearly and label each summary with the LOG_FILENAME it corresponds to."
     )
     try:
+        print("Promt is ", prompt)
         resp = requests.post(LLAMA_API_URL, json={"prompt": prompt, "max_tokens": max_tokens})
         resp.raise_for_status()
         return {"state": "done", "result": resp.json().get("response")}
     except Exception as e:
         return {"state": "error", "message": str(e)}
-

@@ -1,6 +1,7 @@
 from dash import Input, Output, callback
 
 from gui.app_instance import dbm
+from logai.utils.constants import NON_TEXT_EXTENSIONS, IGNORE_FILENAME_LIST
 
 @callback(
     Output("file-select", "options"),
@@ -18,14 +19,12 @@ def update_file_list(n_clicks, project_data):
     files = dbm.get_project_files(project_id)
 
     options = []
-    non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-    ignore_filename_list = ['telemetry2', 'snapshot']
     for filename, _, original_name, file_size, _ in files:
         if file_size == 0:
             continue   
-        if any(filename.endswith(ext) for ext in non_text_extensions):
+        if any(filename.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
             continue
-        if any(ign.lower() in original_name.lower() for ign in ignore_filename_list):
+        if any(ign.lower() in original_name.lower() for ign in IGNORE_FILENAME_LIST):
             continue
 
         options.append({
@@ -53,14 +52,12 @@ def update_ai_analysis_file_list(project_data):
     files = dbm.get_project_files(project_id)
 
     options = []
-    non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-    ignore_filename_list = ['telemetry2', 'snapshot']
     for filename, _, original_name, file_size, _ in files:
         if file_size == 0:
             continue   
-        if any(filename.endswith(ext) for ext in non_text_extensions):
+        if any(filename.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
             continue
-        if any(ign.lower() in original_name.lower() for ign in ignore_filename_list):
+        if any(ign.lower() in original_name.lower() for ign in IGNORE_FILENAME_LIST):
             continue
         options.append({
             "label": f"{original_name} ({round(file_size / (1024*1024), 2)} MB)",

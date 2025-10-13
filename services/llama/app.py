@@ -1,28 +1,31 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import requests
 import os
 
-app = Flask(__name__)
+app = FastAPI(title="Local Llama API", version="1.0")
 
-OLLAMA_HOST = "http://host.docker.internal:11434"  # local Ollama daemon
-MODEL = os.getenv("LLAMA_MODEL", "llama3")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 
-@app.route("/query", methods=["POST"])
-def query_model():
-    data = request.get_json()
-    prompt = data.get("prompt", "")
+class QueryRequest(BaseModel):
+    prompt: str
+    stream: bool = False
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Llama API running with local Ollama"}
+
+@app.post("/generate")
+def generate_text(req: QueryRequest):
     try:
         response = requests.post(
             f"{OLLAMA_HOST}/api/generate",
-            json={"model": MODEL, "prompt": prompt},
-            timeout=120
+            json={"model": OLLAMA_MODEL, "prompt": req.prompt},
+            timeout=300
         )
         response.raise_for_status()
-        content = response.json()
-        text = content.get("response", "")
-        return jsonify({"response": text})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+        data = response.text
+        return {"response": data}
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Ollama request failed: {e}")

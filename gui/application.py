@@ -73,6 +73,9 @@ app.layout = dbc.Container([
     # For Ai analysis
     dcc.Store(id="ai-task-id-store"),
     dcc.Interval(id="ai-summary-interval", interval=2000, n_intervals=0),  # every 3 seconds
+    # for hiding error for periodic status interval
+    html.Div(id="ai-search-results", style={"display": "none"}),
+    html.Div(id="ai-status-display", style={"display": "none"}),
 
     # For embedding
     dcc.Interval(id="emdedding-status-interval", interval=5000, n_intervals=0),  # every 5 seconds

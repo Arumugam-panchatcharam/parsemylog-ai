@@ -8,6 +8,9 @@ MERGED_LOGS_DIR_NAME = "merged_logs"
 MERGED_LOGS_ARCHIVE_NAME = "mergedlogs"
 TELEMETRY_PROFILES_DIR_NAME = "telemetry"
 
+NON_TEXT_EXTENSIONS = ['.xls', '.xlsx', '.tgz', '.zip']
+IGNORE_FILENAME_LIST = ['telemetry2', 'snapshot', 'SelfHeal']
+
 # Log viewer constants
 LINES_PER_PAGE = 1000
 

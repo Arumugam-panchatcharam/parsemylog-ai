@@ -8,6 +8,7 @@ import pandas as pd
 from filelock import FileLock
 
 from logai.pattern import Pattern
+from logai.utils.constants import NON_TEXT_EXTENSIONS, IGNORE_FILENAME_LIST
 
 #MAX_WORKERS = max(1, (os.cpu_count() or 2) - 1)
 MAX_WORKERS = 2  # limit to 4 workers for now due to memory constraints
@@ -205,8 +206,6 @@ def _parse_file_worker(project_dir: Path, filename: str, original_filename: str,
             os.remove(lock_file)
 
 class PatternScheduler:
-    non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-    ignore_filename_list = ['telemetry2', 'snapshot']
     """Holds a process pool and schedules parse jobs per project."""
     def __init__(self, max_workers: int = MAX_WORKERS):
         self.pool = ProcessPoolExecutor(max_workers=max_workers)
@@ -230,10 +229,10 @@ class PatternScheduler:
             if not os.path.getsize(file_path):
                 continue
 
-            if any(filename.endswith(ext) for ext in self.non_text_extensions):
+            if any(filename.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
                 continue
 
-            if any(ign.lower() in original_name.lower() for ign in self.ignore_filename_list):
+            if any(ign.lower() in original_name.lower() for ign in IGNORE_FILENAME_LIST):
                 continue
 
             result_path = Path(file_path + ".parquet")
