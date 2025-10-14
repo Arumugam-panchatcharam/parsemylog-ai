@@ -214,7 +214,7 @@ def create_radio_stat_graph_layout(data):
         }
     )
     return chart
-
+'''
 def create_process_table(data):
     df = telemetry_parser.extract_ccsp_mem_split_data()
     return dash_table.DataTable(
@@ -320,3 +320,4 @@ def click_run(
     except Exception as error:
         print("else model close except")
         return html.Div([]),html.Div([]), options, "", True, str(error)
+'''

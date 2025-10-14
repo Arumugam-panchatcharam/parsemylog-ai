@@ -127,7 +127,7 @@ def templates_table():
                 'width': '5%'
             }
         ],
-            page_size=10
+            page_size=15
         )
     ])
 
@@ -181,6 +181,7 @@ def embedding_page():
         },
         children=[
             create_embedding_layout(),
+            dcc.Interval(id="emdedding-status-interval", interval=5000, n_intervals=0),  # every 5 seconds
         ]
     )
 layout = embedding_page()

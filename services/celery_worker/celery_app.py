@@ -8,5 +8,4 @@ celery = Celery(
     backend=REDIS_URL,
 )
 
-import .tasks
 #celery.conf.task_routes = {"logai.tasks.*": {"queue": "llama"}}

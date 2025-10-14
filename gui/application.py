@@ -70,16 +70,6 @@ app.layout = dbc.Container([
     # For Pattern
     dcc.Store(id="pattern-result-store", storage_type="session", clear_data=False),
 
-    # For Ai analysis
-    dcc.Store(id="ai-task-id-store"),
-    dcc.Interval(id="ai-summary-interval", interval=2000, n_intervals=0),  # every 3 seconds
-    # for hiding error for periodic status interval
-    html.Div(id="ai-search-results", style={"display": "none"}),
-    html.Div(id="ai-status-display", style={"display": "none"}),
-
-    # For embedding
-    dcc.Interval(id="emdedding-status-interval", interval=5000, n_intervals=0),  # every 5 seconds
-
     # for hiding error for periodic status interval
     html.Div(id="embed-queued-card", style={"display": "none"}),
     html.Div(id="embed-parsed-card", style={"display": "none"}),
@@ -554,7 +544,7 @@ def display_page(pathname, session_data, project_data):
 )
 def update_workspace_content(pathname, project_data):
     if not pathname.startswith("/workspace/"):
-        return log_viewer_page.layout  # Default to log viewer page
+        return no_update
 
     page = pathname.split("/workspace/")[-1]
     if page == "viewer":
@@ -642,7 +632,7 @@ def handle_registration(register_click, create_click, cancel_click,
      Input("new-project-modal", "is_open"),
      Input("refresh-projects-icon", "n_clicks"),
      Input("delete-project-modal", "is_open")],
-    prevent_initial_call=True
+    #prevent_initial_call=True
 )
 def load_user_projects_matrix(session_data, user_data_backup, modal_open, refresh_clicks, delete_modal):
     active_session = session_data if session_data and session_data.get("logged_in") else user_data_backup
@@ -695,7 +685,16 @@ def load_user_projects_matrix(session_data, user_data_backup, modal_open, refres
                     ], className="pb-2"),
                     dbc.CardBody([
                         html.P(description or "No description", 
-                              className="card-text text-muted mb-3", style={"min-height": "40px"}),
+                              className="card-text text-muted mb-3 card-scroll", 
+                              style={
+                                    "maxHeight": "100px",
+                                    "overflowY": "auto",
+                                    "fontSize": "0.85rem",
+                                    "whiteSpace": "pre-wrap",    # preserve newlines and wrap lines
+                                    "wordBreak": "break-word",   # break long words
+                                    "overflowWrap": "break-word" # prevent overflow from long tokens
+                                }
+                              ),
                         html.Small([
                             html.I(className="fas fa-calendar me-1"),
                             f"Created: {created_at}"
@@ -1187,12 +1186,10 @@ def logout(n_clicks):
      Output("nav-telemetry", "active"),
      Output("nav-ai", "active")],
     Input("url", "pathname"),
-    prevent_initial_call=True
 )
 def update_nav_active(pathname):
     if not pathname or not pathname.startswith("/workspace/"):
-        # FIXED: Default to log viewer when not in workspace
-        return True, False, False, False, False
+        return no_update, no_update, no_update, no_update, no_update
 
     page = pathname.split("/workspace/")[-1]
     return (

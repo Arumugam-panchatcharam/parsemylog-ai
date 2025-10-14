@@ -129,14 +129,6 @@ def ai_analysis_layout():
                             ), width=12,
                         ),
                     ], className="mb-4"),
-                    html.Hr(),
-                    html.H5("AI Summarization of your logs"),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Alert(id="ai-status-display", color="info", className="mt-3"),
-                            html.Pre(id="ai-search-results", className="mt-3 bg-light p-3 border rounded")
-                        ], width=12)
-                    ], className="mb-4"),
                 ])
             ),
         ])
