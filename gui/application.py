@@ -12,7 +12,9 @@ from gui.pages import pattern as pattern_page
 from gui.pages import telemetry as telemetry_page
 from gui.pages import ai_analysis as ai_analysis_page
 from gui.pages import embedding as embedding_page
-from gui.callbacks import pattern, telemetry, utils, ai_analysis, log_viewer, embedding
+from gui.pages import log_parser_config as log_parser_config_page
+from gui.pages import log_parser as rule_pattern_page
+from gui.callbacks import pattern, telemetry, utils, ai_analysis, log_viewer, embedding, log_parser_config, log_parser
 from gui.file_manager import FileManager
 from gui.user_db_mngr import db as dbm
 from gui.app_instance import create_app, BASE_DIR
@@ -24,6 +26,7 @@ from gui.app_instance import dbm
 # Flask download route
 @flask_server.route('/download/<project_id>/<filename>')
 def download_file(project_id, filename):
+    #print("Download request for:", project_id, filename)
     try:
         filename, file_path, original_name, _, _ = dbm.get_project_file_info(project_id, filename)
 
@@ -52,6 +55,7 @@ def download_file(project_id, filename):
 # Enhanced layout with all stores
 app.layout = dbc.Container([
     dcc.Location(id="url", refresh=False),
+    dcc.Location(id="admin-url", refresh=False),
     dcc.Store(id="session-store", storage_type="session", clear_data=False),
     dcc.Store(id="current-project-store", storage_type="session", clear_data=False), 
     dcc.Store(id="user-data-store", storage_type="session", clear_data=False),
@@ -337,6 +341,8 @@ def create_admin_layout(username):
                         dbc.Nav([
                             dbc.NavItem(dbc.NavLink([html.I(className="fas fa-users me-2"), "User Management"], 
                                                   href="#users", id="nav-users", active=True)),
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-cog me-2"), "Parser Configuration"], 
+                                                  href="#parser-config", id="nav-parser-config", active=False)),
                         ], vertical=True, pills=True, className="mb-4"),
 
                         html.Hr(),
@@ -351,31 +357,7 @@ def create_admin_layout(username):
                 dbc.Container([
                     dbc.Row([
                         dbc.Col([
-                            dbc.Card([
-                                dbc.CardHeader([
-                                    dbc.Row([
-                                        dbc.Col([
-                                            html.H4([html.I(className="fas fa-users me-2"), "User Management"], className="mb-0")
-                                        ]),
-                                        dbc.Col([
-                                            dbc.Button([html.I(className="fas fa-sync-alt me-2"), "Refresh"], 
-                                                     id="refresh-users-btn", color="outline-secondary", size="sm", className="float-end")
-                                        ], width="auto")
-                                    ])
-                                ]),
-                                dbc.CardBody([
-                                    html.Div(id="users-list", 
-                                        style={
-                                            "overflowY": "auto",
-                                            "overflowX": "hidden",
-                                            "maxHeight": "calc(100vh - 220px)",
-                                            "width": "100%",
-                                            "whiteSpace": "nowrap",
-                                            "padding": "0.5rem"
-                                        }
-                                    )
-                                ])
-                            ])
+                            html.Div(id="admin-main-content", className="p-3")
                         ])
                     ])
                 ], fluid=True, className="py-4")
@@ -461,7 +443,9 @@ def create_workspace_layout(project_name, project_id):
                         dbc.Nav([
                             dbc.NavItem(dbc.NavLink([html.I(className="fas fa-search me-2"), "Log Viewer"], 
                                                  href="/workspace/viewer", id="nav-viewer", active=True, className="small")),
-                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-diagram-project me-2"), "Parsing"], 
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-diagram-project me-2"), "Quick Pattern"], 
+                                                 href="/workspace/rule_pattern", id="nav-rule_pattern", active=False, className="small")),                                                 
+                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-diagram-project me-2"), "Pattern"], 
                                                  href="/workspace/pattern", id="nav-pattern", active=False, className="small")),
                             dbc.NavItem(dbc.NavLink([html.I(className="fas fa-layer-group me-2"), "Embedding"], 
                                                  href="/workspace/embed", id="nav-embed", active=False, className="small")),                                           
@@ -486,6 +470,51 @@ def create_workspace_layout(project_name, project_id):
     ], style={"height": "100vh", "overflow": "hidden"})
 
 # ALL CALLBACKS - Complete implementation
+@callback(
+    Output("admin-main-content", "children"),
+    Input("admin-url", "hash")
+)
+def render_admin_section(hash_value):
+    if hash_value == "#parser-config":
+        return log_parser_config_page.layout
+    else:
+        return dbc.Col([
+            dbc.Row([
+                dbc.Col([
+                    html.H4([html.I(className="fas fa-users me-2"), "User Management"], className="mb-0")
+                ]),
+                dbc.Col([
+                    dbc.Button([html.I(className="fas fa-sync-alt me-2"), "Refresh"], 
+                                id="refresh-users-btn", color="outline-secondary", size="sm", className="float-end")
+                            ], width="auto")
+                ]),
+                html.Hr(),
+                html.Br(),
+                dbc.Card([
+                    dbc.CardBody([
+                        html.Div(id="users-list", 
+                            style={
+                                "overflowY": "auto",
+                                "overflowX": "hidden",
+                                "maxHeight": "calc(100vh - 220px)",
+                                "width": "100%",
+                                "whiteSpace": "nowrap",
+                                "padding": "0.5rem"
+                            }
+                        )
+                    ])
+                ])
+        ], width=12, style={"height": "100vh", "overflowY": "auto"})
+
+@callback(
+    Output("nav-users", "active"),
+    Output("nav-parser-config", "active"),
+    Input("admin-url", "hash")
+)
+def toggle_nav_active(hash_val):
+    if hash_val == "#parser-config":
+        return False, True
+    return True, False
 
 # Main routing callback
 @callback(
@@ -549,6 +578,8 @@ def update_workspace_content(pathname, project_data):
     page = pathname.split("/workspace/")[-1]
     if page == "viewer":
         return log_viewer_page.layout
+    elif page == "rule_pattern":
+        return rule_pattern_page.layout
     elif page == "pattern":
         return pattern_page.layout
     elif page == "embed":
@@ -1182,6 +1213,7 @@ def logout(n_clicks):
 @callback(
     [Output("nav-viewer", "active"),
      Output("nav-pattern", "active"),
+     Output("nav-rule_pattern", "active"),
      Output("nav-embed", "active"),
      Output("nav-telemetry", "active"),
      Output("nav-ai", "active")],
@@ -1189,12 +1221,13 @@ def logout(n_clicks):
 )
 def update_nav_active(pathname):
     if not pathname or not pathname.startswith("/workspace/"):
-        return no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update
 
     page = pathname.split("/workspace/")[-1]
     return (
         page == "viewer" or page == "",  # Default to log viewer
         page == "pattern",
+        page == "rule_pattern",
         page == "embed",
         page == "telemetry",
         page == "ai_analysis"

@@ -1,6 +1,8 @@
 #project specific files
 user_uploads/
 data/
+Locals/
+all-MiniLM-L6-v2-local/
 *.db
 .DS_Store
 # Byte-compiled / optimized / DLL files
@@ -140,7 +142,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+#.env
 .envrc
 .venv
 env/
