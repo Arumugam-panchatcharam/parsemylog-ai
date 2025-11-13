@@ -203,18 +203,18 @@ class LogParserConfig:
         return df
 
     # --------------------- PDF Report Generator ---------------------
-    def generate_pdf(self, project_dir):
+    def generate_pdf(self, project_dir, project_name):
         self.parser_results_path = os.path.join(project_dir, "log_parser_results.parquet")
 
         if not os.path.exists(self.parser_results_path):
             raise FileNotFoundError("No parser results found to generate report.")
         
         df = pd.read_parquet(self.parser_results_path)
-        pdf_path, pdf_name = self._generate_pdf_report(df)
+        pdf_path, pdf_name = self._generate_pdf_report(df, project_name)
         return pdf_path, pdf_name
     
-    def _generate_pdf_report(self, df):
-        pdf_name = f"Static_Analysis_Report.pdf"
+    def _generate_pdf_report(self, df, project_name):
+        pdf_name = f"Static_Analysis_Report-{project_name}.pdf"
         pdf_path = os.path.join(os.path.dirname(self.parser_results_path), pdf_name)
         doc = SimpleDocTemplate(pdf_path, pagesize=letter)
         styles = getSampleStyleSheet()
@@ -236,44 +236,65 @@ class LogParserConfig:
         title_style = styles["Heading2"]
         header_style = styles["Heading3"]
 
-        flow = [Paragraph("Log Analysis Report", styles["Title"]), Spacer(1, 12)]
-
-        grouped = (
-            df.groupby(["Category", "Title", "Cause", "FileName"], dropna=False)
-            .apply(lambda x: x.to_dict("records"), include_groups=False)
-            .to_dict()
+        # Highlight style for high-frequency descriptions
+        highlight_body_style = ParagraphStyle(
+            "HighlightBody",
+            parent=body_text,
+            backColor=colors.lavenderblush,  # light red background
+            borderPadding=4,
         )
 
-        for (category, title, cause, filename), records in grouped.items():
+        flow = [Paragraph("Log Analysis Report", styles["Title"]), Spacer(1, 12)]
+
+        # Group by Category first, then within each Category, group by Title, Cause, Filename
+        category_groups = df.groupby("Category", dropna=False)
+
+        for category, cat_df in category_groups:
+            # Print category once
             flow.append(Paragraph(f"<b>{category}</b>", title_style))
-            flow.append(Paragraph(f"<b>{title}</b>", header_style))
-            flow.append(Paragraph(f"<b>Cause:</b> {cause}", body_text))
-            flow.append(Paragraph(f"<b>Filename:</b> {filename}", body_text))
             flow.append(Spacer(1, 6))
 
-            for idx, rec in enumerate(records, 1):
-                flow.append(
-                    Paragraph(f"{idx}. <b>{rec['Description']}</b> (Frequency: {rec['Frequency']})", body_text)
-                )
-                flow.append(Spacer(1, 6))
-                sample_logs = rec["SampleLogs"]
-                if not len(sample_logs):
-                    continue
+            # Now group the rest
+            issue_groups = (
+                cat_df.groupby(["Title", "Cause", "FileName"], dropna=False)
+                .apply(lambda x: x.to_dict("records"), include_groups=False)
+                .to_dict()
+            )
 
-                # Clean up each log and ensure proper wrapping
-                for log_line in sample_logs:
-                    clean_line = log_line.strip().replace("\\n", "\n")
-                    #print(f"Adding log line to PDF: {clean_line}")
-                    wrapped_log = Paragraph(
-                        f"<font face='Courier' size='7'><pre>{clean_line}</pre></font>",
-                        small_code_style
+            for (title, cause, filename), records in issue_groups.items():
+                flow.append(Paragraph(f"<b>{title}</b>", header_style))
+                flow.append(Paragraph(f"<b>Cause:</b> {cause}", body_text))
+                flow.append(Paragraph(f"<b>Filename:</b> {filename}", body_text))
+                flow.append(Spacer(1, 6))
+
+                for idx, rec in enumerate(records, 1):
+                    freq = rec.get("Frequency", 0)
+                    desc_style = highlight_body_style if freq > 10 else body_text
+
+                    flow.append(
+                        Paragraph(
+                            f"{idx}. <b>{rec['Description']}</b> (Frequency: {rec['Frequency']})",
+                            desc_style,
+                        )
                     )
-                    flow.append(wrapped_log)
                     flow.append(Spacer(1, 6))
 
-                flow.append(Spacer(1, 6))
+                    sample_logs = rec["SampleLogs"]
+                    if not len(sample_logs):
+                        continue
 
-            flow.append(Spacer(1, 12))
+                    for log_line in sample_logs:
+                        clean_line = log_line.strip().replace("\\n", "\n")
+                        wrapped_log = Paragraph(
+                            f"<font face='Courier' size='7'><pre>{clean_line}</pre></font>",
+                            small_code_style,
+                        )
+                        flow.append(wrapped_log)
+                        flow.append(Spacer(1, 6))
+
+                flow.append(Spacer(1, 12))
+
+            flow.append(Spacer(1, 18))  # Add extra space after category
 
         doc.build(flow)
         return pdf_path, pdf_name

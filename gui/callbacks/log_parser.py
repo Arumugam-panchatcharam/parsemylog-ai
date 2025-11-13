@@ -194,10 +194,11 @@ def generate_report(n_clicks, modal_close, project_data):
             
             if prop_id == "parser-generate-report-btn":
                 project_id = project_data["project_id"]
+                project_name = project_data["project_name"]
                 user_id = project_data.get("user_id")
                 project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
                 lpc = LogParserConfig()
-                pdf_path, pdf_name = lpc.generate_pdf(project_dir)
+                pdf_path, pdf_name = lpc.generate_pdf(project_dir, project_name)
                 if not pdf_path:
                     return no_update, False, ""
                 
