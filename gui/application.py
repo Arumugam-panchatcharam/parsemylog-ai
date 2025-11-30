@@ -79,6 +79,9 @@ app.layout = dbc.Container([
     html.Div(id="embed-parsed-card", style={"display": "none"}),
     html.Div(id="embed-done-card", style={"display": "none"}),
 
+    # for AI Analysis page
+    dcc.Store(id='selected-template-store', storage_type="session"),
+
     html.Div(id="page-content", style={"min-height": "100vh"}),
 ], fluid=True, className="p-0")
 

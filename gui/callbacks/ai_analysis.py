@@ -128,6 +128,7 @@ def get_log_lines(df, template):
     Output("ai-parameter-list", "children"),
     Output("ai-log-template-results", "data"),
     Output('current-file-store', 'data', allow_duplicate=True),
+    Output('selected-template-store', 'data'),
     Input("ai-embed-search-results", "selected_rows"),
     State("ai-embed-search-results", "data"),
     State("current-project-store", "data"),
@@ -135,7 +136,7 @@ def get_log_lines(df, template):
 )
 def load_loglines(selected, rows, project_data):
     if not selected or not project_data or not project_data.get("project_id"):
-        return dash_table.DataTable(), [], dash.no_update
+        return dash_table.DataTable(), [], dash.no_update, dash.no_update
     if ctx.triggered:
         prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
         #print(prop_id)
@@ -155,19 +156,19 @@ def load_loglines(selected, rows, project_data):
             param_list = get_parameter_list(df, template)
             log_lines = get_log_lines(df, template)
 
-            return param_list, log_lines, original_name
+            return param_list, log_lines, original_name, template
 
-    return dash_table.DataTable(), [], dash.no_update
+    return dash_table.DataTable(), [], dash.no_update, dash.no_update
 
 HIGHLIGHT_BACKGROUND_COLOR = "#fff3b0"  # light yellow
 
-def highlight_log_lines(df, row):
+def highlight_log_lines(df, template):
     highlighter = TextHighlighter()
     matches = []
     start = 1
     try:
         for idx, r in df.iterrows():
-            is_selected = r['loglines'] == row["loglines"]
+            is_selected = r['template'] == template
             line_text = f"{r.timestamp} {r.loglines}"
             if is_selected:
                 matches.append(
@@ -207,6 +208,7 @@ def highlight_log_lines(df, row):
         Input("ai-log-template-results", "selected_rows"),
         Input("ai-timestamp-context-slider", "value"),
         Input("ai-highlight-toggle", "value"),
+        Input('selected-template-store', 'data'),
     ],
     [
         State("ai-timestamp-unit-toggle", "value"),
@@ -216,8 +218,8 @@ def highlight_log_lines(df, row):
     ],
     prevent_initial_call=True
 )
-def load_raw_loglines(selected, time_period, highlight_toggle, time_unit, rows, project_data, filename):
-    if not selected or not project_data or not project_data.get("project_id"):
+def load_raw_loglines(selected, time_period, highlight_toggle, template, time_unit, rows, project_data, filename):
+    if not template or not selected or not project_data or not project_data.get("project_id"):
         return "No log selected."
 
     if ctx.triggered_id not in ["ai-log-template-results", "ai-timestamp-context-slider", "ai-highlight-toggle"]:
@@ -252,12 +254,12 @@ def load_raw_loglines(selected, time_period, highlight_toggle, time_unit, rows, 
     lines = []
     highlight_enabled = True in highlight_toggle
     if highlight_enabled:
-        lines = highlight_log_lines(context_logs, row)
+        lines = highlight_log_lines(context_logs, template)
 
     if not highlight_enabled:
         #raw_log = []
         for _, r in context_logs.iterrows():
-            is_selected = r['loglines'] == row["loglines"]
+            is_selected = r['template'] == template
             line_div = html.Div(
                 f"{r.timestamp} {r.loglines}",
                 style={

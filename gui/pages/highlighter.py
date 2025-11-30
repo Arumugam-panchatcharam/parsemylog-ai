@@ -44,8 +44,8 @@ class TextHighlighter:
 
             # === KEYWORDS (ERRORS, WARNINGS, etc.) ===
             (r'\b(ERR|ERROR|FATAL|CRITICAL|FAIL|FAILED|EXCEPTION|CRASH|ABORT|PANIC)\b', 'error'),
-            (r'\b(WARN|WARNING|WARN|DEPRECATED|CAUTION|ALERT)\b', 'warning'),
-            (r'\b(INFO|INFORMATION|NOTICE|SUCCESS|OK|PASS|PASSED|COMPLETE|COMPLETED)\b', 'info'),
+            (r'\b(WARN|WARNING|WARN|DEPRECATED|CAUTION|ALERT|DISCONNECTED)\b', 'warning'),
+            (r'\b(INFO|INFORMATION|NOTICE|SUCCESS|OK|PASS|PASSED|COMPLETE|COMPLETED|CONNECTED)\b', 'info'),
             (r'\b(OFF|DEBUG|TRACE|VERBOSE|DETAIL)\b', 'debug'),
 
             # === LOWEST PRIORITY: NUMBERS ===
