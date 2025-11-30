@@ -159,13 +159,31 @@ def load_loglines(selected, rows, project_data):
 
     return dash_table.DataTable(), [], dash.no_update
 
-def highlight_log_lines(df):
+HIGHLIGHT_BACKGROUND_COLOR = "#fff3b0"  # light yellow
+
+def highlight_log_lines(df, row):
     highlighter = TextHighlighter()
     matches = []
     start = 1
     try:
         for idx, r in df.iterrows():
+            is_selected = r['loglines'] == row["loglines"]
             line_text = f"{r.timestamp} {r.loglines}"
+            if is_selected:
+                matches.append(
+                    html.Div(
+                        line_text,
+                        style={
+                            "backgroundColor": HIGHLIGHT_BACKGROUND_COLOR,
+                            "color": "black",
+                            "padding": "2px 4px",
+                            "fontFamily": "monospace",
+                            "whiteSpace": "pre-wrap"
+                        }
+                    )
+                )
+                continue
+
             highlighted_line = highlighter._highlight_single_line(line_text)
             line_num = start + idx
             matches.append(
@@ -234,13 +252,22 @@ def load_raw_loglines(selected, time_period, highlight_toggle, time_unit, rows, 
     lines = []
     highlight_enabled = True in highlight_toggle
     if highlight_enabled:
-        lines = highlight_log_lines(context_logs)
+        lines = highlight_log_lines(context_logs, row)
 
     if not highlight_enabled:
-        raw_log = []
+        #raw_log = []
         for _, r in context_logs.iterrows():
-            line_text = f"{r.timestamp} {r.loglines}"
-            raw_log.append(line_text)
-            lines = "\n".join(raw_log)
+            is_selected = r['loglines'] == row["loglines"]
+            line_div = html.Div(
+                f"{r.timestamp} {r.loglines}",
+                style={
+                    "backgroundColor": HIGHLIGHT_BACKGROUND_COLOR if is_selected else "transparent",
+                    "color": "black" if is_selected else "white",
+                    "padding": "2px 4px",
+                    "fontFamily": "monospace",
+                    "whiteSpace": "pre-wrap"
+                }
+            )
+            lines.append(line_div)
 
     return lines
