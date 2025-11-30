@@ -20,6 +20,9 @@ class TextHighlighter:
             # === MAC ADDRESSES ===
             (r'\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', 'mac'),
 
+            # === MODULE NAMES / IDENTIFIERS ===
+            (r'\[([A-Za-z0-9_-]*[A-Za-z][A-Za-z0-9_-]*)\]', 'module'),
+
             # === IP ADDRESSES ===
             # IPv6 first (to avoid IPv4 submatching)
             (r'\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b', 'ip'),
@@ -40,10 +43,10 @@ class TextHighlighter:
             (r'(?<!\w)-[a-zA-Z](?![a-zA-Z0-9])', 'cli'),         # -f
 
             # === KEYWORDS (ERRORS, WARNINGS, etc.) ===
-            (r'\b(ERROR|FATAL|CRITICAL|FAIL|FAILED|EXCEPTION|CRASH|ABORT|PANIC)\b', 'error'),
-            (r'\b(WARNING|WARN|DEPRECATED|CAUTION|ALERT)\b', 'warning'),
+            (r'\b(ERR|ERROR|FATAL|CRITICAL|FAIL|FAILED|EXCEPTION|CRASH|ABORT|PANIC)\b', 'error'),
+            (r'\b(WARN|WARNING|WARN|DEPRECATED|CAUTION|ALERT)\b', 'warning'),
             (r'\b(INFO|INFORMATION|NOTICE|SUCCESS|OK|PASS|PASSED|COMPLETE|COMPLETED)\b', 'info'),
-            (r'\b(DEBUG|TRACE|VERBOSE|DETAIL)\b', 'debug'),
+            (r'\b(OFF|DEBUG|TRACE|VERBOSE|DETAIL)\b', 'debug'),
 
             # === LOWEST PRIORITY: NUMBERS ===
             #(r'\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b', 'number'),
@@ -60,7 +63,18 @@ class TextHighlighter:
             'cli': {'color': '#0dcaf0', 'font-weight': '500', 'font-style': 'italic'},
             'timestamp': {'color': "#f4da5acd", 'font-weight': '500'},
             'path': {'color': '#d63384', 'text-decoration': 'underline'},
+            'module': {'font-weight': 'bold', "padding": "1px 4px", "border-radius": "3px"},
         }
+        self.module_colors = [
+                {"color": "#e83e8c"},   # Pink
+                {"color": "#0d6efd"},   # Blue
+                {"color": "#20c997"},   # Teal
+                {"color": "#fd7e14"},   # Orange
+                {"color": "#6f42c1"},   # Purple
+                {"color": "#198754"},   # Green
+            ]
+        self.module_color_map = {}    # dynamic mapping
+        self.module_color_index = 0   # round-robin
     
     def highlight_chunk(self, text_lines):
         if not text_lines:
@@ -113,7 +127,24 @@ class TextHighlighter:
         for start, end, match_text, style_name in non_overlapping_matches:
             if start > last_end:
                 components.append(line[last_end:start])
-            components.append(html.Span(match_text, style=self.styles[style_name]))
+            #components.append(html.Span(match_text, style=self.styles[style_name]))
+            if style_name == "module":
+                module_name = match_text.strip("[]")
+
+                # assign color if new
+                if module_name not in self.module_color_map:
+                    self.module_color_map[module_name] = self.module_colors[self.module_color_index % len(self.module_colors)]
+                    self.module_color_index += 1
+
+                color_style = self.module_color_map[module_name]
+
+                # merge base + color
+                span_style = {**self.styles['module'], **color_style}
+            else:
+                span_style = self.styles.get(style_name, {})
+                
+            components.append(html.Span(match_text, style=span_style))
+
             last_end = end
         
         if last_end < len(line):
