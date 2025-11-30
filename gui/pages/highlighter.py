@@ -3,25 +3,52 @@ import re
 class TextHighlighter:
     def __init__(self):
         self.patterns = [
-            (r'\d{4}-\d{2}-\w{5}:\d{2}:\d{2}', 'timestamp'),
-            (r'\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})?\b', 'timestamp'),
-            (r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\b', 'timestamp'),
-            (r'\b\d{2}:\d{2}:\d{2}(?:\.\d{3})?\b', 'timestamp'),
-            (r'\b([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b', 'mac'),
-            (r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', 'ip'),
-            (r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b', 'ip'),
-            (r'(?:/[^\s/]+)+(?:\.[^\s]*)?', 'path'),
-            (r'[A-Za-z]:\\(?:[^\s\\]+\\)*[^\s\\]*', 'path'),
-            (r'--[a-zA-Z][a-zA-Z0-9-]*(?:=[^\s]*)?', 'cli'),
-            (r'(?<!\w)-[a-zA-Z](?![a-zA-Z0-9])', 'cli'),
-            (r'\b0[xX][0-9a-fA-F]+\b', 'number'),
+
+            # === HIGH PRIORITY: FULL TIMESTAMPS (ISO, space, fractional, tz) ===
+            # ISO 8601 timestamps: 2025-11-24T00:53:27.123Z or without Z
+            (r'\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}'
+            r'(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?\b', 'timestamp'),
+
+            # RFC822 / syslog style: "Nov 24 00:53:27"
+            (r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+            r'\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\b', 'timestamp'),
+
+            # HH:MM:SS (but **NOT inside MAC addresses**)
+            (r'(?<![0-9A-Fa-f:])\b\d{2}:\d{2}:\d{2}'
+            r'(?:\.\d{3})?\b(?![:0-9A-Fa-f])', 'timestamp'),
+
+            # === MAC ADDRESSES ===
+            (r'\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', 'mac'),
+
+            # === IP ADDRESSES ===
+            # IPv6 first (to avoid IPv4 submatching)
+            (r'\b(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b', 'ip'),
+
+            # IPv4
+            (r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}'
+            r'(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b', 'ip'),
+
+            # === FILESYSTEM PATHS ===
+            # Unix paths
+            (r'(?<!\S)/(?:[^\s/]+/)*[^\s/]+', 'path'),
+
+            # Windows paths
+            (r'\b[A-Za-z]:\\(?:[^\s\\]+\\)*[^\s\\]+\b', 'path'),
+
+            # === CLI FLAGS ===
+            (r'--[a-zA-Z][a-zA-Z0-9-]*(?:=[^\s]+)?', 'cli'),     # --flag=value
+            (r'(?<!\w)-[a-zA-Z](?![a-zA-Z0-9])', 'cli'),         # -f
+
+            # === KEYWORDS (ERRORS, WARNINGS, etc.) ===
             (r'\b(ERROR|FATAL|CRITICAL|FAIL|FAILED|EXCEPTION|CRASH|ABORT|PANIC)\b', 'error'),
             (r'\b(WARNING|WARN|DEPRECATED|CAUTION|ALERT)\b', 'warning'),
             (r'\b(INFO|INFORMATION|NOTICE|SUCCESS|OK|PASS|PASSED|COMPLETE|COMPLETED)\b', 'info'),
             (r'\b(DEBUG|TRACE|VERBOSE|DETAIL)\b', 'debug'),
-            (r'\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b', 'number'),
+
+            # === LOWEST PRIORITY: NUMBERS ===
+            #(r'\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b', 'number'),
         ]
-        
+
         self.styles = {
             'error': {'color': '#dc3545', 'font-weight': 'bold', 'background': 'rgba(220, 53, 69, 0.1)', 'padding': '1px 3px', 'border-radius': '3px'},
             'warning': {'color': '#fd7e14', 'font-weight': 'bold', 'background': 'rgba(253, 126, 20, 0.1)', 'padding': '1px 3px', 'border-radius': '3px'},

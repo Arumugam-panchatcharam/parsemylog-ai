@@ -263,6 +263,9 @@ class DBManager:
     def get_project_file_info(self, project_id:str, filename: str) -> Optional[Any]:
         return self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, filename=filename).first()
     
+    def get_project_file_info_orig_name(self, project_id:str, original_name: str) -> Optional[Any]:
+        return self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, original_name=original_name).first()
+    
     def get_project_file_info_by_id(self, project_id:str, file_id) -> Optional[Any]:
         return self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, file_id=file_id).first()
 

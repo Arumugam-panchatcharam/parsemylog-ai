@@ -37,7 +37,7 @@ def search_input():
             ),
         ],
         className="ai-input-container",
-    ),
+    )
 
 
 def embedding_results_table():
@@ -101,9 +101,130 @@ def embedding_results_table():
                     "color": "grey",
                 },
             ],
+            row_selectable="single",
         ),
         style={"marginTop": "10px"}
     )
+
+def matching_loglines():
+    return html.Div(
+        dash_table.DataTable(
+            id="ai-log-template-results",
+            columns=[
+                {"name": "TimeStamp", "id": "timestamp"},
+                {"name": "LogLines", "id": "loglines"},
+            ],
+            data=[],  # initially empty
+            #sort_action="native",
+            #filter_action="native",
+            editable=False,
+            page_size=10,
+            style_table={
+                "maxHeight": "400px",
+                "overflowY": "auto",
+                "border": "1px solid #ddd",
+                "borderRadius": "8px",
+                "backgroundColor": "#fafafa",
+            },
+            style_cell={
+                "textAlign": "left",
+                "padding": "6px 8px",
+                "fontFamily": "Segoe UI, sans-serif",
+                "fontSize": "13px",
+                "whiteSpace": "normal",
+                "height": "auto",
+            },
+            style_header={
+                "backgroundColor": "#f8f9fa",
+                "fontWeight": "600",
+                "borderBottom": "1px solid #ccc",
+            },
+            row_selectable="single",
+        ),
+        style={"marginTop": "10px"}
+    )
+
+def template_parameter_list():
+    return html.Div(id="ai-parameter-list", style={"overflowX": "auto"})
+
+def log_context_slider(unit="seconds"):
+    """Return a slider depending on selected time unit"""
+    if unit == "seconds":
+        min_val, max_val, step, default = 5, 60, 5, 5
+        marks = {i: f"{i}s" for i in range(min_val, max_val + 1, step)}
+    else:  # minutes
+        min_val, max_val, step, default = 1, 10, 1, 1
+        marks = {i: f"{i}min" for i in range(min_val, max_val + 1, step)}
+
+    return dcc.Slider(
+        id="ai-timestamp-context-slider",
+        min=min_val,
+        max=max_val,
+        step=step,
+        value=default,
+        marks=marks,
+        tooltip={"placement": "bottom", "always_visible": True},
+        updatemode="drag",
+    )
+
+def log_context():
+    return html.Div([
+        # Time unit toggle + Highlight toggle
+        dbc.Row([
+            dbc.Col([
+                html.Label("Time unit:"),
+                dcc.RadioItems(
+                    id="ai-timestamp-unit-toggle",
+                    options=[
+                        {"label": "Seconds", "value": "seconds"},
+                        {"label": "Minutes", "value": "minutes"},
+                    ],
+                    value="seconds",
+                    inline=True,
+                    inputStyle={"margin-left": "15px", "margin-right": "5px"}
+                )
+            ], width="auto", style={"margin-left": "15px"}),
+            dbc.Col([
+                html.Label("Highlight log lines:"),
+                dcc.Checklist(
+                    id="ai-highlight-toggle",
+                    options=[{"label": "Enable Highlight", "value": True}],
+                    value=[],
+                    inline=True,
+                    inputStyle={"margin-left": "25px", "margin-right": "5px"}
+                )
+            ], width="auto"),
+        ], className="mb-3", align="center"),
+
+        # Slider container
+        html.Div(
+            id="ai-timestamp-slider-container",
+            children=[log_context_slider("minutes")],
+            style={"margin-bottom": "10px"}
+        ),
+        html.Div(id="ai-raw-log-view",
+            className="bg-dark text-light p-2 border rounded",
+            style={
+                'background': '#2d3748',
+                'color': '#e2e8f0',
+                'padding': '15px',
+                'border-radius': '8px',
+                'font-family': 'monospace',
+                'font-size': '10px',
+                'height': '600px',
+                'overflow-y': 'auto',
+                'white-space': 'pre-wrap'
+            }),
+    ])
+
+from dash import Input, Output, callback
+
+@callback(
+    Output("ai-timestamp-slider-container", "children"),
+    Input("ai-timestamp-unit-toggle", "value")
+)
+def update_slider(unit):
+    return log_context_slider(unit)
 
 def ai_analysis_layout():
     return dbc.Row([
@@ -118,7 +239,7 @@ def ai_analysis_layout():
                         ],
                     ),
                     html.Hr(),
-                    html.H5("Tempaltes Relevant to your search"),
+                    html.H5("Log Pattern Relevant to your search"),
                     html.Hr(),
                     dbc.Row([
                         dbc.Col(
@@ -129,6 +250,41 @@ def ai_analysis_layout():
                             ), width=12,
                         ),
                     ], className="mb-4"),
+                    html.Hr(),
+                    html.H5("Parameters list"),
+                    dbc.Row([
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody([
+                                    template_parameter_list(),
+                                ]),
+                            ), width=12,
+                        ),
+                    ], className="mb-4"),
+                    html.Hr(),
+                    html.H5("Matching loglines"),
+                    dbc.Row([
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody([
+                                    matching_loglines(),
+                                ]),
+                            ), width=12,
+                        ),
+                    ], className="mb-4"),
+                    html.Hr(),
+                    html.H5("Matching Log Context"),
+                    dbc.Row([
+                        dbc.Col(
+                            dbc.Card(
+                                dbc.CardBody([
+                                    log_context(),
+                                ]),
+                            ), width=12,
+                        ),
+                    ], className="mb-4"),
+                    html.B(),
+                    html.Hr(),
                 ])
             ),
         ])
