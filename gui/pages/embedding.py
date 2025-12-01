@@ -144,8 +144,11 @@ def create_embedding_layout():
                             ),
                         ],
                         ),
-                        dbc.Button("Sync Pipieline Status", 
-                            id="sync-pipeline-icon", color="primary", size="sm", className="mx-auto mt-2"),
+                        dbc.Button("Sync Pipeline Status", 
+                            id="sync-pipeline", color="primary", size="sm", className="mx-auto m-2"),
+                        dbc.Button("Download Templates", 
+                            id="embed-download-templates", color="primary", size="sm", className="mx-2 m-2"),
+                        dcc.Download(id="embed-download-templates-download"),
                         html.Hr(),
                         dbc.Row(
                             [
@@ -166,6 +169,13 @@ def create_embedding_layout():
                                     ), width=12,
                                 ),
                         ], className="mb-4"),
+                        create_modal(
+                        modal_id="embed_dwld_exception_modal",
+                        header="An Exception Occurred",
+                        content="An exception occurred. Please click OK to continue.",
+                        content_id="embed_dwld_exception_modal_content",
+                        button_id="embed_dwld_exception_modal_close",
+                    ),
                 ])
             ),
         ])

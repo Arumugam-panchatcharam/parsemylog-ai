@@ -1,11 +1,14 @@
 import os
+import re
+import pandas as pd
 from pathlib import Path
-from dash import ctx, html, Input, Output, State, callback
+from dash import dcc, ctx, html, Input, Output, State, callback, no_update
 import dash
 from gui.app_instance import dbm
 from logai.pattern import Pattern
 import time
 from logai.utils.constants import UPLOAD_DIRECTORY
+from logai.utils.constants import NON_TEXT_EXTENSIONS, IGNORE_FILENAME_LIST
 from logai.embedding import VectorEmbedding, read_status, update_file_status
 
 @callback(
@@ -78,7 +81,7 @@ def get_pipeline_status(project_dir):
     Output("embed-queued-card", "children", allow_duplicate=True),
     Output("embed-parsed-card", "children", allow_duplicate=True),
     Output("embed-done-card", "children", allow_duplicate=True),
-    Input("sync-pipeline-icon", "n_clicks"),
+    Input("sync-pipeline", "n_clicks"),
     State("current-project-store", "data"),
     prevent_initial_call=True,
 )
@@ -92,7 +95,7 @@ def sync_pipeline_status(sync_pipeline_btn, project_data):
 
     if ctx.triggered:
         prop_id = ctx.triggered[0]["prop_id"].split(".")[0]    
-        if prop_id == "sync-pipeline-icon":
+        if prop_id == "sync-pipeline":
             queued_files, parsed_files, done_files, _ = get_pipeline_status(project_dir)
             return queued_files, parsed_files, done_files
 
@@ -150,3 +153,91 @@ def update_status(_interval, project_data):
     print("Checked for parsed files to index")
     queued_files, parsed_files, done_files, all_done = get_pipeline_status(project_dir)
     return queued_files, parsed_files, done_files, all_done
+
+def export_df_to_csv(files):
+    df_list = []
+    
+    for filename, file_path, original_name, _, _ in files:
+        if not os.path.exists(file_path) or not os.path.getsize(file_path):
+            continue
+        if any(filename.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
+            continue
+        if any(ign.lower() in original_name.lower() for ign in IGNORE_FILENAME_LIST):
+            continue
+
+        parquet_path = Path(file_path + ".parquet")
+        if not parquet_path.exists():
+            continue
+
+        df = pd.read_parquet(parquet_path)
+
+        # Drop unwanted columns
+        df = df.drop(columns=["timestamp", "loglines", "parameter_list"], errors="ignore")
+        df['template'] = df['template'].astype(str)
+        
+        ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+        df['template'] = df['template'].apply(lambda x: ANSI_RE.sub('', x))
+
+        # Remove any remaining non-printable ASCII chars
+        df['template'] = df['template'].apply(lambda x: re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', '', x))
+        
+        result_df = df['template'].value_counts().reset_index()
+        result_df.columns = ['template', 'count']
+
+        result_df["filename"] = original_name
+
+        # Reorder columns
+        result_df = result_df[["filename", "count", "template"]]
+
+        df_list.append(result_df)
+
+    if not df_list:
+        return None
+
+    # Merge all files
+    combined_df = pd.concat(df_list, ignore_index=True)
+
+    return combined_df
+
+@callback(
+    Output("embed-download-templates-download", "data"),
+    Output("embed_dwld_exception_modal", "is_open"),
+    Output("embed_dwld_exception_modal_content", "children"),
+    Input("embed-download-templates", "n_clicks"),
+    State("current-project-store", "data"),
+    prevent_initial_call=True,
+)
+def download_templates(n_clicks,  project_data):
+    if not project_data or not project_data.get("project_id"):
+        return  no_update, False, ""
+    
+    try:
+        if ctx.triggered:
+            prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
+            
+            if prop_id == "embed-download-templates":
+                project_id = project_data["project_id"]
+                project_name = project_data["project_name"]
+                user_id = project_data.get("user_id")
+                project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
+                try:
+                    files = dbm.get_project_files(project_id)
+                except Exception as e:
+                    return no_update, True, f"Embedding Temporary Error retrieving data: {str(e)}"
+
+                df = export_df_to_csv(files)
+                if df is None or df.empty:
+                    return no_update, True, "No templates available for download."
+                    
+                excel_name = f"Unique-Patterns-{project_name}.xlsx"
+                excel_path = project_dir / excel_name
+                #print(f"Exporting templates to {excel_path}")
+                df.to_excel(excel_path, index=False)
+                return dcc.send_file(excel_path), False, ""
+
+            elif prop_id == "embed_dwld_exception_modal_close":
+                return no_update, False, ""
+        else:
+            return no_update, False, ""
+    except Exception as error:
+        return no_update, True, str(error)
