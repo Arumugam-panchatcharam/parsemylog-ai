@@ -1,7 +1,8 @@
 import dash_bootstrap_components as dbc
-from dash import ctx, Input, Output, State, callback
+from dash import dcc, ctx, Input, Output, State, callback, no_update
 import dash
-
+import json
+import base64
 from logai.log_parser_config import LogParserConfig
 
 @callback(
@@ -210,7 +211,7 @@ def save_issue(_, category, title, cause, file_name, regex_data):
 def open_delete_modal(del_issue, del_cat, cancel, category, issue):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return False, dash.no_update
+        return False, no_update
 
     trigger = ctx.triggered[0]["prop_id"].split(".")[0]
 
@@ -223,9 +224,7 @@ def open_delete_modal(del_issue, del_cat, cancel, category, issue):
             return False, "Please select a category to delete."
         return True, f"Are you sure you want to delete the entire category '{category}' (all issues will be lost)?"
     else:
-        return False, dash.no_update
-
-    return False, dash.no_update
+        return False, no_update
 
 @callback(
     Output("parser-config-delete-modal", "is_open", allow_duplicate=True),
@@ -239,7 +238,7 @@ def open_delete_modal(del_issue, del_cat, cancel, category, issue):
 )
 def confirm_delete(n_clicks, category, issue, confirm_text):
     if not n_clicks:
-        return False, dash.no_update, dash.no_update
+        return False, no_update, no_update
     
     lpc = LogParserConfig()
     #lpc.load_config()
@@ -253,3 +252,68 @@ def confirm_delete(n_clicks, category, issue, confirm_text):
         issue_opts = [{"label": i["Title"], "value": i["Title"]} for i in config.get(category, [])]
         return False, categories, issue_opts
 
+@callback(
+    Output("parser-config-download-json", "data"),
+    Input("parser-config-export-json", "n_clicks"),
+    prevent_initial_call=True
+)
+def export_config(n_clicks):
+    lpc = LogParserConfig()
+    config = lpc.load_config()
+    return dcc.send_string(json.dumps(config, indent=2), "logai_log_parser_config.json")
+
+@callback(
+    Output("parser_config_dwld_exception_modal", "is_open"),
+    Output("parser_config_dwld_exception_modal_content", "children"),
+    Output("parser-config-category-select", "options", allow_duplicate=True),
+    Output("parser-config-issue-select", "options", allow_duplicate=True),
+    Output("parser-config-table", "data", allow_duplicate=True),
+    Input("parser_config_dwld_exception_modal_close", "n_clicks"),
+    Input("parser-config-load-json", "contents"),
+    State("parser-config-load-json", "filename"),
+    prevent_initial_call=True
+)
+def load_external_config(n_clicks, contents, filename):
+    if not contents:
+        return False,"", no_update, no_update, no_update
+
+    try:
+        if ctx.triggered:
+            prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
+            if prop_id == "parser-config-load-json":
+                content_type, content_string = contents.split(',')
+                decoded = base64.b64decode(content_string)
+                data = json.loads(decoded)
+
+                # Validate
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid config: should be a dict")
+                for cat, issues in data.items():
+                    if not isinstance(issues, list):
+                        raise ValueError(f"Category '{cat}' should contain a list of issues")
+
+                # Save
+                lpc = LogParserConfig()
+                lpc.save_config(data)
+
+                # Update dropdowns and table
+                categories = [{"label": k, "value": k} for k in data.keys()]
+                table_data = []
+                for cat, issues in data.items():
+                    for issue in issues:
+                        for cpe in issue.get("CPELogs", []):
+                            table_data.append({
+                                "Category": cat,
+                                "Title": issue["Title"],
+                                "FileName": cpe["FileName"],
+                                "PatternCount": len(cpe.get("Regex", []))
+                            })
+                return True, "Loaded Successfully!", categories, [], table_data
+            
+            elif prop_id == "parser_config_dwld_exception_modal_close":
+                return False, "", no_update, no_update, no_update
+        else:
+            return False, "", no_update, no_update, no_update
+    except Exception as e:
+        print(f"Failed to load JSON '{filename}': {e}")
+        return True, str(e), no_update, no_update, no_update

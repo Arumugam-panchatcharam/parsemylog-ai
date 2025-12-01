@@ -203,11 +203,12 @@ def export_df_to_csv(files):
     Output("embed-download-templates-download", "data"),
     Output("embed_dwld_exception_modal", "is_open"),
     Output("embed_dwld_exception_modal_content", "children"),
+    Input("embed_dwld_exception_modal_close", "n_clicks"),
     Input("embed-download-templates", "n_clicks"),
     State("current-project-store", "data"),
     prevent_initial_call=True,
 )
-def download_templates(n_clicks,  project_data):
+def download_templates(n_clicks_close, n_clicks_download, project_data):
     if not project_data or not project_data.get("project_id"):
         return  no_update, False, ""
     

@@ -104,8 +104,29 @@ def create_log_parser_config_layout():
                 dbc.Col([
                     dbc.Button([html.I(className="fas fa-save me-1"), "Save Config"],
                                id="parser-config-save-btn", color="success", size="sm", className="mt-2 me-2"),
-                ])
-            ], className="mb-2 mt-2"),
+
+                ], width="auto", class_name="mx-auto"),
+            ], className="mb-3 mt-2"),
+            dbc.Row([
+                dbc.Col([
+                    dcc.Upload(
+                        id="parser-config-load-json",
+                        children=dbc.Button(
+                            [html.I(className="fas fa-upload me-1"), "Load Config JSON"],
+                            color="primary", size="sm", className="mt-2 me-2"
+                        ),
+                        multiple=False,
+                        style={"display": "inline-block"}
+                    ),
+                ], width="2"),
+                dbc.Col([
+                    dbc.Button(
+                        [html.I(className="fas fa-download me-1"), "Export Config JSON"],
+                        id="parser-config-export-json", color="secondary", size="sm",className="mt-2 me-2"
+                    ),
+                    dcc.Download(id="parser-config-download-json"),
+                ], width="2"),
+            ], className="mb-3"),
             html.Hr(),
             html.H4("📘 Current Configuration"),
             dash_table.DataTable(
@@ -173,7 +194,14 @@ def create_log_parser_config_layout():
                 dbc.Button("Yes, Delete", id="parser-config-confirm-delete", color="danger"),
                 dbc.Button("Cancel", id="parser-config-cancel-delete", color="secondary", className="ms-2")
             ])
-        ], id="parser-config-delete-modal", is_open=False)
+        ], id="parser-config-delete-modal", is_open=False),
+        create_modal(
+        modal_id="parser_config_dwld_exception_modal",
+        header="Alert",
+        content="An exception occurred. Please click OK to continue.",
+        content_id="parser_config_dwld_exception_modal_content",
+        button_id="parser_config_dwld_exception_modal_close",
+    ),
     ],)
 
 def log_parser_config_page():
