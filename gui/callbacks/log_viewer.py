@@ -102,13 +102,13 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
                             color="success" if all("✅" in r for r in results) else "warning")
     
     try:
-    # remove the uploaded files after processing
         files = dbm.get_project_files(project_id)
     except Exception as e:
         print(f"Viewer Temporary Error retriving data {e}")
         return no_files_uploaded(), "0 files", dash.no_update, dash.no_update
-    
-    scheduler = PatternScheduler(max_workers=2)
+
+    # Schedule pattern extraction and embedding
+    scheduler = PatternScheduler(max_workers=1)
     scheduler.schedule_files(project_dir=project_dir, files=files)
 
     # Load notes if exist

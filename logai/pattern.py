@@ -37,9 +37,9 @@ class Pattern:
                 r"))[:\s]+(?P<loglines>.*)$"
             )
         self.headers = ["timestamp", "loglines"]
-        persistence = FilePersistence(f"{project_dir}/drain3_state.json") if project_dir and os.path.exists(project_dir) else None
+        #persistence = FilePersistence(f"{project_dir}/drain3_state.json") if project_dir and os.path.exists(project_dir) else None
+        persistence = None
         self.template_miner = TemplateMiner(persistence,config=config)
-        #self.template_miner = TemplateMiner(config=config)
         self.log_df = pd.DataFrame()
         self.results = pd.DataFrame()
 
@@ -57,7 +57,7 @@ class Pattern:
             return pd.DataFrame(), None
         
         self.results = pd.DataFrame()
-
+        '''
         def extract_template_and_args(logline):
             # Step 1: Get the template from the logline
             """
@@ -76,11 +76,39 @@ class Pattern:
    
             return template, params
 
+        print("starting Drain3")
+        start = time.perf_counter()
         # Apply to DataFrame
         self.log_df[["template", "parameter_list"]] = self.log_df["loglines"].apply(
                 lambda x: pd.Series(list(extract_template_and_args(x)))
             )
-        
+        end = time.perf_counter()
+        print(f"time taken for Drain3: {end - start:.4f} seconds")
+        '''
+        print("Drain3 starting..")
+        start = time.perf_counter()
+
+        lines = self.log_df["loglines"].tolist()
+        print(f"Total log lines to process: {len(lines) if len(lines) < 1000 else len(lines)/1000:.2f}K")
+        templates = []
+        params_list = []
+
+        append_t = templates.append
+        append_p = params_list.append
+        add_msg = self.template_miner.add_log_message
+        get_params = self.template_miner.get_parameter_list
+
+        for line in lines:
+            r = add_msg(line)
+            t = r["template_mined"]
+            append_t(t)
+            append_p(get_params(t, line))
+
+        self.log_df["template"] = templates
+        self.log_df["parameter_list"] = params_list
+
+        end = time.perf_counter()
+        print("Drain3 Finished in", end - start, "seconds")
         self.results = self.log_df[['timestamp', 'loglines', 'template', 'parameter_list']].copy()
         self.results.to_parquet(tmp_result_file_path, index=False)
         os.replace(str(tmp_result_file_path), str(result_file_path))
@@ -97,10 +125,8 @@ class Pattern:
         try:
             with open(fpath, "r", encoding='utf-8', errors='ignore') as fin:
                 lines = fin.readlines()
-                start = time.perf_counter()
                 logdf = self._logs_to_dataframe(lines)
-                end = time.perf_counter()
-                print(f"Execution time: {end - start:.4f} seconds")
+                
         except Exception as e:
             print("Read log file failed. Exception {} filename {}".format(e, fpath))
         #print(logdf)
@@ -167,7 +193,7 @@ class Pattern:
 
         # Quick diagnostic
         parsed_count = df["timestamp"].notna().sum()
-        print(f"Parsed timestamps: {parsed_count}/{len(df)}")
+        #print(f"Parsed timestamps: {parsed_count}/{len(df)}")
 
         # Step 3: Determine base_time using only parsed timestamps (no forward-fill yet)
         real_times = df["timestamp"].dropna()

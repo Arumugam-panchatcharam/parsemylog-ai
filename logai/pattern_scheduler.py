@@ -10,8 +10,12 @@ from filelock import FileLock
 from logai.pattern import Pattern
 from logai.utils.constants import NON_TEXT_EXTENSIONS, IGNORE_FILENAME_LIST
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+#from logai.embedding import VectorEmbedding
+from gui.app_instance import KB
+
 #MAX_WORKERS = max(1, (os.cpu_count() or 2) - 1)
-MAX_WORKERS = 2  # limit to 4 workers for now due to memory constraints
+MAX_WORKERS = 1  # limit to 4 workers for now due to memory constraints
 
 # ---------- Helpers ----------
 def status_file(project_dir: Path) -> Path:
@@ -176,7 +180,9 @@ class FileLock:
             pass
 '''
 # ---------- Worker function (must be importable at top-level for ProcessPool) ----------
-def _parse_file_worker(project_dir: Path, filename: str, original_filename: str, file_path) -> Dict[str,Any]:
+def _parse_file_worker(project_dir: Path, filename: str, original_filename: str, file_path: str) -> Dict[str,Any]:
+    #embedding  = VectorEmbedding()
+
     """
     Worker executed in subprocess. Parses file with Drain3 and writes parquet result atomically.
     Returns status dict (state, message).
@@ -191,7 +197,16 @@ def _parse_file_worker(project_dir: Path, filename: str, original_filename: str,
             #print(f"Parsing {filename} in {project_dir}")
             parser = Pattern(project_dir=project_dir)
             parser.parse_logs(file_path)
-            #print(f"Parsed {filename}, result at {result_df_path}")
+
+            result_path = Path(file_path + ".parquet")
+            #start = time.perf_counter()
+            if KB is not None:
+                #print("Adding templates to KB")
+                KB.
+            #embedding.add_templates(project_dir, result_path, original_filename)
+            #end = time.perf_counter()
+            #print(f"Time taken for embedding: {end - start:.4f} seconds")
+            #print(f"Parsed {filename}, result at {result_path}")
 
             return {"state": "done", "message": "Parsed and saved"}
     except Exception as e:
@@ -221,7 +236,7 @@ class PatternScheduler:
         # ensure lock dir exists
         #(project_dir / "locks").mkdir(parents=True, exist_ok=True)
         results = {}
-
+        
         for filename, file_path, original_name, _, _ in files:
             if not os.path.exists(file_path):
                 continue
@@ -235,11 +250,12 @@ class PatternScheduler:
             if any(ign.lower() in original_name.lower() for ign in IGNORE_FILENAME_LIST):
                 continue
 
-            result_path = Path(file_path + ".parquet")
+            #result_path = Path(file_path + ".parquet")
+            #qdrant_path = project_dir / "qdrant"
             #print(f"Checking if result exists at {result_path}")
-            if result_path.exists():
-                results[original_name] = "parsed"
-                continue
+            #if result_path.exists() and qdrant_path.exists():
+            #    results[original_name] = "indexed"
+            #    continue
 
             # if already processing according to status.json, skip
             status = read_status(project_dir).get(original_name, {})
@@ -250,10 +266,10 @@ class PatternScheduler:
             update_file_status(project_dir, original_name, "queued", {"queued_at": time.time()})
 
             # schedule worker in pool
-            #print(f"Scheduling parsing for {filename}")
+            print(f"Scheduling parsing for {original_name}")
             future = self.pool.submit(_parse_file_worker, project_dir, filename, original_name, file_path)
             self._futures[future] = (project_dir, filename)
-            #print(f"Scheduled parsing for {filename}")
+            print(f"Scheduled parsing for {original_name}")
             results[filename] = "scheduled"
         return results
 

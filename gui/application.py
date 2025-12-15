@@ -65,6 +65,8 @@ app.layout = dbc.Container([
     dcc.Store(id="delete-user-store", storage_type="memory"),
     dcc.Store(id="reset-password-store", storage_type="memory"),  # NEW: Password reset
 
+    dcc.Store(id="upload-loading-trigger", storage_type="memory"),
+
     # for Log Viewer
     dcc.Store(id='current-file-store'),
     dcc.Store(id='current-page-store', data=1),

@@ -37,7 +37,7 @@ def create_control_card():
 
 def status_update():
     card_style = {
-        "height": "360px",
+        "height": "300px",
         "padding": "12px",
         "borderRadius": "10px",
         "overflowY": "auto",
@@ -49,7 +49,7 @@ def status_update():
     return html.Div(
         style={
             "display": "flex",
-            "gap": "20px",
+            "gap": "10px",
             "justifyContent": "space-between",
             "width": "100%",
         },
@@ -61,17 +61,8 @@ def status_update():
                     "backgroundColor": "#f0f0f0"
                 })
             ], style={"flex": 1, "display": "flex", "flexDirection": "column"}),
-
             html.Div([
-                html.H5("Parsed Files", style={"fontWeight": "bold", "marginBottom": "5px"}),
-                html.Div(id="embed-parsed-card", style={
-                    **card_style,
-                    "backgroundColor": "#e0f7fa"
-                })
-            ], style={"flex": 1, "display": "flex", "flexDirection": "column"}),
-
-            html.Div([
-                html.H5("Indexed Files", style={"fontWeight": "bold", "marginBottom": "5px"}),
+                html.H5("Parsed & Indexed Files", style={"fontWeight": "bold", "marginBottom": "5px"}),
                 html.Div(id="embed-done-card", style={
                     **card_style,
                     "backgroundColor": "#e8f5e9"
@@ -127,7 +118,7 @@ def templates_table():
                 'width': '5%'
             }
         ],
-            page_size=15
+            page_size=20
         )
     ])
 
@@ -169,6 +160,8 @@ def create_embedding_layout():
                                     ), width=12,
                                 ),
                         ], className="mb-4"),
+                        dbc.Button("Save Templates", 
+                            id="save-templates", color="primary", size="sm", className="mx-auto m-2"),
                         create_modal(
                         modal_id="embed_dwld_exception_modal",
                         header="An Exception Occurred",
@@ -191,7 +184,7 @@ def embedding_page():
         },
         children=[
             create_embedding_layout(),
-            dcc.Interval(id="emdedding-status-interval", interval=5000, n_intervals=0),  # every 5 seconds
+            dcc.Interval(id="emdedding-status-interval", interval=1000, n_intervals=0),  # every 1 second
         ]
     )
 layout = embedding_page()

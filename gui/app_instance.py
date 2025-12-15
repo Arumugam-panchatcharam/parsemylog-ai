@@ -8,6 +8,7 @@ from gui.user_db_mngr import DBManager
 from sentence_transformers import SentenceTransformer
 dbm = DBManager()
 
+from logai.knowledgebase import TemplateKnowledgeBase
 from logai.utils.constants import (
     BASE_DIR, 
     UPLOAD_DIRECTORY,
@@ -15,6 +16,7 @@ from logai.utils.constants import (
 )
 
 EMBEDDING_MODEL=None
+KB=None
 
 def create_app():
     # Initialize Flask server and Dash app
@@ -38,6 +40,7 @@ def create_app():
     EMBEDDING_MODEL=SentenceTransformer(model_path)
     print(f"Loaded SentenceTransformer model from {model_path}")
 
+    KB = TemplateKnowledgeBase()
 
     app = Dash(
         __name__,

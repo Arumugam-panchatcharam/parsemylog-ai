@@ -1,5 +1,4 @@
 FROM python:3.11-slim
-MAINTAINER p.arumugam@telekom-digital.com
 
 WORKDIR /app
 COPY requirements.txt .
