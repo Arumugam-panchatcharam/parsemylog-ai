@@ -92,12 +92,12 @@ class Telemetry2Parser:
             if fname.startswith(self.filename):
                 self.file_path = os.path.join(merged_logs_path, fname)
                 break
-        
-        if self.file_path is None or not os.path.isfile(self.file_path):
+
+        if not (os.path.exists(self.file_path) and os.path.isfile(self.file_path)):
             print(f"Telemetry file '{self.filename}' not found in '{merged_logs_path}'.")
             return
         
-        with open(self.file_path, "r") as infile:
+        with open(self.file_path, "r", encoding="utf-8", errors="ignore") as infile:
             for line in infile:
                 # Remove log prefixes from line (works anywhere in the line)
                 clean_line = self.log_prefix_pattern.sub("", line)
