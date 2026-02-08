@@ -1,19 +1,44 @@
 # ParseMyLog-AI
 
-A Dash-based web application for RDK log analysis with semantic search powered by a **rg+Drain3 RAG pipeline** and **Qdrant vector database**.
+A modern web application for log analysis with semantic search powered by a **rg+Drain3 RAG pipeline** and **Qdrant vector database**. Features a **React** frontend with Material Design and a **Flask REST API** backend.
 
 ## Features
 
-- **File Upload & Extraction** -- Drag-and-drop RDK log tarballs (.tgz/.tar.gz); automatic extraction and chronological merging.
+- **File Upload & Extraction** -- Drag-and-drop log tarballs (.tgz/.tar.gz); automatic extraction and chronological merging.
 - **rg+Drain3 Pipeline** -- Two-stage log indexing: ripgrep pre-filters error-class lines (6-10x speedup), then Drain3 extracts templates per domain.
 - **Semantic Search** -- BGE embeddings (BAAI/bge-small-en-v1.5) stored in Qdrant for cosine similarity search across log patterns.
-- **Telemetry 2.0 Dashboard** -- YAML-driven parsing of T2 periodic reports with key metric trends, interactive Plotly charts, radio/SSID status cards, and device info (WAN type, SDK version, SW upgrade detection).
-- **Log Viewer** -- Paginated viewer with syntax highlighting, regex search, and quick-pattern buttons (ERROR, WARN, IP, Time).
-- **Pattern Analysis** -- Drain3 template extraction with frequency analysis, per-domain file filtering, and on-demand parameter extraction via Drain3 native API.
-- **AI Analysis** -- Semantic search with matching loglines, dynamic parameter extraction, and log context window with source file back-referencing.
-- **Multi-User Support** -- Flask-Login authentication, per-project isolation, thread-safe indexing with per-project locks.
+- **Telemetry Dashboard** -- YAML-driven parsing of T2 periodic reports with key metric trends, interactive Plotly charts, radio/SSID status cards, and device info.
+- **Log Viewer** -- IDE-style paginated viewer with syntax highlighting (timestamps, IPs, MACs, modules, keywords), regex search, and quick-pattern buttons.
+- **Pattern Analysis** -- Drain3 template extraction with frequency analysis, per-domain file filtering, and on-demand parameter extraction.
+- **AI Analysis** -- Semantic search with matching loglines, dynamic parameter extraction, and log context window.
+- **Multi-User Support** -- JWT authentication, per-project isolation, thread-safe indexing with per-project locks.
 
 ## Architecture
+
+```
+                    ┌─────────────────────────────────────┐
+                    │          Nginx (port 8091)           │
+                    │    React SPA  ←→  /api proxy        │
+                    └──────┬─────────────────┬────────────┘
+                           │                 │
+                  Static files         API requests
+                           │                 │
+                ┌──────────▼──┐    ┌─────────▼──────────┐
+                │  React SPA  │    │  Flask REST API     │
+                │  (Vite)     │    │  (Gunicorn)         │
+                │  Port: 80   │    │  Port: 40901        │
+                └─────────────┘    └─────────┬──────────┘
+                                             │
+                              ┌──────────────┼──────────────┐
+                              │              │              │
+                    ┌─────────▼──┐  ┌────────▼───┐  ┌──────▼──────┐
+                    │  SQLite    │  │  Qdrant    │  │  File Store │
+                    │  (Users/   │  │  (Vectors) │  │  (Uploads)  │
+                    │  Projects) │  │  Port 6333 │  │             │
+                    └────────────┘  └────────────┘  └─────────────┘
+```
+
+### Pipeline
 
 ```mermaid
 flowchart TD
@@ -30,133 +55,148 @@ flowchart TD
     Parquet --> PatternPage["Pattern Analysis\n+ Parameter Extraction"]
 ```
 
-### Pipeline Details
-
-| Stage | Component | Description |
-|-------|-----------|-------------|
-| 1. Upload | `gui/callbacks/log_viewer.py` | Drag-and-drop file upload; files stored with original filenames |
-| 2. Extract | `gui/log_merger.py` | Tarball extraction, timestamp-based chronological merging |
-| 3. Pre-filter | `logai/rg_scanner.py` | ripgrep scans with domain YAML pattern packs; per-domain file glob filtering |
-| 4. Templates | `logai/pattern.py` | Drain3 online log parsing with per-domain persistent state files |
-| 5. Embed | `logai/embedding.py` | BGE embeddings via SentenceTransformers; deterministic UUIDs for deduplication |
-| 6. Store | Qdrant (Docker) | Per-project vector collections with cosine similarity |
-| 7. Search | `gui/callbacks/ai_analysis.py` | Semantic similarity search with source file context hydration |
-| 8. Telemetry | `logai/telemetry_parser.py` | T2 JSON report parsing with YAML field config |
-| 9. Info | `logai/info_extractor.py` | SW upgrade detection and device info extraction |
-
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Web Framework | Dash 3.x + Flask |
-| UI Styling | Dash Bootstrap Components |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, MUI Icons |
+| Charts | Plotly.js (react-plotly.js) |
+| State Management | TanStack Query (React Query) |
+| Routing | React Router v7 |
+| Backend API | Flask + Flask-JWT-Extended |
 | Log Parsing | Drain3 (online template mining) |
 | Pre-filtering | ripgrep (rg) |
 | Embeddings | SentenceTransformers (BAAI/bge-small-en-v1.5, 384-dim) |
 | Vector Database | Qdrant |
 | Data Processing | pandas, PyArrow (parquet caching) |
-| Charts | Plotly |
-| Authentication | Flask-Login + bcrypt |
+| Authentication | JWT (access + refresh tokens) + bcrypt |
 | Database | SQLite + SQLAlchemy |
-| WSGI Server | Gunicorn (8 workers, `--preload`) |
+| WSGI Server | Gunicorn |
 | Reverse Proxy | Nginx |
 | Containerization | Docker Compose |
 
-## Installation
+## Quick Start
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- OR Python 3.11+ with ripgrep installed
+- **Docker** and **Docker Compose** (v2+)
+- **Node.js** 18+ (for local frontend development only)
+- OR **Python 3.11+** with **ripgrep** installed (for local backend development)
 
-### Docker (Recommended)
+### Production Deployment (Docker)
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone <repo-url> && cd parsemylog-ai
 
-# Create environment file from the template
+# 2. Create environment file
 cp .env_example .env
-# Edit .env if needed (APP_PORT, NGINX_PORT, QDRANT_URL, LOG_LEVEL)
+# Edit .env if needed (ports, JWT secret, log level)
 
-# Build and start all services
+# 3. Build and start all services (frontend is built inside Docker automatically)
+docker compose up -d --build
+
+# 4. Verify services are running
+docker compose ps
+```
+
+The application will be available at **http://localhost:8091** (or your configured `NGINX_PORT`).
+
+No local Node.js installation is needed -- the Nginx container builds the React frontend during `docker compose build`.
+
+**Services started:**
+
+| Service | Container | Port | Description |
+|---------|-----------|------|-------------|
+| `logai-api` | logai-api | 40901 | Flask REST API (Gunicorn, 4 workers) |
+| `qdrant` | qdrant | 6333 | Qdrant vector database |
+| `nginx` | nginx | 8091 | Nginx — builds & serves React SPA + proxies /api |
+
+### Updating the Application
+
+```bash
+# Pull latest changes
+git pull
+
+# Rebuild and restart services (frontend is rebuilt automatically)
 docker compose up -d --build
 ```
 
-This starts three services:
-- **rdk-logai-app** -- Main application (Gunicorn on port 40901)
-- **qdrant** -- Vector database (port 6333)
-- **nginx** -- Reverse proxy (port configurable via `NGINX_PORT`)
+### Stopping Services
+
+```bash
+# Stop all services (preserves data volumes)
+docker compose down
+
+# Stop and remove data volumes (DESTRUCTIVE — deletes all user data)
+docker compose down -v
+```
 
 ### Local Development
 
 ```bash
-# Install ripgrep
+# 1. Install ripgrep
 # macOS: brew install ripgrep
 # Ubuntu: apt-get install ripgrep
 
-# Create virtual environment
+# 2. Set up Python backend
 python -m venv .venv && source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 
-# Start Qdrant only (required for vector search)
+# 3. Start Qdrant (required for vector search)
 docker compose up qdrant -d
 
-# Run the development server (with hot-reload)
-python run_dev.py
+# 4. Start the API backend (with hot-reload)
+python run_api.py
+
+# 5. In a separate terminal, start the frontend dev server
+cd frontend && npm install && npm run dev
 ```
 
-`run_dev.py` automatically:
-- Adds the project root to `sys.path`
-- Sets `QDRANT_URL=http://localhost:6333`
-- Configures logging at INFO level
-- Starts Dash in debug mode with hot-reload on port 40901
+The frontend dev server runs at **http://localhost:5173** and proxies `/api` requests to the Flask backend on port 40901.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APP_PORT` | `40901` | Flask API server port |
+| `NGINX_PORT` | `8091` | Nginx reverse proxy port |
+| `QDRANT_URL` | `http://qdrant:6333` | Qdrant server URL (`http://localhost:6333` for local dev) |
+| `QDRANT_PORT` | `6333` | Qdrant host port mapping |
+| `LOG_LEVEL` | `INFO` | Python log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `JWT_SECRET_KEY` | auto-generated | JWT signing key (set for persistence across restarts) |
+| `JWT_ACCESS_EXPIRES` | `3600` | Access token TTL in seconds (1 hour) |
+| `JWT_REFRESH_EXPIRES` | `2592000` | Refresh token TTL in seconds (30 days) |
+| `TOKENIZERS_PARALLELISM` | `false` | Suppress HuggingFace tokenizer fork warnings |
+
+A template is provided in `.env_example`:
+
+```bash
+cp .env_example .env
+```
 
 ## Logging
 
 ### Production (Docker)
 
-Application logging is configured in `logai_wsgi.py` and writes to stdout, which Gunicorn captures and forwards to `docker logs`.
-
 ```bash
-# View logs in real-time
-docker compose logs -f rdk-logai-app
+# View all logs in real-time
+docker compose logs -f
 
-# View only the last 100 lines
-docker compose logs --tail 100 rdk-logai-app
+# View only API logs
+docker compose logs -f logai-api
+
+# View last 100 lines
+docker compose logs --tail 100 logai-api
 ```
 
-The log level is controlled by the `LOG_LEVEL` environment variable in `.env`:
+To change log level without restarting:
 
 ```bash
-# .env
-LOG_LEVEL=INFO    # Options: DEBUG, INFO, WARNING, ERROR
-```
-
-To temporarily enable debug logging without editing `.env`:
-
-```bash
-# Override at runtime
-docker compose run -e LOG_LEVEL=DEBUG rdk-logai-app
-```
-
-Gunicorn is also configured with `--access-logfile -` and `--error-logfile -` to emit its own access and error logs to stdout.
-
-### Local Development
-
-`run_dev.py` configures logging at INFO level automatically. To change:
-
-```bash
-# Set before running
-export LOG_LEVEL=DEBUG
-python run_dev.py
+docker compose run -e LOG_LEVEL=DEBUG logai-api
 ```
 
 ### Log Format
-
-All application logs follow this format:
 
 ```
 HH:MM:SS [module.name] LEVEL: message
@@ -168,15 +208,11 @@ Example:
 14:32:11 [logai.rg_scanner] INFO: [RgScanner] Domain 'platform' (66 files): 23468 matches in 0.210s
 ```
 
-Noisy third-party loggers are suppressed by default:
-- `drain3.template_miner` -- set to WARNING (suppresses per-cluster state saves)
-- `httpx` -- set to WARNING (suppresses Qdrant HTTP request/response lines)
-
 ## Configuration
 
 ### ripgrep Pattern Packs
 
-Domain-specific patterns are defined in `configs/rg_patterns/*.yaml`:
+Domain-specific patterns in `configs/rg_patterns/*.yaml`:
 
 ```
 configs/rg_patterns/
@@ -189,104 +225,109 @@ configs/rg_patterns/
 
 Each YAML file defines:
 - **domain**: Domain identifier
-- **files**: Glob patterns for log files to scan (only matching files are indexed per domain)
-- **literals**: Fast literal string matches (e.g., "Segmentation fault")
-- **regex**: Regex patterns (e.g., `\b(error|fail)\b`)
+- **files**: Glob patterns for log files to scan
+- **literals**: Fast literal string matches
+- **regex**: Regex patterns
 
 ### Telemetry Field Configuration
 
-`configs/telemetry_report_fields.yaml` controls which TR-181 fields are extracted and plotted:
-
-- **profile_filter**: Which T2 profile to extract from (default: "Advanced_dynamic")
-- **field_groups**: Groups of fields with type, unit, and plot settings
-- **{N} expansion**: Multi-instance fields auto-expand (e.g., Radio.1, Radio.2)
+`configs/telemetry_report_fields.yaml` controls which TR-181 fields are extracted and plotted.
 
 ### Drain3 Configuration
 
 `drain3.ini` controls the log template mining behavior:
-- **sim_th**: Similarity threshold for template matching (default: 0.5)
+- **sim_th**: Similarity threshold (default: 0.5)
 - **depth**: Parse tree depth (default: 8)
-- **max_clusters**: Maximum number of templates (default: 1024)
-- **masking**: Custom masking tokens (THREADID, IP, NUM, MAC, DATETIME, etc.)
-
-Drain3 state is persisted per-domain (e.g., `drain3_platform.json`, `drain3_wireless.json`) to prevent cross-domain corruption.
+- **max_clusters**: Maximum templates (default: 1024)
 
 ## Project Structure
 
 ```
 parsemylog-ai/
-├── gui/                        # Dash/Flask web application
-│   ├── app_instance.py         # App factory, DB init, model loading
-│   ├── application.py          # Main Dash app with routing
-│   ├── file_manager.py         # File upload/processing pipeline
-│   ├── log_merger.py           # Tarball extraction & merging
-│   ├── user_db_mngr.py         # User/project database manager
-│   ├── callbacks/              # Dash callbacks (business logic)
-│   │   ├── ai_analysis.py      # Semantic search + log context callbacks
-│   │   ├── pattern.py          # Pattern analysis + file filter callbacks
-│   │   ├── log_viewer.py       # File upload, viewer, async indexing
-│   │   ├── telemetry.py        # Telemetry dashboard callbacks
-│   │   ├── embedding.py        # Embedding pipeline callbacks
-│   │   └── utils.py            # Shared callback utilities
-│   └── pages/                  # Page layouts
-│       ├── log_viewer.py       # Log viewer layout
-│       ├── pattern.py          # Pattern analysis layout
-│       ├── telemetry.py        # Telemetry page layout
-│       ├── ai_analysis.py      # AI analysis layout
-│       └── highlighter.py      # Syntax highlighting utilities
+├── frontend/                      # React SPA (Vite + TypeScript)
+│   ├── src/
+│   │   ├── api/                   # API client (Axios + endpoints)
+│   │   ├── hooks/                 # Auth & project context hooks
+│   │   ├── lib/                   # Utilities (highlighter, etc.)
+│   │   ├── components/layout/     # Sidebar, AppLayout
+│   │   └── pages/                 # Page components
+│   │       ├── LogViewerPage.tsx  # IDE-style log viewer
+│   │       ├── PatternPage.tsx    # Pattern analysis
+│   │       ├── TelemetryPage.tsx  # Telemetry dashboard
+│   │       ├── AIAnalysisPage.tsx # Semantic search
+│   │       ├── DashboardPage.tsx  # Project grid
+│   │       └── AdminPage.tsx      # User management
+│   ├── package.json
+│   └── vite.config.ts
 │
-├── logai/                      # Core log analysis library
-│   ├── rg_scanner.py           # ripgrep pre-filtering engine
-│   ├── pattern.py              # Drain3 template extraction + parameter API
-│   ├── indexer.py              # RAG indexer (rg → Drain3 → embed → Qdrant)
-│   ├── embedding.py            # Qdrant vector store + BGE embeddings
-│   ├── telemetry_parser.py     # Telemetry 2.0 report parser
-│   ├── info_extractor.py       # SW upgrade + device info extraction
-│   └── utils/constants.py      # Application constants
+├── api/                           # Flask REST API
+│   ├── app.py                     # App factory (JWT, CORS, DB)
+│   ├── auth.py                    # JWT auth utilities
+│   ├── indexer.py                 # Background indexer
+│   └── routes/                    # API endpoint blueprints
+│       ├── auth.py                # Login, register, refresh
+│       ├── projects.py            # CRUD projects
+│       ├── files.py               # Upload, content, search, download
+│       ├── patterns.py            # Pattern analysis
+│       ├── telemetry.py           # Telemetry parsing
+│       ├── ai_analysis.py         # Semantic search
+│       ├── embedding.py           # Pipeline status
+│       └── admin.py               # User management
 │
-├── configs/                    # Configuration files
-│   ├── rg_patterns/            # ripgrep domain pattern YAMLs
+├── logai/                         # Core log analysis library
+│   ├── rg_scanner.py              # ripgrep pre-filtering
+│   ├── pattern.py                 # Drain3 template extraction
+│   ├── indexer.py                 # RAG indexer pipeline
+│   ├── embedding.py               # Qdrant + BGE embeddings
+│   ├── telemetry_parser.py        # Telemetry 2.0 parser
+│   └── utils/constants.py         # App constants
+│
+├── configs/                       # Configuration files
+│   ├── rg_patterns/               # ripgrep domain YAMLs
 │   └── telemetry_report_fields.yaml
 │
-├── docker-compose.yml          # Docker services (app + qdrant + nginx)
-├── Dockerfile                  # App container (Python 3.11 + ripgrep)
-├── drain3.ini                  # Drain3 parser configuration
-├── requirements.txt            # Python dependencies
-├── logai_wsgi.py               # Production WSGI entry point (logging config)
-├── run_dev.py                  # Local development server runner
-├── .env                        # Environment variables (not committed)
-├── .env_example                # Environment variable template
-└── docs/
-    └── USER_GUIDE.md           # UI user guide
+├── nginx/
+│   └── default.conf               # Nginx SPA + API proxy config
+│
+├── docker-compose.yml             # Production services
+├── Dockerfile                     # Multi-stage build (Node + Python)
+├── drain3.ini                     # Drain3 parser config
+├── requirements.txt               # Python dependencies
+├── logai_api_wsgi.py              # Production WSGI entry point
+├── run_api.py                     # Dev API server
+├── .env_example                   # Environment variable template
+└── README.md
 ```
 
-## Environment Variables
+## Data Persistence
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `APP_PORT` | `40901` | Application port |
-| `NGINX_PORT` | `8091` | Nginx reverse proxy port |
-| `QDRANT_URL` | `http://localhost:6333` | Qdrant server URL (`http://qdrant:6333` in Docker) |
-| `LOG_LEVEL` | `INFO` | Python log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `TOKENIZERS_PARALLELISM` | `false` | Suppress HuggingFace tokenizer fork warnings in Gunicorn workers |
+Docker Compose uses named volumes for data persistence:
 
-A template is provided in `.env_example`:
+| Volume | Container Path | Description |
+|--------|---------------|-------------|
+| `user_uploads` | `/app/user_uploads` | Uploaded log files and analysis caches |
+| `bge_model` | `/app/bge-small-en-v1.5-local` | BGE embedding model (downloaded on first use) |
+| `qdrant_storage` | `/qdrant/storage` | Qdrant vector collections |
+| `logai_db` | `/app/data` | SQLite database (users, projects) |
+
+To back up data:
 
 ```bash
-cp .env_example .env
+# Back up the database
+docker cp logai-api:/app/data/logai_users.db ./backup_users.db
+
+# Back up uploaded files
+docker cp logai-api:/app/user_uploads ./backup_uploads
 ```
 
 ## Multi-User & Multi-Project Safety
 
-The indexing pipeline is designed for concurrent multi-user operation:
-
-- **Per-project locks** -- A `threading.Lock` per project ID prevents concurrent indexing of the same project
-- **Per-domain Drain3 state** -- Each domain gets its own `drain3_{domain}.json` file, so corruption in one doesn't affect others
-- **Atomic file writes** -- `status.json` and parquet caches use `os.replace()` for crash-safe writes
-- **Per-project Qdrant collections** -- Named `project_{project_id}` for complete isolation
-- **Resume indexing** -- If indexing is interrupted, missing domains are automatically re-indexed when the project is opened
-- **Empty domain markers** -- Domains with no matching files get an empty parquet marker to prevent infinite retry loops
-- **Project cleanup** -- Deleting a project removes Qdrant collections, Drain3 state files, parquets, and the project folder
+- **Per-project locks** -- A `threading.Lock` per project ID prevents concurrent indexing
+- **Per-domain Drain3 state** -- Each domain gets its own state file
+- **Atomic file writes** -- `os.replace()` for crash-safe writes
+- **Per-project Qdrant collections** -- Named `project_{id}` for complete isolation
+- **Resume indexing** -- Missing domains are automatically re-indexed
+- **JWT authentication** -- Stateless tokens with automatic refresh
 
 ## License
 

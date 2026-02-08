@@ -21,6 +21,8 @@ filelock==3.19.1
 Flask==3.1.1
 Flask-Bcrypt==1.0.1
 Flask-Caching==2.3.1
+Flask-Cors==6.0.2
+Flask-JWT-Extended==4.7.1
 Flask-Login==0.6.3
 Flask-SQLAlchemy==3.1.1
 fsspec==2025.9.0

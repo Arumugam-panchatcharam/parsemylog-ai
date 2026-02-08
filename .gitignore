@@ -7,6 +7,10 @@ all-MiniLM-L6-v2-local/
 bge-small-en-v1.5-local/
 *.db
 .DS_Store
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+@theme {
+  /* Google Material Design 3 — Light mode */
+  --color-background: #f8f9fa;
+  --color-foreground: #202124;
+  --color-muted: #f1f3f4;
+  --color-muted-foreground: #5f6368;
+  --color-border: #dadce0;
+  --color-input: #dadce0;
+  --color-ring: #1a73e8;
+  --color-primary: #1a73e8;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #e8f0fe;
+  --color-secondary-foreground: #1a73e8;
+  --color-destructive: #d93025;
+  --color-destructive-foreground: #ffffff;
+  --color-accent: #e8f0fe;
+  --color-accent-foreground: #1a73e8;
+  --color-card: #ffffff;
+  --color-card-foreground: #202124;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #202124;
+  --color-sidebar: #ffffff;
+  --color-sidebar-foreground: #202124;
+  --color-sidebar-border: #dadce0;
+  --color-sidebar-accent: #e8f0fe;
+  --color-sidebar-accent-foreground: #1a73e8;
+  --color-success: #188038;
+  --color-warning: #f9ab00;
+  --radius: 0.75rem;
+}
+
+.dark {
+  --color-background: #202124;
+  --color-foreground: #e8eaed;
+  --color-muted: #303134;
+  --color-muted-foreground: #9aa0a6;
+  --color-border: #3c4043;
+  --color-input: #3c4043;
+  --color-ring: #8ab4f8;
+  --color-primary: #8ab4f8;
+  --color-primary-foreground: #202124;
+  --color-secondary: #303134;
+  --color-secondary-foreground: #8ab4f8;
+  --color-destructive: #f28b82;
+  --color-destructive-foreground: #202124;
+  --color-accent: #394457;
+  --color-accent-foreground: #8ab4f8;
+  --color-card: #292a2d;
+  --color-card-foreground: #e8eaed;
+  --color-popover: #292a2d;
+  --color-popover-foreground: #e8eaed;
+  --color-sidebar: #292a2d;
+  --color-sidebar-foreground: #e8eaed;
+  --color-sidebar-border: #3c4043;
+  --color-sidebar-accent: #394457;
+  --color-sidebar-accent-foreground: #8ab4f8;
+  --color-success: #81c995;
+  --color-warning: #fdd663;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Roboto', 'Google Sans', system-ui, -apple-system, sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Google Sans', 'Roboto', system-ui, sans-serif;
+  }
+}
+
+/* Monospace log viewer */
+.log-viewer {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  line-height: 1.6;
+}
+
+/* Search highlight */
+.log-highlight {
+  background-color: rgba(250, 180, 0, 0.35);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* Custom scrollbar (subtle - for sidebars, file lists) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Log viewer scrollbar — always visible, prominent */
+.log-scroll {
+  overflow: auto;
+  scrollbar-width: auto;           /* Firefox: standard width */
+  scrollbar-color: #475569 #1e293b; /* Firefox: thumb track */
+}
+.log-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.log-scroll::-webkit-scrollbar-track {
+  background: #1e293b;
+  border-left: 1px solid #334155;
+}
+.log-scroll::-webkit-scrollbar-thumb {
+  background-color: #475569;
+  border-radius: 6px;
+  border: 2px solid #1e293b;
+}
+.log-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #64748b;
+}
+.log-scroll::-webkit-scrollbar-corner {
+  background: #1e293b;
+}
+
+/* Smooth transitions for interactive elements */
+.mat-card {
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.mat-card:hover {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.08);
+}

@@ -1,0 +1,334 @@
+"""
+Telemetry API Routes
+=====================
+
+Endpoints for telemetry parsing, device info, metrics, and chart data.
+"""
+
+import logging
+from pathlib import Path
+from typing import Optional
+
+from flask import Blueprint, jsonify
+from flask_jwt_extended import jwt_required
+
+from api.app import dbm
+from api.auth import get_user_id
+from logai.utils.constants import UPLOAD_DIRECTORY
+from logai.telemetry_parser import (
+    parse_telemetry_file,
+    extract_configured_fields,
+    load_report_field_config,
+)
+
+logger = logging.getLogger(__name__)
+
+telemetry_bp = Blueprint("telemetry", __name__)
+
+# Groups shown as status labels
+_STATUS_LABEL_GROUPS = {"WiFi Radio", "WiFi SSID"}
+_SKIP_CHART_GROUPS = {"WiFi Radio", "WiFi SSID", "Device Info"}
+
+
+def _verify_project(project_id, user_id):
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return None, (jsonify({"error": "Project not found"}), 404)
+    if project.user_id != user_id:
+        return None, (jsonify({"error": "Access denied"}), 403)
+    return project, None
+
+
+def _find_telemetry_file(project_dir: Path) -> Optional[Path]:
+    """Find telemetry2_0 file in project directory."""
+    if project_dir.exists():
+        for f in project_dir.iterdir():
+            if f.is_file() and f.name.lower().startswith("telemetry2_0"):
+                return f
+    return None
+
+
+def _auto_scale_unit(values, unit):
+    """Auto-scale values to readable units."""
+    if not values or not unit:
+        return values, unit
+    unit_lower = unit.strip().lower()
+    max_val = max(abs(v) for v in values) if values else 0
+
+    if unit_lower == "kb":
+        if max_val >= 1_000_000:
+            return [round(v / (1024 * 1024), 2) for v in values], "GB"
+        elif max_val >= 1024:
+            return [round(v / 1024, 2) for v in values], "MB"
+    elif unit_lower == "b":
+        if max_val >= 1_000_000_000:
+            return [round(v / (1024 * 1024 * 1024), 2) for v in values], "GB"
+        elif max_val >= 1_000_000:
+            return [round(v / (1024 * 1024), 2) for v in values], "MB"
+        elif max_val >= 1024:
+            return [round(v / 1024, 2) for v in values], "KB"
+    elif unit_lower in ("sec", "s"):
+        if max_val >= 86400:
+            return [round(v / 86400, 2) for v in values], "days"
+        elif max_val >= 3600:
+            return [round(v / 3600, 2) for v in values], "hours"
+        elif max_val >= 120:
+            return [round(v / 60, 2) for v in values], "min"
+    elif unit_lower == "kbps":
+        if max_val >= 1024:
+            return [round(v / 1024, 2) for v in values], "Mbps"
+
+    return values, unit
+
+
+# ---------- Parse ----------
+
+@telemetry_bp.route("/<project_id>/telemetry/parse", methods=["POST"])
+@jwt_required()
+def parse_telemetry(project_id):
+    """
+    Parse telemetry file and return all data.
+
+    Returns: { "device_info", "summary", "configured_fields", "status_labels", "charts" }
+    """
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    telemetry_file = _find_telemetry_file(project_dir)
+
+    if not telemetry_file:
+        return jsonify({"error": "No telemetry2_0 file found"}), 404
+
+    try:
+        reports, merged, summary = parse_telemetry_file(telemetry_file)
+
+        if not reports or summary.get("parsed", 0) == 0:
+            return jsonify({"error": "No parseable telemetry reports found"}), 404
+
+        # Extract configured fields
+        field_config = load_report_field_config()
+        configured_fields = extract_configured_fields(reports, field_config)
+
+        # Enrich device_info with version.txt
+        try:
+            from logai.info_extractor import find_and_parse_version_txt
+            version_info = find_and_parse_version_txt(project_dir)
+            if version_info:
+                dev = summary.setdefault("device_info", {})
+                if version_info.get("sdk_version"):
+                    dev["sdk_version"] = version_info["sdk_version"]
+                if version_info.get("sw_upgrade_detected"):
+                    dev["sw_upgrade"] = f"Yes ({version_info['sw_upgrade_detail']})"
+                else:
+                    dev["sw_upgrade"] = "No"
+        except ImportError:
+            pass
+
+        # Build response
+        device_info = summary.get("device_info", {})
+
+        # Status labels (Radio/SSID)
+        status_labels = _build_status_labels_data(configured_fields)
+
+        # Chart data (excluding status groups)
+        charts = _build_charts_data(configured_fields)
+
+        # Key metrics
+        key_metrics = _build_key_metrics_data(configured_fields, summary)
+
+        return jsonify({
+            "device_info": device_info,
+            "summary": {
+                "total": summary.get("total", 0),
+                "parsed": summary.get("parsed", 0),
+                "overall_time_range": summary.get("overall_time_range", {}),
+            },
+            "key_metrics": key_metrics,
+            "status_labels": status_labels,
+            "charts": charts,
+        }), 200
+
+    except Exception as e:
+        logger.exception(f"[Telemetry] Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def _build_status_labels_data(configured_fields):
+    """Build status label data for Radio/SSID."""
+    import re
+    labels = []
+    for group_label, field_list in configured_fields.items():
+        if group_label not in _STATUS_LABEL_GROUPS:
+            continue
+        is_radio = "Radio" in group_label
+        type_label = "Radio" if is_radio else "SSID"
+
+        instances = {}
+        for fd in field_list:
+            label = fd["label"]
+            ftype = fd.get("type", "")
+            latest = str(fd.get("latest", "N/A"))
+            m = re.search(r"(\d+)", label)
+            inst_id = m.group(1) if m else "0"
+            if inst_id not in instances:
+                instances[inst_id] = {"status": None, "enable": None, "meta": {}}
+            if ftype == "status":
+                instances[inst_id]["status"] = latest
+            elif ftype == "bool":
+                instances[inst_id]["enable"] = latest
+            else:
+                short = re.sub(r"(Radio|SSID)\s*\d+\s*", "", label).strip()
+                if short:
+                    instances[inst_id]["meta"][short] = latest
+
+        for inst_id in sorted(instances.keys()):
+            data = instances[inst_id]
+            status_val = data["status"] or data["enable"] or "N/A"
+            labels.append({
+                "type": type_label,
+                "instance": inst_id,
+                "status": status_val,
+                "meta": data["meta"],
+            })
+
+    return labels
+
+
+def _build_charts_data(configured_fields):
+    """Build chart data for plottable fields (JSON, not rendered)."""
+    charts = []
+    for group_label, field_list in configured_fields.items():
+        if group_label in _SKIP_CHART_GROUPS:
+            continue
+        plottable = [fd for fd in field_list if fd.get("plot") and len(fd["values"]) >= 2]
+        if not plottable:
+            continue
+
+        traces = []
+        for fd in plottable:
+            times = [v["time"] for v in fd["values"] if v["numeric"] is not None]
+            values = [v["numeric"] for v in fd["values"] if v["numeric"] is not None]
+            if len(times) < 2:
+                continue
+            raw_unit = fd.get("unit", "")
+            scaled_values, display_unit = _auto_scale_unit(values, raw_unit)
+            traces.append({
+                "label": fd["label"],
+                "unit": display_unit,
+                "times": times,
+                "values": scaled_values,
+            })
+
+        if traces:
+            charts.append({
+                "group": group_label,
+                "traces": traces,
+            })
+
+    return charts
+
+
+def _build_key_metrics_data(configured_fields, summary):
+    """Build key metrics as JSON data."""
+    def _numerics(field_list, label_prefix):
+        for fd in field_list:
+            if fd["label"].startswith(label_prefix):
+                nums = [v["numeric"] for v in fd["values"] if v["numeric"] is not None]
+                return nums, fd.get("unit", "")
+        return [], ""
+
+    def _text_values(field_list, label_prefix):
+        for fd in field_list:
+            if fd["label"].startswith(label_prefix):
+                return [v["raw"] for v in fd["values"]]
+        return []
+
+    metrics = []
+
+    # Reports
+    total = summary.get("total", 0)
+    parsed = summary.get("parsed", 0)
+    tr = summary.get("overall_time_range", {})
+    time_range = ""
+    if tr.get("first") and tr.get("last"):
+        time_range = f"{tr['first'][:16]} to {tr['last'][:16]}"
+    metrics.append({"label": "Reports", "value": f"{parsed}/{total}", "time_range": time_range, "icon": "chart-bar"})
+
+    # System Resources
+    sys_fields = configured_fields.get("System Resources", [])
+    if sys_fields:
+        mem_vals, mem_unit = _numerics(sys_fields, "Memory Free")
+        mem_total, _ = _numerics(sys_fields, "Memory Total")
+        if mem_vals:
+            trend = "stable"
+            if len(mem_vals) >= 2 and mem_vals[-1] < mem_vals[0] * 0.85:
+                trend = "decreasing"
+            elif len(mem_vals) >= 2 and mem_vals[-1] > mem_vals[0] * 1.15:
+                trend = "increasing"
+            metrics.append({
+                "label": "Memory Free",
+                "first": mem_vals[0], "last": mem_vals[-1],
+                "total": mem_total[0] if mem_total else None,
+                "unit": mem_unit, "trend": trend, "icon": "memory",
+            })
+
+        cpu_vals, cpu_unit = _numerics(sys_fields, "CPU Usage")
+        if cpu_vals:
+            metrics.append({
+                "label": "CPU Usage",
+                "avg": round(sum(cpu_vals) / len(cpu_vals), 1),
+                "peak": round(max(cpu_vals), 1),
+                "unit": cpu_unit, "icon": "microchip",
+            })
+
+        up_vals, up_unit = _numerics(sys_fields, "Uptime")
+        if up_vals:
+            resets = sum(1 for i in range(1, len(up_vals)) if up_vals[i] < up_vals[i - 1])
+            metrics.append({
+                "label": "Uptime",
+                "first": up_vals[0], "last": up_vals[-1],
+                "unit": up_unit, "resets": resets, "icon": "clock",
+            })
+
+    # DSL / WAN
+    dsl_fields = configured_fields.get("DSL / WAN", [])
+    if dsl_fields:
+        ds_vals, ds_unit = _numerics(dsl_fields, "DSL Downstream")
+        if ds_vals:
+            metrics.append({
+                "label": "DSL Downstream",
+                "min": min(ds_vals), "max": max(ds_vals),
+                "unit": ds_unit, "icon": "arrow-down",
+            })
+        us_vals, us_unit = _numerics(dsl_fields, "DSL Upstream")
+        if us_vals:
+            metrics.append({
+                "label": "DSL Upstream",
+                "min": min(us_vals), "max": max(us_vals),
+                "unit": us_unit, "icon": "arrow-up",
+            })
+
+    # Reboot reasons
+    dev_fields = configured_fields.get("Device Info", [])
+    if dev_fields:
+        reasons = _text_values(dev_fields, "Reboot Reason")
+        if reasons:
+            from collections import Counter
+            metrics.append({
+                "label": "Reboot Reasons",
+                "counts": dict(Counter(reasons)),
+                "icon": "redo",
+            })
+        conn_vals, _ = _numerics(dev_fields, "Connected Devices")
+        if conn_vals:
+            metrics.append({
+                "label": "Connected Devices",
+                "avg": round(sum(conn_vals) / len(conn_vals), 1),
+                "peak": int(max(conn_vals)),
+                "icon": "laptop",
+            })
+
+    return metrics
