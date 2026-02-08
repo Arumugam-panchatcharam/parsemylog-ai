@@ -19,11 +19,7 @@ Exports:
 import os
 import logging
 
-# Suppress HuggingFace tokenizers fork warning early, before any import
-# that triggers tokenizer initialization.  Safe because we don't rely on
-# tokenizer-internal parallelism inside Dash/Gunicorn workers.
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
+# TOKENIZERS_PARALLELISM is set via .env (Docker) or run_dev.py (local).
 # Suppress verbose drain3 state-saving logs ("Saving state of N clusters...")
 logging.getLogger("drain3.template_miner").setLevel(logging.WARNING)
 

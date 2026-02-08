@@ -3,7 +3,17 @@ services:
     build: .
     image: logai-app:1.0
     container_name: rdk-logai-app
-    command: ["gunicorn", "-w", "8", "-b", "0.0.0.0:40901", "--timeout", "360", "--preload", "logai_wsgi:server"]
+    command: [
+      "gunicorn",
+      "-w", "8",
+      "-b", "0.0.0.0:40901",
+      "--timeout", "360",
+      "--preload",
+      "--access-logfile", "-",
+      "--error-logfile", "-",
+      "--log-level", "info",
+      "logai_wsgi:server"
+    ]
     volumes:
       - .:/app
     ports:
