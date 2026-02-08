@@ -37,23 +37,37 @@ UPLOAD_STYLE = {
 }
 
 def create_log_viewer_layout():
+    """
+    Create the main log viewer page layout.
+
+    Includes:
+    - File upload area with drag-and-drop and progress bar.
+    - File explorer with view/download buttons.
+    - Search panel with quick-pattern buttons.
+    - Paginated log viewer with syntax highlighting.
+    - Search results viewer with double-click navigation.
+    """
     return html.Div(
         style={"height": "100vh", "overflowY": "auto", "padding": "15px"},
         children=[
-            # 1. Upload Section
-            dbc.Card([
-                dbc.CardBody([
-                    dcc.Upload(
-                        id='file-upload',
-                        children=html.Div([
-                            html.H5("Drag & Drop Files Here", className="mb-1"),
-                            html.P("or click to browse", className="text-muted small mb-0"),
-                        ], style=UPLOAD_STYLE),
-                        multiple=True
-                    ),
-                    html.Div(id="upload-feedback", className="mt-2 small text-success")
-                ])
-            ], id="upload-card", className="mb-3 shadow-sm"),
+            # 1. Upload Section (hidden via style after files are uploaded)
+            html.Div(
+                id="upload-card",
+                children=[
+                    dbc.Card([
+                        dbc.CardBody([
+                            dcc.Upload(
+                                id='file-upload',
+                                children=html.Div([
+                                    html.H5("Drag & Drop Files Here", className="mb-1"),
+                                    html.P("or click to browse", className="text-muted small mb-0"),
+                                ], style=UPLOAD_STYLE),
+                                multiple=True,
+                            ),
+                        ])
+                    ], className="mb-3 shadow-sm"),
+                ],
+            ),
 
             # 2. Main Controls Section
             dbc.Card([

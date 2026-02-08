@@ -1,0 +1,186 @@
+# =============================================================================
+# Telemetry 2.0 Report Field Configuration
+# =============================================================================
+#
+# Defines which fields to extract from T2 periodic telemetry reports, how to
+# group them for display, and which time-series to plot in the final report.
+#
+# Each field group has:
+#   - label:  Human-readable section heading
+#   - fields: List of field definitions with:
+#       - key:     TR-181 datamodel path (supports {N} for multi-instance)
+#       - label:   Display name
+#       - type:    numeric | status | text | bool
+#       - plot:    true to include in time-series chart (numeric only)
+#       - unit:    Optional unit string (KB, %, kbps, dBm, sec, etc.)
+#       - sample:  "first" | "last" | "all"  -- how to pick from semicolon-
+#                  separated samples per report.  Default: "first"
+#
+# The parser auto-expands {N} placeholders to match all numbered instances
+# found in the actual report data (e.g. Radio.1, Radio.2).
+# =============================================================================
+
+profile_filter: "Advanced_dynamic"   # which T2 profile to extract from
+
+field_groups:
+
+  # -------------------------------------------------------------------------
+  # WiFi Radio Status
+  # -------------------------------------------------------------------------
+  - label: "WiFi Radio"
+    fields:
+      - key: "Device.WiFi.Radio.{N}.Enable"
+        label: "Radio {N} Enabled"
+        type: bool
+
+      - key: "Device.WiFi.Radio.{N}.Status"
+        label: "Radio {N} Status"
+        type: status
+        sample: last
+
+      - key: "Device.WiFi.Radio.{N}.Channel"
+        label: "Radio {N} Channel"
+        type: numeric
+        sample: last
+        plot: true
+
+      - key: "Device.WiFi.Radio.{N}.OperatingFrequencyBand"
+        label: "Radio {N} Band"
+        type: text
+
+      - key: "Device.WiFi.Radio.{N}.OperatingChannelBandwidth"
+        label: "Radio {N} BW"
+        type: text
+
+      - key: "Device.WiFi.Radio.{N}.TransmitPower"
+        label: "Radio {N} Tx Power"
+        type: numeric
+        unit: "%"
+        plot: true
+
+      - key: "Device.WiFi.Radio.{N}.Stats.Noise"
+        label: "Radio {N} Noise"
+        type: numeric
+        unit: "dBm"
+        plot: true
+
+  # -------------------------------------------------------------------------
+  # WiFi SSID Status
+  # -------------------------------------------------------------------------
+  - label: "WiFi SSID"
+    fields:
+      - key: "Device.WiFi.SSID.{N}.SSID"
+        label: "SSID {N} Name"
+        type: text
+
+      - key: "Device.WiFi.SSID.{N}.Enable"
+        label: "SSID {N} Enabled"
+        type: bool
+
+      - key: "Device.WiFi.SSID.{N}.Status"
+        label: "SSID {N} Status"
+        type: status
+        sample: last
+
+      - key: "Device.WiFi.SSID.{N}.Stats.BytesReceived"
+        label: "SSID {N} Rx Bytes"
+        type: numeric
+        unit: "B"
+        plot: true
+
+      - key: "Device.WiFi.SSID.{N}.Stats.BytesSent"
+        label: "SSID {N} Tx Bytes"
+        type: numeric
+        unit: "B"
+        plot: true
+
+      - key: "Device.WiFi.SSID.{N}.Stats.ErrorsReceived"
+        label: "SSID {N} Rx Errs"
+        type: numeric
+        plot: true
+
+      - key: "Device.WiFi.SSID.{N}.Stats.ErrorsSent"
+        label: "SSID {N} Tx Errs"
+        type: numeric
+        plot: true
+
+  # -------------------------------------------------------------------------
+  # Memory & CPU
+  # -------------------------------------------------------------------------
+  - label: "System Resources"
+    fields:
+      - key: "Device.DeviceInfo.MemoryStatus.Free"
+        label: "Memory Free"
+        type: numeric
+        unit: "KB"
+        plot: true
+
+      - key: "Device.DeviceInfo.MemoryStatus.Total"
+        label: "Memory Total"
+        type: numeric
+        unit: "KB"
+
+      - key: "Device.DeviceInfo.ProcessStatus.CPUUsage"
+        label: "CPU Usage"
+        type: numeric
+        unit: "%"
+        sample: all
+        plot: true
+
+      - key: "Device.DeviceInfo.UpTime"
+        label: "Uptime"
+        type: numeric
+        unit: "sec"
+        plot: true
+
+      - key: "Device.DeviceInfo.ProcessStatus.ProcessNumberOfEntries"
+        label: "Process Count"
+        type: numeric
+        plot: true
+
+  # -------------------------------------------------------------------------
+  # DSL / WAN
+  # -------------------------------------------------------------------------
+  - label: "DSL / WAN"
+    fields:
+      - key: "Device.DSL.Channel.1.DownstreamCurrRate"
+        label: "DSL Downstream"
+        type: numeric
+        unit: "kbps"
+        plot: true
+
+      - key: "Device.DSL.Channel.1.UpstreamCurrRate"
+        label: "DSL Upstream"
+        type: numeric
+        unit: "kbps"
+        plot: true
+
+      - key: "Device.Ethernet.Link.1.Status"
+        label: "Ethernet Link"
+        type: status
+
+      - key: "Device.PPP.Interface.1.ConnectionStatus"
+        label: "PPP Status"
+        type: status
+
+  # -------------------------------------------------------------------------
+  # Device Identity & Misc
+  # -------------------------------------------------------------------------
+  - label: "Device Info"
+    fields:
+      - key: "Device.DeviceInfo.X_RDKCENTRAL-COM_LastRebootReason"
+        label: "Reboot Reason"
+        type: text
+
+      - key: "Device.Hosts.X_CISCO_COM_ConnectedDeviceNumber"
+        label: "Connected Devices"
+        type: numeric
+        plot: true
+
+      - key: "Device.Time.Status"
+        label: "NTP Status"
+        type: text
+
+      - key: "Device.WiFi.X_RDKCENTRAL-COM_BandSteering.Enable"
+        label: "Band Steering"
+        type: bool

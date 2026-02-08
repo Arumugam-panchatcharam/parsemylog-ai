@@ -1,9 +1,35 @@
+"""
+Log Viewer Callbacks Module
+============================
+
+Handles file upload, extraction, viewer pagination, search, and notes.
+
+After upload, the rg+Drain3 indexing pipeline runs asynchronously in a
+background thread so the UI returns immediately to the user.
+
+Multi-user / Multi-project Concurrency
+-----------------------------------------
+- **Per-project lock** (``_get_project_lock``): Only one indexer thread
+  may run per project at any time.  Different projects index in parallel
+  without contention.
+- **Active tracking** (``_active_indexing``): A thread-safe set tracks
+  which projects are currently indexing, used by the UI to display
+  real-time status badges.
+- **Shared model**: The background indexer reuses the globally pre-loaded
+  ``EMBEDDING_MODEL`` from ``gui.app_instance`` to avoid loading a
+  ~700MB SentenceTransformer per thread.
+- **Delete safety**: ``delete_project`` acquires the project lock before
+  removing files, preventing write-after-delete races.
+"""
+
 import os
 import re
 import base64
 import json
 import glob
 import shutil
+import threading
+import logging
 from pathlib import Path
 from datetime import datetime
 
@@ -18,11 +44,150 @@ from gui.pages.highlighter import TextHighlighter
 
 from logai.utils.constants import (
     MERGED_LOGS_DIR_NAME,
-    LINES_PER_PAGE, UPLOAD_DIRECTORY
+    LINES_PER_PAGE, UPLOAD_DIRECTORY, QDRANT_URL,
 )
 
 from gui.app_instance import dbm
-from logai.pattern_scheduler import PatternScheduler
+from logai.indexer import RagIndexer
+
+logger = logging.getLogger(__name__)
+
+
+def _collect_text_files(project_dir: Path) -> list:
+    """
+    Collect all text-type log files in the project directory.
+
+    Excludes non-text files (archives, Excel), ignored filenames,
+    directories, and parquet caches.
+
+    Args:
+        project_dir: Project directory to scan.
+
+    Returns:
+        List of Path objects for scannable text files.
+    """
+    from logai.utils.constants import NON_TEXT_EXTENSIONS, IGNORE_FILENAME_LIST
+
+    text_files = []
+    if not project_dir.exists():
+        logger.warning(f"[CollectFiles] Directory does not exist: {project_dir}")
+        return text_files
+
+    for f in project_dir.iterdir():
+        if not f.is_file():
+            continue
+        # Skip non-text extensions
+        if any(f.name.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
+            continue
+        # Skip parquet caches and status files
+        if f.suffix in ('.parquet', '.json', '.tmp'):
+            continue
+        # Skip ignored filenames
+        if any(ign.lower() in f.name.lower() for ign in IGNORE_FILENAME_LIST):
+            continue
+        # Skip empty files
+        if f.stat().st_size == 0:
+            continue
+        text_files.append(f)
+
+    logger.info(f"[CollectFiles] Found {len(text_files)} text files in {project_dir}")
+    return text_files
+
+
+# ---------------------------------------------------------------------------
+# Multi-user / multi-project indexing infrastructure
+# ---------------------------------------------------------------------------
+# Per-project lock: prevents concurrent indexer threads from corrupting
+# Drain3 state files and parquet caches within the same project.
+# Different projects can index in parallel without contention.
+_indexing_locks: dict = {}          # project_id -> threading.Lock
+_indexing_locks_guard = threading.Lock()  # protects the dict itself
+
+# Track which projects are actively indexing (for status UI)
+_active_indexing: set = set()       # project_ids currently indexing
+_active_guard = threading.Lock()    # protects the set
+
+
+def _get_project_lock(project_id: str) -> threading.Lock:
+    """Get or create the per-project indexing lock (thread-safe)."""
+    with _indexing_locks_guard:
+        if project_id not in _indexing_locks:
+            _indexing_locks[project_id] = threading.Lock()
+        return _indexing_locks[project_id]
+
+
+def is_indexing(project_id: str) -> bool:
+    """Check if an indexer thread is currently running for a project."""
+    with _active_guard:
+        return project_id in _active_indexing
+
+
+def _run_indexer_async(project_dir: Path, project_id: str, domains=None):
+    """
+    Run the rg+Drain3 domain-based indexer in a background thread.
+
+    Multi-user safe: uses a per-project lock so different projects can
+    index in parallel but the same project never has two concurrent
+    indexer threads.
+
+    Args:
+        project_dir: Project directory containing uploaded log files.
+        project_id: Project ID for Qdrant collection naming.
+        domains: Optional list of domain names to index. If None,
+                indexes all available domains.
+    """
+    import time as _time
+
+    lock = _get_project_lock(project_id)
+    if not lock.acquire(blocking=False):
+        logger.info(
+            f"[AsyncIndexer] Skipping -- indexer already running for project {project_id}"
+        )
+        return
+
+    # Mark as active
+    with _active_guard:
+        _active_indexing.add(project_id)
+
+    t0 = _time.perf_counter()
+    try:
+        label = f"domains={domains}" if domains else "all domains"
+        logger.info(f"[AsyncIndexer] Starting indexing ({label}) for project {project_id}")
+
+        # Collect all text log files in the project directory
+        file_paths = _collect_text_files(project_dir)
+        logger.info(f"[AsyncIndexer] Found {len(file_paths)} text files to scan")
+
+        if not file_paths:
+            logger.warning(f"[AsyncIndexer] No text files found in {project_dir}")
+            return  # finally block will still release lock + active flag
+
+        # Reuse the globally pre-loaded embedding model to avoid loading
+        # a new ~700MB model per indexer thread (multi-user safe).
+        import gui.app_instance as _app
+        shared_model = getattr(_app, "EMBEDDING_MODEL", None)
+
+        indexer = RagIndexer(
+            project_dir=project_dir,
+            qdrant_url=QDRANT_URL,
+            collection_name=f"project_{project_id}",
+            shared_model=shared_model,
+        )
+        counts = indexer.index_all_domains(
+            log_dir=project_dir,
+            file_paths=file_paths,
+            domains=domains,
+        )
+        elapsed = _time.perf_counter() - t0
+        logger.info(f"[AsyncIndexer] Completed in {elapsed:.1f}s: {counts}")
+    except Exception as e:
+        elapsed = _time.perf_counter() - t0
+        logger.error(f"[AsyncIndexer] Error after {elapsed:.1f}s: {e}")
+    finally:
+        # ALWAYS release lock and clear active flag, even on early return
+        lock.release()
+        with _active_guard:
+            _active_indexing.discard(project_id)
 
 CODE_STYLE = {
     'background': '#2d3748',
@@ -47,7 +212,7 @@ def no_files_uploaded():
     [Output('file-list', 'children'),
      Output('file-stats', 'children'),
      Output('notes-area', 'value'),
-     Output("upload-card", "style"),
+     Output('upload-card', 'style'),
      ],
     [Input('file-upload', 'contents'),
      Input("current-project-store", "data"),
@@ -57,7 +222,7 @@ def no_files_uploaded():
 def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
     if not project_data or not project_data.get("project_id"):
         return html.P([html.I(className="fas fa-info-circle me-2"), "No project selected"], 
-                      className="text-muted"), "0 files",dash.no_update, dash.no_update
+                      className="text-muted"), "0 files", dash.no_update, {}
     
     project_id = project_data["project_id"]
     project_name = project_data["project_name"]
@@ -69,47 +234,60 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
             if not isinstance(contents_list, list):
                 contents_list = [contents_list]
                 filenames_list = [filenames_list]
-            
+
+            logger.info(f"[Upload] Receiving {len(filenames_list)} file(s) for project {project_id}")
+
             results = []
             for content, filename in zip(contents_list, filenames_list):
                 content_type, content_string = content.split(',')
                 decoded = base64.b64decode(content_string)
 
-                #project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
                 project_dir.mkdir(parents=True, exist_ok=True)
                 file_path = project_dir / filename
 
                 with open(file_path, 'wb') as f:
                     f.write(decoded)
-            
-            # process the uploadd files
+                logger.info(f"[Upload] Saved {filename} ({len(decoded)} bytes)")
+
+            # Extract tarballs, merge logs, parse telemetry
+            logger.info(f"[Upload] Processing uploaded files in {project_dir}")
             file_manager = FileManager()
             file_manager.process_uploaded_files(project_dir, project_name)
 
+            # Save merged log files to DB
+            merged_count = 0
             for files in os.listdir(project_dir/MERGED_LOGS_DIR_NAME):
                 dbm.save_local_file(Path(project_dir/MERGED_LOGS_DIR_NAME/files), project_id)
-            
+                merged_count += 1
+            logger.info(f"[Upload] Saved {merged_count} merged log files to DB")
+
             archive = glob.glob(os.path.join(project_dir, '*.zip'))
             for file in archive:
-                print("archive file name", file)
+                logger.info(f"[Upload] Saving archive: {file}")
                 if os.path.exists(project_dir/file):
                     dbm.save_local_file(Path(project_dir/file), project_id)
-            
-            # clean up the project directory
+
+            # Clean up merged_logs directory (files are now in DB)
             shutil.rmtree(project_dir/MERGED_LOGS_DIR_NAME)
 
-            feedback = dbc.Alert([html.P(r, className="mb-0 small") for r in results], 
+            feedback = dbc.Alert([html.P(r, className="mb-0 small") for r in results],
                             color="success" if all("✅" in r for r in results) else "warning")
-    
+
+            # Launch rg+Drain3 domain-based indexing asynchronously.
+            logger.info(f"[Upload] Launching async rg+Drain3 indexer for project {project_id}")
+            t = threading.Thread(
+                target=_run_indexer_async,
+                args=(project_dir, project_id),
+                daemon=True,
+            )
+            t.start()
+
     try:
-    # remove the uploaded files after processing
+        # Retrieve file list from DB after upload processing
         files = dbm.get_project_files(project_id)
     except Exception as e:
         print(f"Viewer Temporary Error retriving data {e}")
-        return no_files_uploaded(), "0 files", dash.no_update, dash.no_update
-    
-    scheduler = PatternScheduler(max_workers=2)
-    scheduler.schedule_files(project_dir=project_dir, files=files)
+        return no_files_uploaded(), "0 files", dash.no_update, {}
 
     # Load notes if exist
     project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
@@ -122,11 +300,14 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
     else:
         note_content = ""
 
+    # Determine if upload should be disabled (files already exist)
+    has_uploaded_files = bool(files)
+
     if not files:
-        return no_files_uploaded(), "0 files", note_content, dash.no_update
+        return no_files_uploaded(), "0 files", note_content, {}
 
     file_items = []
-    for filename, _, original_name, file_size, _ in files:
+    for filename, _, _, file_size, _ in files:
         if file_size == 0:
             continue
 
@@ -134,7 +315,7 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
         download_url = f"/download/{project_id}/{filename}"
 
         non_text_extensions = ['.xls', '.xlsx', '.tgz', '.zip']
-        is_viewable = any(original_name.lower().endswith(ext) for ext in non_text_extensions) == False
+        is_viewable = any(filename.lower().endswith(ext) for ext in non_text_extensions) == False
 
         item = dbc.ListGroupItem([
             html.Div([
@@ -142,7 +323,7 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
                     dbc.Col([
                         html.Div([
                             html.I(className="fas fa-file-alt me-2 text-primary" if is_viewable else "fas fa-file me-2 text-secondary"),
-                            html.Strong(original_name[:20] + "..." if len(original_name) > 20 else original_name)
+                            html.Strong(filename[:20] + "..." if len(filename) > 20 else filename)
                         ], className="mb-1"),
                         html.Small([
                             f"{size_mb} MB"
@@ -164,7 +345,10 @@ def handle_upload(contents_list, project_data, refresh_clicks, filenames_list):
         ], className="border-0")
         file_items.append(item)
 
-    return dbc.ListGroup(file_items, flush=True), f"{len(files)} file(s)", note_content, {"display": "none"}
+    # Hide upload area if files already exist
+    upload_style = {"display": "none"} if has_uploaded_files else {}
+
+    return dbc.ListGroup(file_items, flush=True), f"{len(files)} file(s)", note_content, upload_style
 
 
 def get_page_content(file_data, page_number):
@@ -217,7 +401,7 @@ def view_file(n_clicks_list, project_data):
     triggered = ctx.triggered[0]
     if triggered["value"]:
         file_name = json.loads(triggered["prop_id"].split(".n_clicks")[0])["file_name"]
-        filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
+        filename, filepath, _, file_size, _ = dbm.get_project_file_info(project_id, file_name)
         if not filename or not filepath or not os.path.exists(filepath):
             return dbc.Alert("File not found", color="danger"), "", None, 1, dash.no_update
         
@@ -229,7 +413,7 @@ def view_file(n_clicks_list, project_data):
         total_pages = (total_lines // LINES_PER_PAGE) + (1 if total_lines % LINES_PER_PAGE > 0 else 0)
         
         file_data = {
-            'filename': original_name,
+            'filename': filename,
             'file_size_mb': round(file_size / (1024 * 1024), 2) if file_size else 0,
             'lines': lines,
             'total_lines': total_lines,
@@ -321,7 +505,7 @@ def update_file_content(pagination_data, file_name, project_data):
     #print("file id",file_name)
     project_id = project_data["project_id"]
     try:
-        filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
+        filename, filepath, _, file_size, _ = dbm.get_project_file_info(project_id, file_name)
     except Exception as e:
         print(f"Viewer file content Temporary Error retriving data {e}")
         return dash.no_update, dash.no_update, dash.no_update
@@ -337,7 +521,7 @@ def update_file_content(pagination_data, file_name, project_data):
     total_pages = (total_lines // LINES_PER_PAGE) + (1 if total_lines % LINES_PER_PAGE > 0 else 0)
     
     file_data = {
-        'filename': original_name,
+        'filename': filename,
         'file_size_mb': round(file_size / (1024 * 1024), 2) if file_size else 0,
         'lines': lines,
         'total_lines': total_lines,
@@ -427,7 +611,7 @@ def handle_search(search_clicks, error_clicks, warn_clicks, ip_clicks, time_clic
     project_id = project_data["project_id"]
     
     try:
-        filename, filepath, original_name, file_size, _ = dbm.get_project_file_info(project_id, file_name)
+        filename, filepath, _, file_size, _ = dbm.get_project_file_info(project_id, file_name)
     except Exception as e:
         print(f"Viewer search Temporary Error retriving data {e}")
         return dash.no_update, dash.no_update
@@ -498,6 +682,7 @@ clientside_callback(
     Input("scroll-target", "data"),
     prevent_initial_call=True
 )
+
 
 # HIGHLIGHTER
 def highlight_components(lines, page_number=1, start_line=1):

@@ -17,5 +17,8 @@ IGNORE_FILENAME_LIST = ['telemetry2', 'snapshot', 'SelfHeal']
 # Log viewer constants
 LINES_PER_PAGE = 1000
 
-# Sentence Transformer
-SENTENCE_TRANSFORMER_MODE_NAME = "all-MiniLM-L6-v2-local"
+# Sentence Transformer (BGE model for semantic search)
+SENTENCE_TRANSFORMER_MODE_NAME = "bge-small-en-v1.5-local"
+
+# Qdrant configuration
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")

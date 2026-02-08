@@ -2,7 +2,9 @@
 user_uploads/
 data/
 Locals/
+qdrant_storage/
 all-MiniLM-L6-v2-local/
+bge-small-en-v1.5-local/
 *.db
 .DS_Store
 # Byte-compiled / optimized / DLL files

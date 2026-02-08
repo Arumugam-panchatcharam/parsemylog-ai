@@ -1,0 +1,48 @@
+# Cellular domain grep patterns for ripgrep pre-filtering
+# These patterns extract error-class and state-change lines from cellular logs
+# before feeding them to Drain3 for template extraction.
+
+domain: cellular
+
+# Log files to scan (glob patterns)
+files:
+  - "CellularManagerlog.txt*"
+  - "CcspCellularSsp*.log*"
+  - "lte*.log*"
+  - "modem*.log*"
+
+# Number of context lines before/after each match
+context_lines: 3
+
+# Case-insensitive matching
+case_insensitive: true
+
+# Literal string patterns (fast path, uses rg -F)
+literals:
+  - "FATAL"
+  - "SEGFAULT"
+  - "core dump"
+  - "CCSP_ERR"
+  - "NO SERVICE"
+  - "SIM ERROR"
+
+# Regex patterns (uses rg -e)
+regex:
+  # Generic error/failure indicators
+  - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
+  # Signal issues
+  - "\\b(no.?signal|signal.?(lost|weak|low)|RSSI|RSRP|SINR)\\s*[=:]\\s*-\\d{2,3}\\b"
+  # Registration issues
+  - "\\b(deregister|unregister|reg.?fail|attach.?fail)\\b"
+  # APN/connection issues
+  - "\\b(APN|apn)\\s+(fail|reject|error|timeout)\\b"
+  # Modem state changes
+  - "\\b(modem)\\s+(reset|restart|crash|down|stuck|hang|unresponsive)\\b"
+  # SIM issues
+  - "\\b(SIM|sim)\\s+(error|fail|not.?detect|absent|locked|invalid)\\b"
+  # Failover events
+  - "\\b(failover|fallback|switchover)\\b"
+  # Data connection
+  - "\\b(data|pdp|pdn)\\s+(disconnect|fail|drop|lost)\\b"
+  # Firmware issues
+  - "\\b(firmware|modem.?fw)\\s+(fail|error|corrupt|mismatch)\\b"

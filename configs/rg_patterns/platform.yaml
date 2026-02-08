@@ -1,0 +1,76 @@
+# Platform / OS domain grep patterns for ripgrep pre-filtering
+# Covers core system-level logs: kernel, boot, memory, selfheal,
+# firmware updates, process crashes, NTP, DHCP, Ethernet agent.
+
+domain: platform
+
+# Log files to scan (glob patterns)
+files:
+  - "Consolelog.txt*"
+  - "ArmConsolelog.txt*"
+  - "SelfHeal*.txt*"
+  - "SelfHeal*.log*"
+  - "LM*.txt*"
+  - "core_log.txt*"
+  - "kernel*"
+  - "messages*"
+  - "syslog.txt*"
+  - "systemdLog.txt*"
+  - "systeminfolog*"
+  - "system_eventlog*"
+  - "volatile_eventlog*"
+  - "ntpLog.log*"
+  - "dibbler-client.log*"
+  - "dibbler-server.log*"
+  - "ETHAGENTLog.txt*"
+  - "telemetry*.txt*"
+  - "telemetry*.log*"
+  - "telemetry_marker.txt*"
+
+# Number of context lines before/after each match
+context_lines: 3
+
+# Case-insensitive matching
+case_insensitive: true
+
+# Literal string patterns (fast path, uses rg -F)
+literals:
+  - "Segmentation fault"
+  - "Out of memory"
+  - "kernel panic"
+  - "FATAL"
+  - "SEGFAULT"
+  - "core dump"
+  - "Bus error"
+  - "watchdog"
+  - "reboot"
+  - "factory reset"
+  - "hung_task"
+  - "soft lockup"
+
+# Regex patterns (uses rg -e)
+regex:
+  # Generic error/failure indicators
+  - "\\b(err|error|fail(ed|ure)?|crash|abort|panic|timeout)\\b"
+  # Memory issues
+  - "\\b(oom|OOM|out.of.memory|memory.?(leak|exhausted|low))\\b"
+  # Kernel issues
+  - "\\b(kernel|hung_task|soft.?lockup|oops|BUG)\\b"
+  # Reboot/restart events
+  - "\\b(reboot|restart|shutdown|reset|power.?cycle)\\b"
+  # Process crash/exit
+  - "\\b(process|daemon|service)\\s+(crash|exit|kill|died|terminated)\\b"
+  # SelfHeal actions
+  - "\\bselfheal\\b"
+  # Boot failures
+  - "\\bboot\\s+(fail|error|timeout|stuck)\\b"
+  # CPU/load issues
+  - "\\b(cpu|load)\\s+(high|spike|100|stuck)\\b"
+  # Firmware/XCONF update issues
+  - "\\b(firmware|upgrade|update|xconf)\\s+(fail|error|abort|corrupt)\\b"
+  # SSP restart
+  - "\\bSSP\\s+(restart|crash|exit)\\b"
+  # NTP sync issues
+  - "\\b(ntp|time.?sync)\\s*(fail|error|timeout|unsync)\\b"
+  # Ethernet agent issues
+  - "\\b(eth|ethernet|link)\\s+(down|fail|flap|lost)\\b"

@@ -1,3 +1,15 @@
+"""
+Embedding Callbacks Module
+===========================
+
+Handles the embedding/indexing pipeline UI callbacks:
+- Template table display from parsed parquet files.
+- Pipeline status monitoring (queued -> parsed -> indexed).
+- Template download as Excel.
+
+The embedding pipeline uses the rg+Drain3 indexer with Qdrant vector storage.
+"""
+
 import os
 import re
 import pandas as pd
@@ -7,9 +19,14 @@ import dash
 from gui.app_instance import dbm
 from logai.pattern import Pattern
 import time
-from logai.utils.constants import UPLOAD_DIRECTORY
+from logai.utils.constants import UPLOAD_DIRECTORY, QDRANT_URL
 from logai.utils.constants import NON_TEXT_EXTENSIONS, IGNORE_FILENAME_LIST
-from logai.embedding import VectorEmbedding, read_status, update_file_status
+from logai.embedding import (
+    QdrantEmbeddingStore,
+    EmbeddingConfig,
+    read_status,
+    update_file_status,
+)
 
 @callback(
     Output("embed-templates-table", "data"),
@@ -24,7 +41,7 @@ def update_templates_table(selected_file, project_data):
         project_id = project_data["project_id"]
         user_id = project_data.get("user_id")
 
-        filename, file_path, original_name, file_size, _ = dbm.get_project_file_info(project_id, selected_file)
+        filename, file_path, _, file_size, _ = dbm.get_project_file_info(project_id, selected_file)
     except Exception as e:
         print(f"Embedding Temporary Error retriving data {e}")
         return []
@@ -123,32 +140,58 @@ def update_status(_interval, project_data):
     if not files:
         return dash.no_update,dash.no_update, dash.no_update, False
     
-    for filename, _, original_name, file_size, _ in files:
+    for filename, _, _, file_size, _ in files:
         if file_size == 0:
             continue
 
-        status = read_status(project_dir).get(original_name, {})
+        status = read_status(project_dir).get(filename, {})
         if status.get("state") == "queued":
                 # check if parquet file exists
                 parquet_path = project_dir / f"{filename}.parquet"
                 if parquet_path.exists():
-                    update_file_status(project_dir, original_name, "parsed", {"queued_at": time.time()})
+                    update_file_status(project_dir, filename, "parsed", {"queued_at": time.time()})
 
     print("Checked for queued files to parse")
-    for filename, _, original_name, file_size, _ in files:
+    for filename, _, _, file_size, _ in files:
         if file_size == 0:
             continue
 
-        status = read_status(project_dir).get(original_name, {})
+        status = read_status(project_dir).get(filename, {})
         if status.get("state") == "parsed":
-                # check if parquet file exists
+                # Check if parquet file exists, then upsert to Qdrant
                 parquet_path = project_dir / f"{filename}.parquet"
                 if parquet_path.exists():
-                    #faiss_scheduler.enqueue_file(project_dir, parquet_path)
-                    embedding  = VectorEmbedding()
-                    embedding.add_templates(project_dir, parquet_path, original_name)
-                    update_file_status(project_dir, original_name, "indexed", {"queued_at": time.time()})
-                    break  # Enqueue one file at a time
+                    try:
+                        # Read parquet, extract unique templates, upsert to Qdrant
+                        df = pd.read_parquet(parquet_path)
+                        if 'template' in df.columns:
+                            template_counts = df['template'].value_counts().reset_index()
+                            template_counts.columns = ['template', 'count']
+
+                            collection_name = f"project_{project_id}"
+                            embed_store = QdrantEmbeddingStore(
+                                EmbeddingConfig(
+                                    qdrant_url=QDRANT_URL,
+                                    collection=collection_name,
+                                )
+                            )
+                            templates = []
+                            for _, row in template_counts.iterrows():
+                                templates.append({
+                                    "template": str(row["template"]),
+                                    "count": int(row["count"]),
+                                    "filename": filename,
+                                    "domain": "general",
+                                    "parquet_path": str(parquet_path),
+                                    "source": "drain3",
+                                })
+                            embed_store.upsert_templates(templates)
+
+                        update_file_status(project_dir, filename, "indexed", {"queued_at": time.time()})
+                    except Exception as e:
+                        print(f"Error upserting templates: {e}")
+                        update_file_status(project_dir, filename, "error", {"message": str(e)})
+                    break  # Process one file at a time
     
     print("Checked for parsed files to index")
     queued_files, parsed_files, done_files, all_done = get_pipeline_status(project_dir)
@@ -157,12 +200,12 @@ def update_status(_interval, project_data):
 def export_df_to_csv(files):
     df_list = []
     
-    for filename, file_path, original_name, _, _ in files:
+    for filename, file_path, _, _, _ in files:
         if not os.path.exists(file_path) or not os.path.getsize(file_path):
             continue
         if any(filename.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
             continue
-        if any(ign.lower() in original_name.lower() for ign in IGNORE_FILENAME_LIST):
+        if any(ign.lower() in filename.lower() for ign in IGNORE_FILENAME_LIST):
             continue
 
         parquet_path = Path(file_path + ".parquet")
@@ -184,7 +227,7 @@ def export_df_to_csv(files):
         result_df = df['template'].value_counts().reset_index()
         result_df.columns = ['template', 'count']
 
-        result_df["filename"] = original_name
+        result_df["filename"] = filename
 
         # Reorder columns
         result_df = result_df[["filename", "count", "template"]]

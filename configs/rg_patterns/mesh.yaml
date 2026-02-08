@@ -1,0 +1,43 @@
+# Mesh domain grep patterns for ripgrep pre-filtering
+# These patterns extract error-class and state-change lines from mesh logs
+# before feeding them to Drain3 for template extraction.
+
+domain: mesh
+
+# Log files to scan (glob patterns)
+files:
+  - "wifi_vendor_apps.log*"
+  - "airties.log*"
+
+# Number of context lines before/after each match
+context_lines: 3
+
+# Case-insensitive matching
+case_insensitive: true
+
+# Literal string patterns (fast path, uses rg -F)
+literals:
+  - "FATAL"
+  - "SEGFAULT"
+  - "core dump"
+
+# Regex patterns (uses rg -e)
+regex:
+  # Generic error/failure indicators
+  - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
+  # Backhaul issues
+  - "\\b(backhaul)\\s+(down|fail|lost|disconnect|degrade)\\b"
+  # Topology changes
+  - "\\b(topology)\\s+(change|lost|fail|unstable)\\b"
+  # Steering events
+  - "\\b(steer|steering)\\s+(fail|reject|timeout|abort)\\b"
+  # Agent/controller issues
+  - "\\b(agent|controller)\\s+(disconnect|fail|lost|crash|timeout)\\b"
+  # 1905 protocol issues
+  - "\\b(1905|ieee1905)\\s+(fail|error|timeout)\\b"
+  # Satellite/extender issues
+  - "\\b(satellite|extender|pod)\\s+(disconnect|lost|offline|fail)\\b"
+  # Channel optimization
+  - "\\b(channel|optimization)\\s+(fail|error|conflict)\\b"
+  # EasyMesh events
+  - "\\b(easymesh|R[12])\\s+(fail|error|timeout)\\b"

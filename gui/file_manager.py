@@ -1,3 +1,22 @@
+"""
+File Manager Module
+====================
+
+Handles file upload, extraction, merging, and archive creation for
+uploaded RDK log tarballs.
+
+Pipeline:
+    Upload (base64 tgz) -> save to disk -> LogMerger (extract + merge)
+    -> Telemetry parse (if present) -> ZIP archive creation
+
+The FileManager is the main entry point called from the log viewer
+upload callback.
+
+Example:
+    >>> fm = FileManager()
+    >>> fm.process_uploaded_files(Path("uploads/user1/proj1"), "my_project")
+"""
+
 import os
 import base64
 import shutil
@@ -6,38 +25,60 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from dash import html
 from urllib.parse import quote as urlquote
 
 from logai.utils.constants import (
-    BASE_DIR, 
+    BASE_DIR,
     MERGED_LOGS_DIR_NAME,
     MERGED_LOGS_ARCHIVE_NAME,
-    TELEMETRY_PROFILES_DIR_NAME
+    TELEMETRY_PROFILES_DIR_NAME,
 )
-from log_merger import LogMerger
+from gui.log_merger import LogMerger
 from typing import List
 
-from  logai.telemetry_parser import Telemetry2Parser
+from logai.telemetry_parser import parse_telemetry_file
+
 
 @dataclass
 class ConfigEntry:
+    """A single parser configuration entry mapping files to config."""
     name: str
     supported_config: str
     supported_files: List[str]
 
+
 @dataclass
 class ConfigIndex:
+    """
+    Index of parser configurations loaded from config_list.json.
+
+    Maps log filenames to their corresponding parser config files.
+    """
     supported_files: List[ConfigEntry]
 
     @staticmethod
     def load_from_file(index_path: str) -> 'ConfigIndex':
+        """Load config index from a JSON file."""
         with open(index_path, 'r') as f:
             raw_data = json.load(f)
         entries = [ConfigEntry(**entry) for entry in raw_data.get("supported_files", [])]
         return ConfigIndex(supported_files=entries)
 
     def find_config_for_file(self, filename: str) -> str:
+        """
+        Find the parser config for a given filename.
+
+        Args:
+            filename: Name of the log file.
+
+        Returns:
+            Name of the parser config file.
+
+        Raises:
+            ValueError: If no config matches the filename.
+        """
         filename_base = os.path.basename(filename)
 
         for entry in self.supported_files:
@@ -46,81 +87,147 @@ class ConfigIndex:
                     return entry.supported_config
         raise ValueError(f"No config found for file: {filename}")
 
+
 class FileManager:
-    """Processor for handling uploaded files in the application."""
+    """
+    Processor for handling uploaded files in the application.
+
+    Manages the lifecycle of uploaded log tarballs:
+    1. Save uploaded base64 content to disk.
+    2. Extract and merge logs using LogMerger.
+    3. Parse telemetry reports if present.
+    4. Create downloadable ZIP archive.
+
+    Attributes:
+        directory: Current project upload directory.
+        merged_logs_path: Path to merged logs subdirectory.
+    """
+
     def __init__(self):
+        """Initialize FileManager with no active directory."""
         self.directory = None
         self.merged_logs_path = None
 
-        #os.makedirs(self.directory, exist_ok=True)
-        #os.makedirs(self.merged_logs_path, exist_ok=True)
-
-    # === Save uploaded file to local folder ===
     def save_file(self, name, content):
+        """
+        Save a base64-encoded uploaded file to the project directory.
+
+        Args:
+            name: Filename to save as.
+            content: Base64-encoded file content from Dash upload.
+        """
         content_type, content_string = content.split(',')
         decoded = base64.b64decode(content_string)
         file_path = os.path.join(self.directory, name)
         with open(file_path, "wb") as f:
             f.write(decoded)
-    """
-    def save_file(self, name, content):
-        data = content.encode("utf8").split(b";base64,")[1]
-        with open(os.path.join(self.directory, name), "wb") as fp:
-            fp.write(base64.decodebytes(data))
-    """ 
+
     def uploaded_files(self):
+        """
+        List all files in the current upload directory.
+
+        Returns:
+            List of filenames.
+        """
         files = []
         for filename in os.listdir(self.directory):
             path = os.path.join(self.directory, filename)
             if os.path.isfile(path):
                 files.append(filename)
         return files
-    
+
     def create_merged_logs_archive(self, project_name, project_path, merged_logs_path, telemetry_path):
+        """
+        Create a ZIP archive of the merged logs directory.
+
+        Includes telemetry report Excel file if available.
+
+        Args:
+            project_name: Project name for the archive filename.
+            project_path: Base project directory.
+            merged_logs_path: Path to the merged logs directory.
+            telemetry_path: Path to the telemetry profiles directory.
+        """
         if not os.listdir(merged_logs_path):
             return
         if os.path.exists(telemetry_path) and len(os.listdir(telemetry_path)) > 0:
-            # Copy the first telemetry profile to the merged logs directory
             telemetry_report_path = os.path.join(telemetry_path, "Telemetry2_report.xlsx")
             copyto_path = os.path.join(merged_logs_path, "Telemetry2_report.xlsx")
-            if os.path.exists(os.path.join(telemetry_path, "Telemetry2_report.xlsx")):
+            if os.path.exists(telemetry_report_path):
                 shutil.copyfile(telemetry_report_path, copyto_path)
-            else:
-                print("Telemetry2_report.xlsx not found in TELEMETRY_PROFILES.")
 
         archive = MERGED_LOGS_ARCHIVE_NAME + "-" + str(project_name)
-        # Create a zip file of the merged logs directory
         shutil.make_archive(os.path.join(project_path, archive), 'zip', os.path.join(merged_logs_path))
 
     def file_download_link(self, filename):
+        """
+        Generate an HTML download link for a file.
+
+        Args:
+            filename: Name of the file to link to.
+
+        Returns:
+            Dash html.A component with download URL.
+        """
         location = "/download/{}".format(urlquote(filename))
         return html.A(filename, href=location)
     
     def process_uploaded_files(self, project_path, project_name):
-        """Process uploaded files by extracting and merging logs."""
+        """
+        Process uploaded files by extracting and merging logs.
+
+        Steps:
+        1. Extract tarballs and merge logs chronologically.
+        2. Parse telemetry2_0.txt (if present) using the new YAML-driven parser.
+        3. Create a zip archive of merged logs.
+
+        Args:
+            project_path: Path to the project directory.
+            project_name: Human-readable project name for archive naming.
+
+        Raises:
+            FileNotFoundError: If project directory doesn't exist.
+        """
         self.directory = project_path
         if not os.path.exists(self.directory):
             raise FileNotFoundError(f"Upload directory '{self.directory}' does not exist.")
-        
+
         self.merged_logs_path = os.path.join(self.directory, MERGED_LOGS_DIR_NAME)
         self.telemetry_path = os.path.join(self.directory, TELEMETRY_PROFILES_DIR_NAME)
         os.makedirs(self.merged_logs_path, exist_ok=True)
 
         print(f"Processing uploaded files in {self.directory} ...")
-        # Merge log files
+
+        # Step 1: Merge log files (extract tarballs, merge chronologically)
         merger = LogMerger(self.directory, self.merged_logs_path)
         merger.merge_logs()
 
-        # Extract Telemetry Profiles
-        temp_telemetry_parser = Telemetry2Parser()
-        temp_telemetry_parser.extract_telemetry_reports(project_path=self.directory)
-        temp_telemetry_parser.start_processing()
+        # Step 2: Parse telemetry if present (new YAML-driven parser)
+        # The telemetry is now parsed on-demand in the Telemetry tab callback,
+        # but we still look for the file to include in the archive.
+        telemetry_file = None
+        merged_dir = Path(self.merged_logs_path)
+        for f in merged_dir.iterdir():
+            if f.is_file() and f.name.startswith("telemetry2_0"):
+                telemetry_file = f
+                break
 
-        self.create_merged_logs_archive(project_name=project_name,
-                                        project_path=self.directory, 
-                                        merged_logs_path=self.merged_logs_path, 
-                                        telemetry_path=self.telemetry_path)
-        
+        if telemetry_file:
+            try:
+                os.makedirs(self.telemetry_path, exist_ok=True)
+                reports, merged, summary = parse_telemetry_file(telemetry_file)
+                print(f"Telemetry: {summary.get('parsed', 0)}/{summary.get('total', 0)} reports parsed")
+            except Exception as e:
+                print(f"Telemetry parsing error (non-fatal): {e}")
+
+        # Step 3: Create archive of merged logs
+        self.create_merged_logs_archive(
+            project_name=project_name,
+            project_path=self.directory,
+            merged_logs_path=self.merged_logs_path,
+            telemetry_path=self.telemetry_path,
+        )
+
         print("Process uploaded files done")
 
     def list_uploaded_files(self):
@@ -131,7 +238,18 @@ class FileManager:
             return []
         
     def load_config(self, filename):
+        """
+        Load a parser configuration for the given filename.
 
+        Looks up the filename in configs/config_list.json to find the
+        matching parser config, then loads and returns its JSON content.
+
+        Args:
+            filename: Name of the log file to find config for.
+
+        Returns:
+            Parsed JSON config dict, or None if not found.
+        """
         root_dir = os.path.dirname(os.path.abspath(__file__))
         config_list_path = os.path.join(root_dir, "../configs", "config_list.json")
 

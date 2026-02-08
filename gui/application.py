@@ -11,10 +11,9 @@ from gui.pages import log_viewer as log_viewer_page
 from gui.pages import pattern as pattern_page
 from gui.pages import telemetry as telemetry_page
 from gui.pages import ai_analysis as ai_analysis_page
-from gui.pages import embedding as embedding_page
 from gui.pages import log_parser_config as log_parser_config_page
 from gui.pages import log_parser as rule_pattern_page
-from gui.callbacks import pattern, telemetry, utils, ai_analysis, log_viewer, embedding, log_parser_config, log_parser
+from gui.callbacks import pattern, telemetry, utils, ai_analysis, log_viewer, log_parser_config, log_parser
 from gui.file_manager import FileManager
 from gui.user_db_mngr import db as dbm
 from gui.app_instance import create_app, BASE_DIR
@@ -28,7 +27,7 @@ from gui.app_instance import dbm
 def download_file(project_id, filename):
     #print("Download request for:", project_id, filename)
     try:
-        filename, file_path, original_name, _, _ = dbm.get_project_file_info(project_id, filename)
+        filename, file_path, _, _, _ = dbm.get_project_file_info(project_id, filename)
 
         if not filename:
             return "File not found", 404
@@ -39,13 +38,13 @@ def download_file(project_id, filename):
         # update path for static folder
         new_path = os.path.join(BASE_DIR, file_path)
 
-        mime_type, _ = mimetypes.guess_type(original_name)
+        mime_type, _ = mimetypes.guess_type(filename)
         if not mime_type:
             mime_type = 'application/octet-stream'
 
         return send_file(new_path, 
                         as_attachment=True, 
-                        download_name=original_name,
+                        download_name=filename,
                         mimetype=mime_type)
 
     except Exception as e:
@@ -73,11 +72,6 @@ app.layout = dbc.Container([
 
     # For Pattern
     dcc.Store(id="pattern-result-store", storage_type="session", clear_data=False),
-
-    # for hiding error for periodic status interval
-    html.Div(id="embed-queued-card", style={"display": "none"}),
-    html.Div(id="embed-parsed-card", style={"display": "none"}),
-    html.Div(id="embed-done-card", style={"display": "none"}),
 
     # for AI Analysis page
     dcc.Store(id='selected-template-store', storage_type="session"),
@@ -450,8 +444,6 @@ def create_workspace_layout(project_name, project_id):
                                                  href="/workspace/rule_pattern", id="nav-rule_pattern", active=False, className="small")),                                                 
                             dbc.NavItem(dbc.NavLink([html.I(className="fas fa-diagram-project me-2"), "Pattern"], 
                                                  href="/workspace/pattern", id="nav-pattern", active=False, className="small")),
-                            dbc.NavItem(dbc.NavLink([html.I(className="fas fa-layer-group me-2"), "Embedding"], 
-                                                 href="/workspace/embed", id="nav-embed", active=False, className="small")),                                           
                             dbc.NavItem(dbc.NavLink([html.I(className="fas fa-chart-area me-2"), "Telemetry"], 
                                                   href="/workspace/telemetry", id="nav-telemetry", active=False, className="small")),
                             dbc.NavItem(dbc.NavLink([html.I(className="fas fa-brain me-2"), "AI Analysis"], 
@@ -585,8 +577,6 @@ def update_workspace_content(pathname, project_data):
         return rule_pattern_page.layout
     elif page == "pattern":
         return pattern_page.layout
-    elif page == "embed":
-        return embedding_page.layout
     elif page == "telemetry":
         return telemetry_page.layout
     elif page == "ai_analysis":
@@ -1217,23 +1207,21 @@ def logout(n_clicks):
     [Output("nav-viewer", "active"),
      Output("nav-pattern", "active"),
      Output("nav-rule_pattern", "active"),
-     Output("nav-embed", "active"),
      Output("nav-telemetry", "active"),
      Output("nav-ai", "active")],
     Input("url", "pathname"),
 )
 def update_nav_active(pathname):
     if not pathname or not pathname.startswith("/workspace/"):
-        return no_update, no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update
 
     page = pathname.split("/workspace/")[-1]
     return (
         page == "viewer" or page == "",  # Default to log viewer
         page == "pattern",
         page == "rule_pattern",
-        page == "embed",
         page == "telemetry",
-        page == "ai_analysis"
+        page == "ai_analysis",
     )
 
 # Run the app

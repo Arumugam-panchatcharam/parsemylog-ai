@@ -112,6 +112,7 @@ def matching_loglines():
             id="ai-log-template-results",
             columns=[
                 {"name": "TimeStamp", "id": "timestamp"},
+                {"name": "Source File", "id": "source_file"},
                 {"name": "LogLines", "id": "loglines"},
             ],
             data=[],  # initially empty
@@ -230,6 +231,8 @@ def ai_analysis_layout():
     return dbc.Row([
             dbc.Col(
                 html.Div([
+                    # Store the domain parquet path for log-context lookups
+                    dcc.Store(id="ai-parquet-store"),
                     dbc.Row(
                         [
                             dbc.Col(

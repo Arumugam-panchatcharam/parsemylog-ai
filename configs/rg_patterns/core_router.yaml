@@ -1,0 +1,77 @@
+# Core Router domain grep patterns for ripgrep pre-filtering
+# Covers the CCSP data-model stack and WAN connectivity:
+# WEBPA/Parodus (cloud management), PAM/PSM (data model),
+# WAN/DSL/PPP/GPON managers, TELCOVOICE, STATEINFO, xconf.
+
+domain: core_router
+
+# Log files to scan (glob patterns)
+files:
+  - "WEBPAlog.txt*"
+  - "PARODUSlog.txt*"
+  - "parodusStart-log.txt*"
+  - "parodusAuthResponseLog.txt*"
+  - "PAMlog.txt*"
+  - "PSMlog.txt*"
+  - "WANMANAGERLog.txt*"
+  - "WANMANAGERlog.txt*"
+  - "XDSLMANAGERLog.txt*"
+  - "PPPManagerLog.txt*"
+  - "PPPMANAGERlog.txt*"
+  - "GponManagerLog.txt*"
+  - "GPONMANAGERlog.txt*"
+  - "STATEINFOMANAGERLog.txt*"
+  - "TELCOVOICEMANAGERLog.txt*"
+  - "VLANManagerLog.txt*"
+  - "NOTIFYLog.txt*"
+  - "RTMessagelog.txt*"
+  - "xconf.txt*"
+  - "CCSPCUJOAGENTLog.txt*"
+  - "CUJOAGENT.log*"
+
+# Number of context lines before/after each match
+context_lines: 3
+
+# Case-insensitive matching
+case_insensitive: true
+
+# Literal string patterns (fast path, uses rg -F)
+literals:
+  - "FATAL"
+  - "CCSP_ERR"
+  - "CCSP_CRASH"
+  - "core dump"
+  - "Segmentation fault"
+  - "CONNECTION_LOST"
+  - "PARODUS_DISCONNECT"
+  - "WEBPA_ERR"
+
+# Regex patterns (uses rg -e)
+regex:
+  # Generic error/failure indicators
+  - "\\b(err|error|fail(ed|ure)?|crash|abort|timeout|bad|not successful|not found|not connected|not authorized|not authenticated|not authorized|not authenticated)\\b"
+  # WEBPA/Parodus connection issues
+  - "\\b(webpa|parodus)\\s*(disconnect|fail|timeout|error|retry|closed|lost)\\b"
+  - "\\b(upstream|downstream|cloud)\\s+(disconnect|fail|timeout|error|lost)\\b"
+  - "\\b(token|auth|certificate)\\s+(fail|error|expired|invalid|reject)\\b"
+  # PAM/PSM data model issues
+  - "\\b(PAM|PSM|ccsp|dbus)\\s*(error|fail|crash|timeout|blocked)\\b"
+  - "\\b(parameter|object|datamodel)\\s+(fail|error|not.?found|invalid)\\b"
+  # WAN connectivity
+  - "\\b(WAN|wan)\\s+(down|lost|disconnect|fail|flap)\\b"
+  - "\\b(IPv4|IPv6|ip)\\s+(fail|error|lost|timeout|unreachable)\\b"
+  # DSL/xDSL issues
+  - "\\b(DSL|dsl|xdsl|XDSL)\\s+(down|fail|timeout|error|drop|retrain|sync.?loss)\\b"
+  # PPP issues
+  - "\\b(PPP|ppp|pppoe|PPPoE)\\s+(down|fail|timeout|error|drop|terminated)\\b"
+  # GPON issues
+  - "\\b(GPON|gpon|ONU|onu)\\s+(down|fail|timeout|error|alarm|deactivat)\\b"
+  # Voice/telco issues
+  - "\\b(sip|voip|voice|telco)\\s+(fail|error|timeout|register|deregister)\\b"
+  # Process/SSP restart
+  - "\\bSSP\\s+(restart|crash|exit)\\b"
+  - "\\b(process|daemon|service)\\s+(crash|exit|kill|died|terminated)\\b"
+  # VLAN issues
+  - "\\b(vlan|VLAN)\\s+(fail|error|mismatch|missing)\\b"
+  # Firmware/xconf download
+  - "\\b(xconf|firmware|download|upgrade)\\s+(fail|error|abort|timeout|corrupt)\\b"

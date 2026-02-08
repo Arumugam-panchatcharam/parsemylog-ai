@@ -1,11 +1,9 @@
-version: '3.9'
-
 services:
   rdk-logai-app:
     build: .
     image: logai-app:1.0
     container_name: rdk-logai-app
-    command: ["gunicorn", "-w", "8", "-b", "0.0.0.0:40901", "--timeout", "360", "logai_wsgi:server"]
+    command: ["gunicorn", "-w", "8", "-b", "0.0.0.0:40901", "--timeout", "360", "--preload", "logai_wsgi:server"]
     volumes:
       - .:/app
     ports:
@@ -13,6 +11,17 @@ services:
     restart: always
     env_file:
       - .env
+    depends_on:
+      - qdrant
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    restart: always
 
   nginx:
     image: nginx:alpine

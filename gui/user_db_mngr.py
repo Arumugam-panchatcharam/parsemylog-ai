@@ -7,9 +7,12 @@ import os
 import uuid
 import base64
 import shutil
+import logging
 from pathlib import Path
 from datetime import datetime
-from logai.utils.constants import BASE_DIR, UPLOAD_DIRECTORY
+from logai.utils.constants import BASE_DIR, UPLOAD_DIRECTORY, QDRANT_URL
+
+logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
@@ -217,26 +220,30 @@ class DBManager:
         
     # ---------------- File operations ----------------
     def save_uploaded_file(self, project_id: str, file_content, filename):
+        """
+        Save an uploaded file to disk using its original filename.
+
+        Files are stored as-is (no UUID renaming) inside the project
+        directory ``UPLOAD_DIRECTORY/{user_id}/{project_id}/{filename}``.
+        The ``filename`` and ``original_name`` DB columns both hold the
+        original name for backward-compatibility.
+        """
         project = self.db.session.query(self.Project).filter_by(id=project_id).first()
         user_id = project.user_id
-        #print("user id {} project id {}".format(user_id, project_id))
         try:
             content_type, content_string = file_content.split(',')
             decoded = base64.b64decode(content_string)
 
-            file_extension = Path(filename).suffix
-            unique_filename = f"{uuid.uuid4()}{file_extension}"
-
             project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
             project_dir.mkdir(parents=True, exist_ok=True)
-            file_path = project_dir / unique_filename
+            file_path = project_dir / filename
 
             with open(file_path, 'wb') as f:
                 f.write(decoded)
 
             uploaded_file = self.ProjectFile(
                                 project_id = project_id,
-                                filename = unique_filename,
+                                filename = filename,
                                 original_name = filename,
                                 file_path = str(file_path),
                                 file_size = len(decoded)
@@ -296,21 +303,75 @@ class DBManager:
         #print(self.db.session.query(self.Project).filter_by(project_id=project_id).first())
         return self.db.session.query(self.Project).filter_by(id=project_id).first()
     
+    @staticmethod
+    def _delete_qdrant_collection(project_id: str) -> None:
+        """
+        Delete the Qdrant vector collection for a project.
+
+        Collection naming convention: ``project_{project_id}``.
+        Failures are logged but never propagated -- Qdrant cleanup is
+        best-effort so that project deletion always succeeds.
+
+        Args:
+            project_id: Project UUID whose collection should be removed.
+        """
+        collection_name = f"project_{project_id}"
+        try:
+            from qdrant_client import QdrantClient
+            client = QdrantClient(url=QDRANT_URL, timeout=10)
+            client.delete_collection(collection_name)
+            logger.info(f"Deleted Qdrant collection '{collection_name}'")
+        except Exception as e:
+            # Best-effort: log and continue even if Qdrant is unreachable
+            logger.warning(f"Failed to delete Qdrant collection '{collection_name}': {e}")
+
     def delete_project(self, project_id: str, user_id: int) -> Tuple[bool, Optional[str]]:
+        """
+        Delete a project and all associated resources.
+
+        Multi-user safe: waits for any active indexer thread to finish
+        before removing files, preventing write-after-delete races.
+        """
         project = self.db.session.query(self.Project).filter_by(id=project_id).first()
         if not project:
             return False, "Project not found."
         try:
-            self.db.session.delete(project)
-            self.db.session.commit()
+            # Wait for any active indexer to finish before deleting files
+            # to prevent write-after-delete races.
+            try:
+                from gui.callbacks.log_viewer import _get_project_lock
+                lock = _get_project_lock(project_id)
+                logger.info(f"[DeleteProject] Acquiring indexer lock for {project_id}...")
+                lock.acquire()  # Blocking: wait until indexer finishes
+                try:
+                    self.db.session.delete(project)
+                    self.db.session.commit()
 
-            project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
-            if project_dir.exists():
-                shutil.rmtree(project_dir)
+                    # Remove entire project directory (includes drain3_*.json,
+                    # all *_rg.parquet caches, status.json, uploaded files, archives)
+                    project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
+                    if project_dir.exists():
+                        logger.info(f"Removing project directory: {project_dir}")
+                        shutil.rmtree(project_dir, ignore_errors=True)
 
+                    # Clean up Qdrant vector collection for this project
+                    self._delete_qdrant_collection(project_id)
+                finally:
+                    lock.release()
+            except ImportError:
+                # Fallback if callbacks not loaded yet (e.g. during tests)
+                self.db.session.delete(project)
+                self.db.session.commit()
+                project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
+                if project_dir.exists():
+                    shutil.rmtree(project_dir, ignore_errors=True)
+                self._delete_qdrant_collection(project_id)
+
+            logger.info(f"Project {project_id} deleted successfully")
             return True, "Project deleted successfully"
         except Exception as e:
             self.db.session.rollback()
+            logger.error(f"Failed to delete project {project_id}: {e}")
             return False, str(e)
 
     # ---------------- Admin operations ----------------
@@ -409,12 +470,14 @@ class DBManager:
         if user.is_admin:
             return False, "Cannot delete admin user."
         try:
-            # Delete associated projects and files
+            # Delete associated projects, files, and Qdrant collections
             projects = self.db.session.query(self.Project).filter_by(user_id=user_id).all()
             for project in projects:
                 project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project.id}')
                 if project_dir.exists():
                     shutil.rmtree(project_dir)
+                # Clean up Qdrant vector collection for each project
+                self._delete_qdrant_collection(project.id)
                 self.db.session.delete(project)
 
             # Finally delete the user
