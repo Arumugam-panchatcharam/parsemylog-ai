@@ -1,5 +1,5 @@
 services:
-  # Flask REST API backend (Gunicorn)
+  # Flask REST API backend (Gunicorn) — internal only, accessed via Nginx
   logai-api:
     build: .
     image: parsemylog-ai:latest
@@ -7,7 +7,7 @@ services:
     command: [
       "gunicorn",
       "-w", "4",
-      "-b", "0.0.0.0:40901",
+      "-b", "0.0.0.0:5000",
       "--timeout", "360",
       "--preload",
       "--access-logfile", "-",
@@ -19,19 +19,15 @@ services:
       - user_uploads:/app/user_uploads
       - bge_model:/app/bge-small-en-v1.5-local
       - ./configs:/app/configs:ro
-      - logai_db:/app/data
-    ports:
-      - "${APP_PORT:-40901}:40901"
+      - ./logai_users.db:/app/logai_users.db
     restart: always
     env_file:
       - .env
-    environment:
-      - DB_PATH=/app/data/logai_users.db
     depends_on:
       qdrant:
         condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:40901/api/auth/profile')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/auth/profile')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -49,7 +45,7 @@ services:
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
 
-  # Nginx reverse proxy — builds React SPA and serves it + proxies /api
+  # Nginx — builds React SPA, serves it, and proxies /api to Flask
   nginx:
     build:
       context: .
@@ -57,7 +53,7 @@ services:
     image: parsemylog-nginx:latest
     container_name: nginx
     ports:
-      - "${NGINX_PORT:-8091}:80"
+      - "${APP_PORT:-40901}:80"
     depends_on:
       - logai-api
     restart: always
@@ -66,4 +62,3 @@ volumes:
   user_uploads:
   bge_model:
   qdrant_storage:
-  logai_db:
