@@ -21,9 +21,17 @@ export const projectsApi = {
   delete: (id: string) => api.delete(`/projects/${id}`),
 };
 
+// ---------- CPEs ----------
+export const cpesApi = {
+  list: (projectId: string) => api.get(`/projects/${projectId}/cpes`),
+};
+
 // ---------- Files ----------
 export const filesApi = {
-  list: (projectId: string) => api.get(`/projects/${projectId}/files`),
+  list: (projectId: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/files`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
   upload: (projectId: string, files: File[]) => {
     const formData = new FormData();
     files.forEach((f) => formData.append("files", f));
@@ -46,36 +54,47 @@ export const filesApi = {
 
 // ---------- Patterns ----------
 export const patternsApi = {
-  listDomains: (projectId: string) =>
-    api.get(`/projects/${projectId}/domains`),
-  analyze: (projectId: string, domain: string, fileFilter?: string[]) =>
-    api.post(`/projects/${projectId}/domains/${domain}/analyze`, { file_filter: fileFilter }),
-  getTimeseries: (projectId: string, domain: string, template: string, interval: number, fileFilter?: string) =>
+  listDomains: (projectId: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/domains`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
+  analyze: (projectId: string, domain: string, fileFilter?: string[], cpeId?: string | null) =>
+    api.post(`/projects/${projectId}/domains/${domain}/analyze`, {
+      file_filter: fileFilter,
+      cpe_id: cpeId || undefined,
+    }),
+  getTimeseries: (projectId: string, domain: string, template: string, interval: number, fileFilter?: string, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/domains/${domain}/timeseries`, {
-      params: { template, interval, file_filter: fileFilter },
+      params: { template, interval, file_filter: fileFilter, cpe_id: cpeId || undefined },
     }),
-  getParameters: (projectId: string, domain: string, template: string, fileFilter?: string) =>
+  getParameters: (projectId: string, domain: string, template: string, fileFilter?: string, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/domains/${domain}/parameters`, {
-      params: { template, file_filter: fileFilter },
+      params: { template, file_filter: fileFilter, cpe_id: cpeId || undefined },
     }),
-  getLoglines: (projectId: string, domain: string, template: string, page = 1, pageSize = 20, fileFilter?: string) =>
+  getLoglines: (projectId: string, domain: string, template: string, page = 1, pageSize = 20, fileFilter?: string, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/domains/${domain}/loglines`, {
-      params: { template, page, page_size: pageSize, file_filter: fileFilter },
+      params: { template, page, page_size: pageSize, file_filter: fileFilter, cpe_id: cpeId || undefined },
     }),
-  indexingStatus: (projectId: string) =>
-    api.get(`/projects/${projectId}/indexing/status`),
+  indexingStatus: (projectId: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/indexing/status`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
 };
 
 // ---------- Telemetry ----------
 export const telemetryApi = {
-  parse: (projectId: string) =>
-    api.post(`/projects/${projectId}/telemetry/parse`),
+  parse: (projectId: string, cpeId?: string | null) =>
+    api.post(`/projects/${projectId}/telemetry/parse`, null, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
 };
 
 // ---------- AI Analysis ----------
 export const aiApi = {
-  search: (projectId: string, query: string, topK = 10) =>
-    api.post(`/projects/${projectId}/ai/search`, { query, top_k: topK }),
+  search: (projectId: string, query: string, topK = 10, cpeId?: string | null) =>
+    api.post(`/projects/${projectId}/ai/search`, {
+      query, top_k: topK, cpe_id: cpeId || undefined,
+    }),
   getContext: (projectId: string, data: {
     template: string;
     timestamp: string;
@@ -83,25 +102,39 @@ export const aiApi = {
     unit: string;
     filename?: string;
     parquet_path?: string;
-  }) => api.post(`/projects/${projectId}/ai/context`, data),
+    cpe_id?: string | null;
+  }) => api.post(`/projects/${projectId}/ai/context`, {
+    ...data,
+    cpe_id: data.cpe_id || undefined,
+  }),
   getParameters: (projectId: string, data: {
     template: string;
     parquet_path?: string;
     domain?: string;
-  }) => api.post(`/projects/${projectId}/ai/parameters`, data),
+    cpe_id?: string | null;
+  }) => api.post(`/projects/${projectId}/ai/parameters`, {
+    ...data,
+    cpe_id: data.cpe_id || undefined,
+  }),
   getLoglines: (projectId: string, data: {
     template: string;
     parquet_path?: string;
     domain?: string;
     page?: number;
     page_size?: number;
-  }) => api.post(`/projects/${projectId}/ai/loglines`, data),
+    cpe_id?: string | null;
+  }) => api.post(`/projects/${projectId}/ai/loglines`, {
+    ...data,
+    cpe_id: data.cpe_id || undefined,
+  }),
 };
 
 // ---------- Embedding ----------
 export const embeddingApi = {
-  pipelineStatus: (projectId: string) =>
-    api.get(`/projects/${projectId}/pipeline/status`),
+  pipelineStatus: (projectId: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/pipeline/status`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
   fileTemplates: (projectId: string, filename: string) =>
     api.get(`/projects/${projectId}/files/${filename}/templates`),
   downloadTemplates: (projectId: string) =>
@@ -127,26 +160,35 @@ export const patternAnalyzerApi = {
     api.get<{ presets: DomainPatterns }>(`/projects/${projectId}/regex-patterns/presets`),
   exportUrl: (projectId: string, format: "yaml" | "json") =>
     `${api.defaults.baseURL}/projects/${projectId}/regex-patterns/export?format=${format}`,
-  getReboots: (projectId: string) =>
-    api.get<{ reboots: Array<{ timestamp: string; reason: string }> }>(`/projects/${projectId}/reboots`),
+  getReboots: (projectId: string, cpeId?: string | null) =>
+    api.get<{ reboots: Array<{ timestamp: string; reason: string }> }>(
+      `/projects/${projectId}/reboots`,
+      { params: cpeId ? { cpe_id: cpeId } : undefined }
+    ),
   scan: (projectId: string, data: {
     patterns: UserPattern[];
     bucket_minutes: number;
     time_range?: { start: string; end: string };
     filter_pre_ntp?: boolean;
+    cpe_id?: string | null;
   }) => api.post<{
     scan_id: string;
     total_matches: number;
     trace_count: number;
     reboots_count: number;
     elapsed_ms: number;
-  }>(`/projects/${projectId}/regex-scan`, data),
-  getScanResults: (projectId: string, scanId: string) =>
+  }>(`/projects/${projectId}/regex-scan`, {
+    ...data,
+    cpe_id: data.cpe_id || undefined,
+  }),
+  getScanResults: (projectId: string, scanId: string, cpeId?: string | null) =>
     api.get<{
       traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
       reboots: Array<{ timestamp: string; reason: string }>;
       total_matches: number;
-    }>(`/projects/${projectId}/regex-scan/${scanId}/results`),
+    }>(`/projects/${projectId}/regex-scan/${scanId}/results`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
 };
 
 // ---------- Admin ----------

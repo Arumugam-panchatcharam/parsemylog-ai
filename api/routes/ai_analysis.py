@@ -52,6 +52,7 @@ def ai_search(project_id):
     data = request.get_json(silent=True) or {}
     query = data.get("query", "").strip()
     top_k = data.get("top_k", 10)
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
     if not query:
         return jsonify({"error": "Query is required"}), 400
@@ -63,7 +64,11 @@ def ai_search(project_id):
         logger.error(f"[AI Search] Failed to load embedding model: {e}")
         return jsonify({"error": "Embedding model not available"}), 503
 
-    collection_name = f"project_{project_id}"
+    # Per-CPE or per-project Qdrant collection
+    if cpe_id:
+        collection_name = f"project_{project_id}_cpe_{cpe_id}"
+    else:
+        collection_name = f"project_{project_id}"
     logger.info(f"[AI Search] query='{query}', collection='{collection_name}'")
 
     try:
@@ -140,11 +145,13 @@ def ai_context(project_id):
     unit = data.get("unit", "seconds")
     filename = data.get("filename")
     parquet_path = data.get("parquet_path")
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
     if not template or not timestamp_str:
         return jsonify({"error": "template and timestamp are required"}), 400
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
 
     # Resolve parquet
     pq = Path(parquet_path) if parquet_path else None
@@ -220,11 +227,13 @@ def ai_parameters(project_id):
     template = data.get("template", "")
     parquet_path = data.get("parquet_path")
     domain = data.get("domain")
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
     if not template:
         return jsonify({"error": "template is required"}), 400
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
 
     # Resolve parquet
     pq = Path(parquet_path) if parquet_path else None
@@ -298,11 +307,13 @@ def ai_loglines(project_id):
     domain = data.get("domain")
     page = data.get("page", 1)
     page_size = data.get("page_size", 20)
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
     if not template:
         return jsonify({"error": "template is required"}), 400
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
 
     pq = Path(parquet_path) if parquet_path else None
     if pq is None or not pq.exists():

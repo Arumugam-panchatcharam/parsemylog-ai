@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
@@ -96,7 +96,9 @@ def parse_telemetry(project_id):
     if err:
         return err
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cpe_id = request.args.get("cpe_id")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
     telemetry_file = _find_telemetry_file(project_dir)
 
     if not telemetry_file:

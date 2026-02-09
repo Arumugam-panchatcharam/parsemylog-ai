@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { patternAnalyzerApi } from "@/api/endpoints";
 import type { UserPattern, DomainPatterns } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import AddIcon from "@mui/icons-material/Add";
@@ -56,6 +57,7 @@ function drain3ToRegex(template: string): string {
 /* ================================================================ Component */
 export default function PatternAnalyzerPage() {
   const { projectId } = useProject();
+  const { cpeId } = useCPE();
   const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -114,7 +116,7 @@ export default function PatternAnalyzerPage() {
   const { data: rebootsData } = useQuery({
     queryKey: ["reboots", projectId],
     queryFn: async () => {
-      const res = await patternAnalyzerApi.getReboots(projectId!);
+      const res = await patternAnalyzerApi.getReboots(projectId!, cpeId);
       return res.data.reboots;
     },
     enabled: !!projectId,
@@ -180,6 +182,7 @@ export default function PatternAnalyzerPage() {
         bucket_minutes: bucketMinutes,
         time_range: effectiveRange,
         filter_pre_ntp: filterPreNtp,
+        cpe_id: cpeId,
       });
 
       const { scan_id, total_matches, trace_count, elapsed_ms } = scanRes.data;
@@ -188,7 +191,7 @@ export default function PatternAnalyzerPage() {
       );
 
       // Phase 2: fetch full Plotly-ready data from cache
-      const resultsRes = await patternAnalyzerApi.getScanResults(projectId!, scan_id);
+      const resultsRes = await patternAnalyzerApi.getScanResults(projectId!, scan_id, cpeId);
       return resultsRes.data;
     },
     onSuccess: (data) => {

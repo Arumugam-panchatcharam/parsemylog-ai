@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -19,6 +20,7 @@ const NO_TOOLBAR = { displayModeBar: false } as const;
 
 export default function PatternPage() {
   const { projectId } = useProject();
+  const { cpeId } = useCPE();
   const navigate = useNavigate();
   const [selectedDomain, setSelectedDomain] = useState<string>("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
@@ -31,13 +33,13 @@ export default function PatternPage() {
   // Keep a stable copy of domain source files from the INITIAL (unfiltered) analysis
   const [allSourceFiles, setAllSourceFiles] = useState<string[]>([]);
 
-  const { data: domains } = useQuery({ queryKey: ["domains", projectId], queryFn: async () => (await patternsApi.listDomains(projectId!)).data, enabled: !!projectId });
-  const { data: indexStatus } = useQuery({ queryKey: ["indexingStatus", projectId], queryFn: async () => (await patternsApi.indexingStatus(projectId!)).data, enabled: !!projectId, refetchInterval: (query) => (query.state.data?.all_done ? false : 5000) });
+  const { data: domains } = useQuery({ queryKey: ["domains", projectId, cpeId], queryFn: async () => (await patternsApi.listDomains(projectId!, cpeId)).data, enabled: !!projectId });
+  const { data: indexStatus } = useQuery({ queryKey: ["indexingStatus", projectId, cpeId], queryFn: async () => (await patternsApi.indexingStatus(projectId!, cpeId)).data, enabled: !!projectId, refetchInterval: (query) => (query.state.data?.all_done ? false : 5000) });
 
   // Analysis — triggered by domain + appliedFiles (not selectedFiles)
   const { data: analysisRaw, isLoading: analysisLoading, isError: analysisError, error: analysisErr } = useQuery({
-    queryKey: ["analyze", projectId, selectedDomain, appliedFiles],
-    queryFn: async () => (await patternsApi.analyze(projectId!, selectedDomain, appliedFiles.length > 0 ? appliedFiles : undefined)).data,
+    queryKey: ["analyze", projectId, selectedDomain, appliedFiles, cpeId],
+    queryFn: async () => (await patternsApi.analyze(projectId!, selectedDomain, appliedFiles.length > 0 ? appliedFiles : undefined, cpeId)).data,
     enabled: !!projectId && !!selectedDomain,
     retry: false,
   });
@@ -64,9 +66,9 @@ export default function PatternPage() {
     setAllSourceFiles([]);
   }, [selectedDomain]);
 
-  const { data: tsData } = useQuery({ queryKey: ["timeseries", projectId, selectedDomain, selectedTemplate, timeInterval, fileFilterStr], queryFn: async () => (await patternsApi.getTimeseries(projectId!, selectedDomain, selectedTemplate, timeInterval, fileFilterStr)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
-  const { data: params } = useQuery({ queryKey: ["parameters", projectId, selectedDomain, selectedTemplate, fileFilterStr], queryFn: async () => (await patternsApi.getParameters(projectId!, selectedDomain, selectedTemplate, fileFilterStr)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
-  const { data: loglines } = useQuery({ queryKey: ["loglines", projectId, selectedDomain, selectedTemplate, fileFilterStr], queryFn: async () => (await patternsApi.getLoglines(projectId!, selectedDomain, selectedTemplate, 1, 20, fileFilterStr)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
+  const { data: tsData } = useQuery({ queryKey: ["timeseries", projectId, selectedDomain, selectedTemplate, timeInterval, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getTimeseries(projectId!, selectedDomain, selectedTemplate, timeInterval, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
+  const { data: params } = useQuery({ queryKey: ["parameters", projectId, selectedDomain, selectedTemplate, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getParameters(projectId!, selectedDomain, selectedTemplate, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
+  const { data: loglines } = useQuery({ queryKey: ["loglines", projectId, selectedDomain, selectedTemplate, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getLoglines(projectId!, selectedDomain, selectedTemplate, 1, 20, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
 
   const intervalMarks = ["1s", "1min", "1h", "1d"];
   const toggleFile = (f: string) => setSelectedFiles((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]);

@@ -230,6 +230,226 @@ class FileManager:
 
         print("Process uploaded files done")
 
+    # ---------- Multi-CPE Upload ----------
+
+    # Regex: SERIAL_YYYY-MM-DD_YYYY-MM-DD.zip
+    CPE_ZIP_RE = re.compile(r'^([A-Za-z0-9]+)_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})\.zip$')
+
+    # MAC inside tgz filename: ..._AABBCCDDEEFF_..._CPELogs_...
+    TGZ_MAC_RE = re.compile(r'_([0-9A-Fa-f]{12})_.*_CPELogs_')
+
+    # Fallback: extract MAC (12 hex chars) and date from tgz filenames
+    # e.g. provider_AABBCCDDEEFF_YYYY-MM-DD-HH-MM-SS_CPELogs_MODEL.tgz
+    TGZ_CPE_RE = re.compile(r'_([0-9A-Fa-f]{12})_(\d{4}-\d{2}-\d{2})')
+
+    @classmethod
+    def detect_cpe_zips(cls, project_dir: Path):
+        """
+        Detect CPE zip files in the project directory.
+
+        Two patterns are supported:
+
+        1. **Primary** -- ``SERIAL_YYYY-MM-DD_YYYY-MM-DD.zip``
+           Serial and date range come from the zip filename.
+
+        2. **Fallback** -- any other ``.zip`` containing ``.tgz`` files
+           whose names embed a 12-hex-digit MAC and a date, e.g.
+           ``partner-id_mac_2025-12-13-23-01-27_CPELogs_*.tgz``
+           The MAC is used as the CPE serial; dates are extracted from
+           the tgz filenames.
+
+        Returns:
+            List of dicts: {path, serial, date_from, date_to, is_fallback}
+        """
+        import zipfile
+
+        results = []
+        unmatched_zips = []
+
+        for f in project_dir.iterdir():
+            if not f.is_file() or not f.name.endswith('.zip'):
+                continue
+            m = cls.CPE_ZIP_RE.match(f.name)
+            if m:
+                results.append({
+                    "path": f,
+                    "serial": m.group(1),
+                    "date_from": m.group(2),
+                    "date_to": m.group(3),
+                    "is_fallback": False,
+                })
+            else:
+                unmatched_zips.append(f)
+
+        # Fallback: peek inside unmatched zips for tgz files with MAC addresses
+        for zip_path in unmatched_zips:
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    tgz_names = [
+                        n for n in zf.namelist()
+                        if n.endswith('.tgz') or n.endswith('.tar.gz')
+                    ]
+                    # Group by MAC
+                    mac_dates: dict = {}  # MAC -> list of date strings
+                    for tgz_name in tgz_names:
+                        m = cls.TGZ_CPE_RE.search(tgz_name)
+                        if m:
+                            mac_dates.setdefault(m.group(1), []).append(m.group(2))
+
+                    for mac, dates in mac_dates.items():
+                        results.append({
+                            "path": zip_path,
+                            "serial": mac,
+                            "date_from": min(dates),
+                            "date_to": max(dates),
+                            "is_fallback": True,
+                        })
+                        print(f"[DetectCPE] Fallback: {zip_path.name} -> MAC {mac} ({min(dates)} to {max(dates)})")
+            except Exception as e:
+                print(f"[DetectCPE] Error peeking into {zip_path.name}: {e}")
+
+        return results
+
+    def process_multi_cpe_upload(self, project_dir: Path, project_name: str):
+        """
+        Process multi-CPE zip uploads.
+
+        Supports two zip naming conventions:
+
+        1. **Primary** -- ``SERIAL_YYYY-MM-DD_YYYY-MM-DD.zip``
+           All tgz files inside belong to that serial.
+        2. **Fallback** -- any other ``.zip`` whose tgz filenames embed a
+           12-hex-digit MAC (e.g. ``partner-id_mac_2025-12-13-...``).
+           Only tgz files matching the target MAC are collected.
+
+        Handles the corner case where the same serial/MAC appears in multiple
+        zips with different date ranges.  All tgz files from every zip for a
+        given serial are extracted first, then merged once so the final logs
+        cover the full date span.
+
+        Pipeline per serial:
+          1. Group all zips by serial
+          2. Extract ALL zips for that serial into one staging dir
+          3. Collect tgz files (filter by MAC for fallback zips)
+          4. Run LogMerger ONCE on the combined set
+          5. Move merged output to {project_dir}/{serial}/
+          6. Parse MAC from tgz filenames (or use serial if fallback)
+          7. Use min(date_from), max(date_to) across all zips
+
+        Returns:
+            List of dicts: {serial, mac, date_from, date_to}
+        """
+        import zipfile
+
+        cpe_zips = self.detect_cpe_zips(project_dir)
+        if not cpe_zips:
+            return []
+
+        # ---- Group zips by serial ----
+        serial_groups: dict = {}  # serial -> list of cpe_info dicts
+        for cpe_info in cpe_zips:
+            serial = cpe_info["serial"]
+            serial_groups.setdefault(serial, []).append(cpe_info)
+
+        cpe_results = []
+
+        for serial, zip_list in serial_groups.items():
+            zip_names = [z["path"].name for z in zip_list]
+            is_fallback = any(z.get("is_fallback", False) for z in zip_list)
+            label = f" (fallback/MAC)" if is_fallback else ""
+            print(f"[MultiCPE] Processing CPE {serial}{label} — {len(zip_list)} zip(s): {zip_names}")
+
+            # Compute overall date range
+            date_from = min(z["date_from"] for z in zip_list)
+            date_to = max(z["date_to"] for z in zip_list)
+
+            # Staging directory: all tgz files from all zips end up here
+            staging_dir = project_dir / f"_cpe_staging_{serial}"
+            os.makedirs(staging_dir, exist_ok=True)
+
+            # For fallback zips the serial IS the MAC
+            mac = serial if is_fallback else None
+
+            try:
+                # ---- Phase 1: Extract every zip, collect tgz files ----
+                for cpe_info in zip_list:
+                    zip_path = cpe_info["path"]
+                    # Each zip gets its own temp extraction dir to avoid collisions
+                    temp_dir = project_dir / f"_cpe_tmp_{serial}_{cpe_info['date_from']}"
+                    os.makedirs(temp_dir, exist_ok=True)
+
+                    try:
+                        with zipfile.ZipFile(zip_path, 'r') as zf:
+                            zf.extractall(temp_dir)
+
+                        # Find inner folder with .tgz files
+                        # Could be directly in temp_dir or in a subfolder
+                        tgz_source = temp_dir
+                        subdirs = [d for d in temp_dir.iterdir() if d.is_dir()]
+                        if subdirs:
+                            for sd in subdirs:
+                                tgz_files = list(sd.glob("*.tgz")) + list(sd.glob("*.tar.gz"))
+                                if tgz_files:
+                                    tgz_source = sd
+                                    break
+
+                        # Move tgz files into staging dir (rename to avoid collisions)
+                        for f in tgz_source.iterdir():
+                            if f.is_file() and (f.name.endswith(".tgz") or f.name.endswith(".tar.gz")):
+                                # For fallback zips, only take tgz files containing this MAC
+                                if is_fallback and serial not in f.name:
+                                    continue
+                                # Try to extract MAC while we're scanning
+                                if mac is None:
+                                    m = self.TGZ_MAC_RE.search(f.name)
+                                    if m:
+                                        mac = m.group(1)
+                                # Use date prefix to avoid name collisions across zips
+                                dest_name = f"{cpe_info['date_from']}_{f.name}"
+                                shutil.move(str(f), str(staging_dir / dest_name))
+
+                    except Exception as e:
+                        print(f"[MultiCPE] Error extracting {zip_path.name}: {e}")
+                    finally:
+                        if temp_dir.exists():
+                            shutil.rmtree(temp_dir, ignore_errors=True)
+
+                # ---- Phase 2: Merge all collected tgz files at once ----
+                cpe_output_dir = project_dir / serial
+                os.makedirs(cpe_output_dir, exist_ok=True)
+
+                merged_dir = cpe_output_dir / MERGED_LOGS_DIR_NAME
+                os.makedirs(merged_dir, exist_ok=True)
+
+                merger = LogMerger(str(staging_dir), str(merged_dir))
+                merger.merge_logs()
+
+                # Move merged files from merged_logs/ up to cpe_output_dir
+                if merged_dir.exists():
+                    for fname in os.listdir(merged_dir):
+                        src = merged_dir / fname
+                        dst = cpe_output_dir / fname
+                        if src.is_file():
+                            shutil.move(str(src), str(dst))
+                    shutil.rmtree(merged_dir, ignore_errors=True)
+
+                cpe_results.append({
+                    "serial": serial,
+                    "mac": mac,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                })
+                print(f"[MultiCPE] CPE {serial} processed ({len(zip_list)} zips merged) -> {cpe_output_dir}")
+
+            except Exception as e:
+                print(f"[MultiCPE] Error processing CPE {serial}: {e}")
+            finally:
+                # Clean up staging dir
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+
+        return cpe_results
+
     def list_uploaded_files(self):
         """List all files saved in the uploads folder."""
         try:

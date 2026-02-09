@@ -49,7 +49,9 @@ def pipeline_status(project_id):
     if err:
         return err
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cpe_id = request.args.get("cpe_id")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
     status = read_status(project_dir)
 
     return jsonify({"files": status}), 200

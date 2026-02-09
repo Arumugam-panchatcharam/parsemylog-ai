@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDropzone } from "react-dropzone";
-import { filesApi } from "@/api/endpoints";
+import { filesApi, patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { useCPE } from "@/hooks/useCPE";
 import { cn } from "@/lib/utils";
 import { highlightLogLine } from "@/lib/logHighlighter";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
@@ -22,6 +23,8 @@ import CloseIcon from "@mui/icons-material/Close";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import FormatColorTextIcon from "@mui/icons-material/FormatColorText";
+import CircularProgress from "@mui/material/CircularProgress";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 
 const LINES_OPTIONS = [100, 500, 1000, 2000, 5000];
 
@@ -39,6 +42,7 @@ async function downloadFile(projectId: string, filename: string) {
 
 export default function LogViewerPage() {
   const { projectId } = useProject();
+  const { cpeId, setCPE } = useCPE();
   const qc = useQueryClient();
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -50,16 +54,28 @@ export default function LogViewerPage() {
   const [notes, setNotes] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [fontSize, setFontSize] = useState(12);
   const [showNotes, setShowNotes] = useState(false);
   const [showSearch, setShowSearch] = useState(true);
   const [scrollToLine, setScrollToLine] = useState<number | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  const { data: files, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId], queryFn: async () => (await filesApi.list(projectId!)).data, enabled: !!projectId });
+  const { data: files, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
   const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage)).data, enabled: !!projectId && !!selectedFile });
   const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern) });
   const { data: notesData } = useQuery({ queryKey: ["notes", projectId], queryFn: async () => (await filesApi.getNotes(projectId!)).data, enabled: !!projectId });
+
+  const hasFiles = files && files.length > 0;
+
+  // Indexing status — poll while indexing is active
+  const { data: indexStatus } = useQuery({
+    queryKey: ["indexingStatus", projectId, cpeId],
+    queryFn: async () => (await patternsApi.indexingStatus(projectId!, cpeId)).data,
+    enabled: !!projectId && !!hasFiles,
+    refetchInterval: (query) => (query.state.data?.is_indexing ? 3000 : false),
+  });
+  const isIndexing = indexStatus?.is_indexing ?? false;
 
   // After content loads, scroll to the target line
   useEffect(() => {
@@ -82,9 +98,28 @@ export default function LogViewerPage() {
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (!projectId || !acceptedFiles.length) return;
     setIsUploading(true);
-    try { await filesApi.upload(projectId, acceptedFiles); qc.invalidateQueries({ queryKey: ["files", projectId] }); }
-    finally { setIsUploading(false); }
-  }, [projectId, qc]);
+    setProcessingStatus("Uploading files...");
+    try {
+      setProcessingStatus("Processing and extracting log files...");
+      const res = await filesApi.upload(projectId, acceptedFiles);
+
+      // If CPEs were created, set the first one immediately so file list is scoped
+      if (res.data.cpes && res.data.cpes.length > 0) {
+        setCPE({ serial: res.data.cpes[0], mac: null, date_from: null, date_to: null });
+        qc.invalidateQueries({ queryKey: ["cpes", projectId] });
+      }
+
+      qc.invalidateQueries({ queryKey: ["files", projectId] });
+      qc.invalidateQueries({ queryKey: ["indexingStatus", projectId] });
+      setProcessingStatus("Done! Indexing logs in background...");
+      setTimeout(() => setProcessingStatus(null), 2500);
+    } catch {
+      setProcessingStatus("Upload failed. Please try again.");
+      setTimeout(() => setProcessingStatus(null), 3000);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [projectId, qc, setCPE, cpeId]);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
   const doSearch = (p?: string) => { const pat = p || searchPattern; if (pat && selectedFile) { setActiveHighlight(pat); searchMutation.mutate(pat); } };
@@ -92,7 +127,6 @@ export default function LogViewerPage() {
   const saveNotes = async () => { if (!projectId) return; await filesApi.saveNotes(projectId, notes); setSaveStatus(`Saved ${new Date().toLocaleTimeString()}`); };
   if (notesData?.content && notes === "" && notesData.content !== notes) setNotes(notesData.content);
 
-  const hasFiles = files && files.length > 0;
   const searchResults = searchMutation.data?.data;
 
   /** Render a log line with syntax + optional search highlighting */
@@ -103,7 +137,27 @@ export default function LogViewerPage() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3rem)] overflow-hidden">
+    <div className="relative flex flex-col h-[calc(100vh-3rem)] overflow-hidden">
+      {/* ===== PROCESSING OVERLAY ===== */}
+      {processingStatus && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4 p-8 bg-card rounded-2xl border border-border shadow-xl max-w-sm text-center">
+            {isUploading ? (
+              <CircularProgress size={48} thickness={4} />
+            ) : (
+              <CheckCircleIcon style={{ fontSize: 48, color: "#188038" }} />
+            )}
+            <p className="text-sm font-medium">{processingStatus}</p>
+            {isUploading && (
+              <p className="text-[11px] text-muted-foreground">
+                Extracting archives, merging logs, and preparing files...
+                <br />This may take a moment for large uploads.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ===== TOOLBAR ===== */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0 flex-wrap">
         <div className="flex items-center gap-1 border border-input rounded-lg bg-background px-2 py-1 flex-1 min-w-[200px] max-w-md focus-within:ring-1 focus-within:ring-ring">
@@ -143,7 +197,14 @@ export default function LogViewerPage() {
         <div className="w-52 shrink-0 border-r border-border bg-card flex flex-col">
           <div className="flex items-center justify-between px-2 py-1.5 border-b border-border">
             <h3 className="text-[11px] font-semibold flex items-center gap-1 text-muted-foreground uppercase tracking-wider"><DescriptionIcon style={{ fontSize: 14 }} /> Files</h3>
-            <button onClick={() => qc.invalidateQueries({ queryKey: ["files", projectId] })} className="p-0.5 rounded hover:bg-muted"><RefreshIcon style={{ fontSize: 14 }} className="text-muted-foreground" /></button>
+            <div className="flex items-center gap-1">
+              {isIndexing && (
+                <span className="flex items-center gap-1 text-[9px] text-blue-600 dark:text-blue-400 font-medium" title="Background indexing in progress">
+                  <CircularProgress size={10} thickness={5} /> Indexing
+                </span>
+              )}
+              <button onClick={() => qc.invalidateQueries({ queryKey: ["files", projectId] })} className="p-0.5 rounded hover:bg-muted"><RefreshIcon style={{ fontSize: 14 }} className="text-muted-foreground" /></button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0.5">
             {filesLoading && <p className="text-[10px] text-muted-foreground p-2">Loading...</p>}

@@ -43,10 +43,11 @@ def _get_project_lock(project_id: str) -> threading.Lock:
         return _indexing_locks[project_id]
 
 
-def is_indexing(project_id: str) -> bool:
-    """Check if an indexer thread is currently running for a project."""
+def is_indexing(project_id: str, cpe_id: str = None) -> bool:
+    """Check if an indexer thread is currently running for a project (or project+CPE)."""
+    key = _make_lock_key(project_id, cpe_id)
     with _active_guard:
-        return project_id in _active_indexing
+        return key in _active_indexing
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,14 @@ def _collect_text_files(project_dir: Path) -> list:
 # Async indexer
 # ---------------------------------------------------------------------------
 
-def run_indexer_async(project_dir: Path, project_id: str, domains=None):
+def _make_lock_key(project_id: str, cpe_id: str = None) -> str:
+    """Build a unique lock key for project or project+cpe."""
+    if cpe_id:
+        return f"{project_id}__cpe__{cpe_id}"
+    return project_id
+
+
+def run_indexer_async(project_dir: Path, project_id: str, domains=None, cpe_id: str = None):
     """
     Run the rg+Drain3 domain-based indexer in a background thread.
 
@@ -94,22 +102,28 @@ def run_indexer_async(project_dir: Path, project_id: str, domains=None):
     index in parallel but the same project never has two concurrent
     indexer threads.
 
+    When cpe_id is provided:
+      - Scans files inside project_dir (should already point to the CPE subdir)
+      - Uses Qdrant collection ``project_{project_id}_cpe_{cpe_id}``
+
     Uses the lazy-loaded embedding model from api.app (not gui.app_instance).
     """
-    lock = _get_project_lock(project_id)
+    lock_key = _make_lock_key(project_id, cpe_id)
+    lock = _get_project_lock(lock_key)
     if not lock.acquire(blocking=False):
         logger.info(
-            f"[AsyncIndexer] Skipping -- indexer already running for project {project_id}"
+            f"[AsyncIndexer] Skipping -- indexer already running for {lock_key}"
         )
         return
 
     with _active_guard:
-        _active_indexing.add(project_id)
+        _active_indexing.add(lock_key)
 
     t0 = time.perf_counter()
     try:
         label = f"domains={domains}" if domains else "all domains"
-        logger.info(f"[AsyncIndexer] Starting indexing ({label}) for project {project_id}")
+        cpe_label = f" cpe={cpe_id}" if cpe_id else ""
+        logger.info(f"[AsyncIndexer] Starting indexing ({label}{cpe_label}) for project {project_id}")
 
         file_paths = _collect_text_files(project_dir)
         logger.info(f"[AsyncIndexer] Found {len(file_paths)} text files to scan")
@@ -128,10 +142,16 @@ def run_indexer_async(project_dir: Path, project_id: str, domains=None):
 
         from logai.indexer import RagIndexer
 
+        # Per-CPE or per-project Qdrant collection
+        if cpe_id:
+            collection_name = f"project_{project_id}_cpe_{cpe_id}"
+        else:
+            collection_name = f"project_{project_id}"
+
         indexer = RagIndexer(
             project_dir=project_dir,
             qdrant_url=QDRANT_URL,
-            collection_name=f"project_{project_id}",
+            collection_name=collection_name,
             shared_model=shared_model,
         )
         counts = indexer.index_all_domains(
@@ -147,15 +167,94 @@ def run_indexer_async(project_dir: Path, project_id: str, domains=None):
     finally:
         lock.release()
         with _active_guard:
-            _active_indexing.discard(project_id)
+            _active_indexing.discard(lock_key)
 
 
-def launch_async_indexer(project_dir: Path, project_id: str, domains=None):
+def launch_async_indexer(project_dir: Path, project_id: str, domains=None, cpe_id: str = None):
     """Launch the indexer in a daemon thread."""
-    logger.info(f"[Upload] Launching async indexer for project {project_id}")
+    cpe_label = f" cpe={cpe_id}" if cpe_id else ""
+    logger.info(f"[Upload] Launching async indexer for project {project_id}{cpe_label}")
     t = threading.Thread(
         target=run_indexer_async,
-        args=(project_dir, project_id, domains),
+        args=(project_dir, project_id, domains, cpe_id),
+        daemon=True,
+    )
+    t.start()
+
+
+def _run_batch_sequential(batch: list):
+    """
+    Process a batch of CPE indexing jobs sequentially in a single thread.
+
+    This avoids concurrent access to the shared SentenceTransformer model,
+    prevents I/O contention from parallel ripgrep processes, and eliminates
+    the risk of Qdrant upsert timeouts under heavy load.
+
+    All CPE lock keys are pre-registered in _active_indexing so the
+    frontend's ``is_indexing()`` poll returns True for queued CPEs too
+    (not just the one currently being processed).
+
+    Args:
+        batch: List of tuples (project_dir: Path, project_id: str, cpe_id: str).
+    """
+    total = len(batch)
+    logger.info(f"[BatchIndexer] Starting sequential indexing of {total} CPE(s)")
+
+    # Pre-register ALL CPEs as active so frontend polling shows them
+    # as "indexing" even while waiting in the queue.
+    all_keys = []
+    for project_dir, project_id, cpe_id in batch:
+        key = _make_lock_key(project_id, cpe_id)
+        all_keys.append(key)
+    with _active_guard:
+        _active_indexing.update(all_keys)
+
+    for idx, (project_dir, project_id, cpe_id) in enumerate(batch, 1):
+        key = _make_lock_key(project_id, cpe_id)
+        logger.info(f"[BatchIndexer] [{idx}/{total}] Indexing CPE {cpe_id}")
+        try:
+            run_indexer_async(project_dir, project_id, domains=None, cpe_id=cpe_id)
+        finally:
+            # run_indexer_async already removes the key from _active_indexing
+            # in its finally block, so no extra cleanup needed here.
+            pass
+
+    # Safety: ensure no stale keys remain if run_indexer_async skipped any
+    with _active_guard:
+        for key in all_keys:
+            _active_indexing.discard(key)
+
+    logger.info(f"[BatchIndexer] Completed all {total} CPE(s)")
+
+
+def launch_async_indexer_batch(batch: list):
+    """
+    Launch a single daemon thread that indexes multiple CPEs sequentially.
+
+    Use this instead of calling launch_async_indexer() in a loop, which
+    would spawn one thread per CPE and risk:
+      - Shared SentenceTransformer model corruption (not thread-safe)
+      - I/O contention from parallel ripgrep subprocesses
+      - Qdrant upsert timeouts under concurrent writes
+
+    Args:
+        batch: List of tuples (project_dir: Path, project_id: str, cpe_id: str).
+    """
+    if not batch:
+        return
+    if len(batch) == 1:
+        # Single CPE -- just launch normally
+        project_dir, project_id, cpe_id = batch[0]
+        launch_async_indexer(project_dir, project_id, cpe_id=cpe_id)
+        return
+
+    logger.info(
+        f"[Upload] Launching sequential batch indexer for "
+        f"{len(batch)} CPE(s): {[b[2] for b in batch]}"
+    )
+    t = threading.Thread(
+        target=_run_batch_sequential,
+        args=(batch,),
         daemon=True,
     )
     t.start()

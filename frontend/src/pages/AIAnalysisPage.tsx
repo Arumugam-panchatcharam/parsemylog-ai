@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { aiApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { useCPE } from "@/hooks/useCPE";
 import { highlightLogLine } from "@/lib/logHighlighter";
 import SearchIcon from "@mui/icons-material/Search";
 import TextIncreaseIcon from "@mui/icons-material/TextIncrease";
@@ -17,6 +18,7 @@ interface SearchResult { filename: string; template: string; frequency: number; 
 
 export default function AIAnalysisPage() {
   const { projectId } = useProject();
+  const { cpeId } = useCPE();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -27,13 +29,13 @@ export default function AIAnalysisPage() {
   const [fontSize, setFontSize] = useState(12);
   const contextRef = useRef<HTMLDivElement>(null);
 
-  const searchMutation = useMutation({ mutationFn: () => aiApi.search(projectId!, query), onSuccess: (res) => { setResults(res.data.results || []); setSelectedIdx(null); } });
+  const searchMutation = useMutation({ mutationFn: () => aiApi.search(projectId!, query, 10, cpeId), onSuccess: (res) => { setResults(res.data.results || []); setSelectedIdx(null); } });
   const selected = selectedIdx !== null ? results[selectedIdx] : null;
-  const { data: params } = useQuery({ queryKey: ["aiParams", projectId, selected?.template, selected?.parquet_path], queryFn: async () => (await aiApi.getParameters(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain })).data, enabled: !!projectId && !!selected });
-  const { data: loglines } = useQuery({ queryKey: ["aiLoglines", projectId, selected?.template, selected?.parquet_path], queryFn: async () => (await aiApi.getLoglines(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain })).data, enabled: !!projectId && !!selected });
+  const { data: params } = useQuery({ queryKey: ["aiParams", projectId, selected?.template, selected?.parquet_path, cpeId], queryFn: async () => (await aiApi.getParameters(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: cpeId })).data, enabled: !!projectId && !!selected });
+  const { data: loglines } = useQuery({ queryKey: ["aiLoglines", projectId, selected?.template, selected?.parquet_path, cpeId], queryFn: async () => (await aiApi.getLoglines(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: cpeId })).data, enabled: !!projectId && !!selected });
   const [selectedLogIdx, setSelectedLogIdx] = useState<number | null>(null);
   const selectedLog = selectedLogIdx !== null && loglines?.lines ? loglines.lines[selectedLogIdx] : null;
-  const { data: context } = useQuery({ queryKey: ["aiContext", projectId, selected?.template, selectedLog?.timestamp, timeWindow, timeUnit], queryFn: async () => (await aiApi.getContext(projectId!, { template: selected!.template, timestamp: selectedLog!.timestamp, window: timeWindow, unit: timeUnit, filename: selected!.filename, parquet_path: selected!.parquet_path })).data, enabled: !!projectId && !!selected && !!selectedLog });
+  const { data: context } = useQuery({ queryKey: ["aiContext", projectId, selected?.template, selectedLog?.timestamp, timeWindow, timeUnit, cpeId], queryFn: async () => (await aiApi.getContext(projectId!, { template: selected!.template, timestamp: selectedLog!.timestamp, window: timeWindow, unit: timeUnit, filename: selected!.filename, parquet_path: selected!.parquet_path, cpe_id: cpeId })).data, enabled: !!projectId && !!selected && !!selectedLog });
   useEffect(() => { if (contextRef.current) contextRef.current.scrollTop = contextRef.current.scrollHeight; }, [context]);
 
   const handleSearch = () => { if (query.trim()) searchMutation.mutate(); };

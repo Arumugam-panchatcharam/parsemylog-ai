@@ -42,9 +42,12 @@ def _verify_project_access(project_id, user_id):
     return project, None
 
 
-def _get_project_dir(user_id, project_id):
-    """Get the project directory path."""
-    return Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+def _get_project_dir(user_id, project_id, cpe_id=None):
+    """Get the project directory path, optionally scoped to a CPE."""
+    base = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    if cpe_id:
+        return base / cpe_id
+    return base
 
 
 # ---------- Upload ----------
@@ -83,45 +86,101 @@ def upload_files(project_id):
             saved_filenames.append(f.filename)
             logger.info(f"[Upload] Saved {f.filename} ({filepath.stat().st_size} bytes)")
 
-    # Process: extract tarballs, merge logs, parse telemetry
-    logger.info(f"[Upload] Processing uploaded files in {project_dir}")
+    # Detect multi-CPE zip uploads
     file_manager = FileManager()
-    file_manager.process_uploaded_files(project_dir, project.name)
+    cpe_zips = FileManager.detect_cpe_zips(project_dir)
 
-    # Save merged log files to DB
-    merged_dir = project_dir / MERGED_LOGS_DIR_NAME
-    merged_count = 0
-    if merged_dir.exists():
-        for fname in os.listdir(merged_dir):
-            dbm.save_local_file(Path(merged_dir / fname), project_id)
-            merged_count += 1
-        logger.info(f"[Upload] Saved {merged_count} merged log files to DB")
+    if cpe_zips:
+        # ---- Multi-CPE upload path ----
+        logger.info(f"[Upload] Detected {len(cpe_zips)} CPE zip(s)")
+        cpe_results = file_manager.process_multi_cpe_upload(project_dir, project.name)
 
-    # Save archive files to DB
-    for archive_path in glob.glob(str(project_dir / "*.zip")):
-        if os.path.exists(archive_path):
-            dbm.save_local_file(Path(archive_path), project_id)
+        # Collect indexing jobs — launched as a single sequential batch
+        # to avoid shared-model corruption and I/O contention.
+        indexer_batch = []
 
-    # Clean up merged_logs directory
-    if merged_dir.exists():
-        shutil.rmtree(merged_dir)
+        for cpe in cpe_results:
+            serial = cpe["serial"]
+            # Save CPE metadata to DB
+            dbm.save_cpe(
+                project_id=project_id,
+                serial=serial,
+                mac=cpe.get("mac"),
+                date_from=cpe.get("date_from"),
+                date_to=cpe.get("date_to"),
+            )
+            # Save CPE files to DB
+            cpe_dir = project_dir / serial
+            if cpe_dir.exists():
+                for f in cpe_dir.iterdir():
+                    if f.is_file() and f.stat().st_size > 0:
+                        dbm.save_cpe_file(project_id, serial, f, f.name)
+                # Queue per-CPE indexer (processed sequentially)
+                indexer_batch.append((cpe_dir, project_id, serial))
 
-    # Launch async rg+Drain3 indexing
-    _launch_async_indexer(project_dir, project_id)
+        # Launch all CPEs in a single background thread (sequential)
+        _launch_async_indexer_batch(indexer_batch)
 
-    return jsonify({
-        "message": f"Uploaded {len(saved_filenames)} file(s)",
-        "files": saved_filenames,
-    }), 201
+        # Clean up zip files after processing
+        for cpe_info in cpe_zips:
+            try:
+                cpe_info["path"].unlink()
+            except Exception:
+                pass
+
+        return jsonify({
+            "message": f"Uploaded {len(saved_filenames)} file(s), processed {len(cpe_results)} CPE(s)",
+            "files": saved_filenames,
+            "cpes": [c["serial"] for c in cpe_results],
+        }), 201
+    else:
+        # ---- Legacy single-upload path ----
+        logger.info(f"[Upload] Processing uploaded files in {project_dir}")
+        file_manager.process_uploaded_files(project_dir, project.name)
+
+        # Save merged log files to DB
+        merged_dir = project_dir / MERGED_LOGS_DIR_NAME
+        merged_count = 0
+        if merged_dir.exists():
+            for fname in os.listdir(merged_dir):
+                dbm.save_local_file(Path(merged_dir / fname), project_id)
+                merged_count += 1
+            logger.info(f"[Upload] Saved {merged_count} merged log files to DB")
+
+        # Save archive files to DB
+        for archive_path in glob.glob(str(project_dir / "*.zip")):
+            if os.path.exists(archive_path):
+                dbm.save_local_file(Path(archive_path), project_id)
+
+        # Clean up merged_logs directory
+        if merged_dir.exists():
+            shutil.rmtree(merged_dir)
+
+        # Launch async rg+Drain3 indexing
+        _launch_async_indexer(project_dir, project_id)
+
+        return jsonify({
+            "message": f"Uploaded {len(saved_filenames)} file(s)",
+            "files": saved_filenames,
+        }), 201
 
 
-def _launch_async_indexer(project_dir, project_id):
-    """Launch background rg+Drain3 indexer thread."""
+def _launch_async_indexer(project_dir, project_id, cpe_id=None):
+    """Launch background rg+Drain3 indexer thread (single CPE or legacy)."""
     try:
         from api.indexer import launch_async_indexer
-        launch_async_indexer(project_dir, project_id)
+        launch_async_indexer(project_dir, project_id, cpe_id=cpe_id)
     except Exception as e:
         logger.warning(f"[Upload] Could not launch async indexer: {e}")
+
+
+def _launch_async_indexer_batch(batch):
+    """Launch a single background thread that indexes multiple CPEs sequentially."""
+    try:
+        from api.indexer import launch_async_indexer_batch
+        launch_async_indexer_batch(batch)
+    except Exception as e:
+        logger.warning(f"[Upload] Could not launch batch indexer: {e}")
 
 
 # ---------- List Files ----------
@@ -132,6 +191,7 @@ def list_files(project_id):
     """
     List all files in a project.
 
+    Query params: cpe_id (optional)
     Returns: [ { "filename", "original_name", "file_size", "uploaded_at" } ]
     """
     user_id = get_user_id()
@@ -139,7 +199,8 @@ def list_files(project_id):
     if err:
         return err
 
-    files = dbm.get_project_files(project_id)
+    cpe_id = request.args.get("cpe_id")
+    files = dbm.get_project_files(project_id, cpe_id=cpe_id)
     result = []
     for f in files:
         filename, file_path, original_name, file_size, uploaded_at = f

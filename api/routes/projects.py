@@ -119,3 +119,34 @@ def delete_project(project_id):
         return jsonify({"error": message}), 400
 
     return jsonify({"message": "Project deleted successfully"}), 200
+
+
+# ---------- CPE listing ----------
+
+@projects_bp.route("/<project_id>/cpes", methods=["GET"])
+@jwt_required()
+def list_cpes(project_id):
+    """
+    List all CPE devices in a project.
+
+    Returns: [ { "serial", "mac", "date_from", "date_to", "created_at" } ]
+    """
+    user_id = get_user_id()
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+    if project.user_id != user_id:
+        return jsonify({"error": "Access denied"}), 403
+
+    cpes = dbm.list_project_cpes(project_id)
+    result = []
+    for c in cpes:
+        result.append({
+            "serial": c.serial,
+            "mac": c.mac,
+            "date_from": c.date_from,
+            "date_to": c.date_to,
+            "created_at": str(c.created_at) if c.created_at else None,
+        })
+
+    return jsonify(result), 200

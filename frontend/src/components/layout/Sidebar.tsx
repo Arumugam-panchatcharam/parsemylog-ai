@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useProject } from "@/hooks/useProject";
+import { useCPE } from "@/hooks/useCPE";
 import AnalyticsIcon from "@mui/icons-material/Analytics";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
@@ -15,6 +16,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import CPESelector from "@/components/CPESelector";
 
 const workspaceNav = [
   { to: "/workspace/viewer", icon: SearchIcon, label: "Log Viewer" },
@@ -27,6 +29,7 @@ const workspaceNav = [
 export default function Sidebar() {
   const { user, logout } = useAuth();
   const { projectName, clearProject } = useProject();
+  const { clearCPE } = useCPE();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const isWorkspace = location.pathname.startsWith("/workspace");
@@ -76,13 +79,16 @@ export default function Sidebar() {
         </div>
       )}
 
+      {/* CPE Selector (multi-CPE projects) */}
+      {isWorkspace && !collapsed && <CPESelector />}
+
       {/* Navigation */}
       <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
         {isWorkspace ? (
           <>
             <NavLink
               to="/dashboard"
-              onClick={clearProject}
+              onClick={() => { clearProject(); clearCPE(); }}
               className={cn(
                 "flex items-center gap-2 px-3 py-2 text-sm rounded-lg hover:bg-sidebar-accent text-muted-foreground",
                 collapsed && "justify-center px-2"

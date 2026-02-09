@@ -43,8 +43,11 @@ def _verify_project(project_id, user_id):
     return project, None
 
 
-def _project_dir(user_id, project_id):
-    return Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+def _project_dir(user_id, project_id, cpe_id=None):
+    base = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    if cpe_id:
+        return base / cpe_id
+    return base
 
 
 def _load_domain_parquet(project_dir, domain):
@@ -69,7 +72,8 @@ def list_domains(project_id):
     if err:
         return err
 
-    pdir = _project_dir(user_id, project_id)
+    cpe_id = request.args.get("cpe_id")
+    pdir = _project_dir(user_id, project_id, cpe_id)
     result = []
     for domain in _ALL_DOMAINS:
         pq_path = pdir / f"{domain}_rg.parquet"
@@ -110,8 +114,9 @@ def analyze_domain(project_id, domain):
 
     data = request.get_json(silent=True) or {}
     file_filter = data.get("file_filter")
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
-    pdir = _project_dir(user_id, project_id)
+    pdir = _project_dir(user_id, project_id, cpe_id)
     df = _load_domain_parquet(pdir, domain)
 
     if df.empty:
@@ -177,11 +182,12 @@ def get_timeseries(project_id, domain):
     interval = request.args.get("interval", 0, type=int)
     file_filter_str = request.args.get("file_filter", "")
     file_filter = [f.strip() for f in file_filter_str.split(",") if f.strip()] or None
+    cpe_id = request.args.get("cpe_id")
 
     if not template:
         return jsonify({"error": "template parameter is required"}), 400
 
-    pdir = _project_dir(user_id, project_id)
+    pdir = _project_dir(user_id, project_id, cpe_id)
     df = _load_domain_parquet(pdir, domain)
     if df.empty or "timestamp" not in df.columns:
         return jsonify({"data": []}), 200
@@ -237,11 +243,12 @@ def get_parameters(project_id, domain):
     template = request.args.get("template", "")
     file_filter_str = request.args.get("file_filter", "")
     file_filter = [f.strip() for f in file_filter_str.split(",") if f.strip()] or None
+    cpe_id = request.args.get("cpe_id")
 
     if not template:
         return jsonify({"error": "template parameter is required"}), 400
 
-    pdir = _project_dir(user_id, project_id)
+    pdir = _project_dir(user_id, project_id, cpe_id)
     df = _load_domain_parquet(pdir, domain)
     if df.empty:
         return jsonify({"parameters": []}), 200
@@ -310,11 +317,12 @@ def get_loglines(project_id, domain):
     file_filter = [f.strip() for f in file_filter_str.split(",") if f.strip()] or None
     page = request.args.get("page", 1, type=int)
     page_size = request.args.get("page_size", 20, type=int)
+    cpe_id = request.args.get("cpe_id")
 
     if not template:
         return jsonify({"error": "template parameter is required"}), 400
 
-    pdir = _project_dir(user_id, project_id)
+    pdir = _project_dir(user_id, project_id, cpe_id)
     df = _load_domain_parquet(pdir, domain)
     if df.empty:
         return jsonify({"lines": [], "total": 0}), 200
@@ -361,7 +369,8 @@ def indexing_status(project_id):
     if err:
         return err
 
-    pdir = _project_dir(user_id, project_id)
+    cpe_id = request.args.get("cpe_id")
+    pdir = _project_dir(user_id, project_id, cpe_id)
     domains = {}
     for domain in _ALL_DOMAINS:
         indexed = (pdir / f"{domain}_rg.parquet").exists()
@@ -376,7 +385,7 @@ def indexing_status(project_id):
     is_indexing_flag = False
     try:
         from api.indexer import is_indexing as _is_indexing
-        is_indexing_flag = _is_indexing(project_id)
+        is_indexing_flag = _is_indexing(project_id, cpe_id=cpe_id)
     except Exception:
         pass
 

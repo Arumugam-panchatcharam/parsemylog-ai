@@ -521,7 +521,9 @@ def get_reboots(project_id):
     if err:
         return err
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cpe_id = request.args.get("cpe_id")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
     if not project_dir.exists():
         return jsonify({"error": "Project directory not found"}), 404
 
@@ -570,6 +572,7 @@ def run_scan(project_id):
     bucket_minutes = int(data.get("bucket_minutes", 5))
     time_range = data.get("time_range", {})
     filter_pre_ntp = bool(data.get("filter_pre_ntp", False))
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
     if bucket_minutes < 1:
         bucket_minutes = 1
@@ -596,7 +599,8 @@ def run_scan(project_id):
                 "error": f"Invalid regex for pattern '{p.get('name', '?')}': {e}"
             }), 400
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
     if not project_dir.exists():
         return jsonify({"error": "Project directory not found"}), 404
 
@@ -680,7 +684,9 @@ def get_scan_results(project_id, scan_id):
     if not re.fullmatch(r"[0-9a-f]{12}", scan_id):
         return jsonify({"error": "Invalid scan_id"}), 400
 
-    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cpe_id = request.args.get("cpe_id")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
     cache_path = _scan_result_path(project_dir, scan_id)
 
     if not cache_path.exists():

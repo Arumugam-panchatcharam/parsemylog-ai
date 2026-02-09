@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { ProjectProvider } from "@/hooks/useProject";
+import { CPEProvider } from "@/hooks/useCPE";
 import AppLayout from "@/components/layout/AppLayout";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
@@ -83,9 +84,11 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ProjectProvider>
-          <BrowserRouter>
-            <AppRoutes />
-          </BrowserRouter>
+          <CPEProvider>
+            <BrowserRouter>
+              <AppRoutes />
+            </BrowserRouter>
+          </CPEProvider>
         </ProjectProvider>
       </AuthProvider>
     </QueryClientProvider>

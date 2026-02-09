@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { telemetryApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
 import TimelineIcon from "@mui/icons-material/Timeline";
 import WifiIcon from "@mui/icons-material/Wifi";
@@ -84,9 +85,10 @@ const NO_TOOLBAR = { displayModeBar: false } as const;
 /* ================================================================ Component */
 export default function TelemetryPage() {
   const { projectId } = useProject();
+  const { cpeId } = useCPE();
   const { data: rawData, isLoading, isError, error } = useQuery<TelemetryData>({
-    queryKey: ["telemetry", projectId],
-    queryFn: async () => (await telemetryApi.parse(projectId!)).data,
+    queryKey: ["telemetry", projectId, cpeId],
+    queryFn: async () => (await telemetryApi.parse(projectId!, cpeId)).data,
     enabled: !!projectId, retry: false, staleTime: 5 * 60 * 1000,
   });
   const data = rawData ?? null;

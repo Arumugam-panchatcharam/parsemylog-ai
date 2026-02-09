@@ -76,6 +76,12 @@ class DBManager:
                 cascade="all, delete-orphan",
                 passive_deletes=True
             )
+            cpes = self.db.relationship(
+                "ProjectCPE",
+                back_populates="project",
+                cascade="all, delete-orphan",
+                passive_deletes=True
+            )
 
             def __iter__(self):
                 yield self.id
@@ -86,12 +92,29 @@ class DBManager:
 
         self.Project = Project
 
+        # ---------------- Project CPE Model ----------------
+        class ProjectCPE(self.db.Model):
+            __tablename__ = "project_cpes"
+
+            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
+            project_id = self.db.Column(self.db.String(256), self.db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+            serial = self.db.Column(self.db.String(256), nullable=False)
+            mac = self.db.Column(self.db.String(64), nullable=True)
+            date_from = self.db.Column(self.db.String(32), nullable=True)
+            date_to = self.db.Column(self.db.String(32), nullable=True)
+            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
+
+            project = self.db.relationship("Project", back_populates="cpes")
+
+        self.ProjectCPE = ProjectCPE
+
         # ---------------- Project File Model ----------------
         class ProjectFile(self.db.Model):
             __tablename__ = "project_files"
 
             id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
             project_id = self.db.Column(self.db.String(256), self.db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+            cpe_id = self.db.Column(self.db.String(256), nullable=True)  # serial of CPE, or None for legacy
             filename = self.db.Column(self.db.String(256), nullable=False)
             original_name = self.db.Column(self.db.String(256), nullable=False)
             file_path = self.db.Column(self.db.String(512), nullable=False)
@@ -117,9 +140,25 @@ class DBManager:
     def create_tables(self, app):
         with app.app_context():
             self.db.create_all()
+            # Migrate existing tables: add cpe_id column if missing
+            self._migrate_add_cpe_columns(app)
             # create default admin user if not exists
             if not self.db.session.query(self.User).filter_by(username='admin').first():
                 self.create_user("admin", "admin123", is_admin=True)
+
+    def _migrate_add_cpe_columns(self, app):
+        """Add cpe_id column to project_files if it doesn't exist (for upgrades)."""
+        try:
+            with app.app_context():
+                from sqlalchemy import text, inspect as sa_inspect
+                inspector = sa_inspect(self.db.engine)
+                cols = [c["name"] for c in inspector.get_columns("project_files")]
+                if "cpe_id" not in cols:
+                    self.db.session.execute(text("ALTER TABLE project_files ADD COLUMN cpe_id VARCHAR(256)"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added cpe_id column to project_files")
+        except Exception as e:
+            logger.warning(f"[Migration] Could not add cpe_id column (may already exist): {e}")
 
     # ---------------- User operations ----------------
     def create_user(self, username: str, password: str, email: Optional[str] = None, is_admin: bool = False) -> Tuple[bool, Optional[str]]:
@@ -256,16 +295,68 @@ class DBManager:
             self.db.session.rollback()
             return False, None,str(e)
 
-    def get_project_files(self, project_id: str):
-        #print("Getting files for project:", project_id)
-        #print(self.db.session.query(self.ProjectFile).filter_by(project_id=project_id).all())
-        files = (
-            self.db.session.query(self.ProjectFile)
+    def get_project_files(self, project_id: str, cpe_id: str = None):
+        q = self.db.session.query(self.ProjectFile).filter_by(project_id=project_id)
+        if cpe_id is not None:
+            q = q.filter_by(cpe_id=cpe_id)
+        return q.order_by(func.lower(self.ProjectFile.original_name)).all()
+
+    # ---------------- CPE operations ----------------
+    def list_project_cpes(self, project_id: str):
+        return (
+            self.db.session.query(self.ProjectCPE)
             .filter_by(project_id=project_id)
-            .order_by(func.lower(self.ProjectFile.original_name))
+            .order_by(self.ProjectCPE.serial)
             .all()
+        )
+
+    def save_cpe(self, project_id: str, serial: str, mac: str = None,
+                 date_from: str = None, date_to: str = None):
+        existing = (
+            self.db.session.query(self.ProjectCPE)
+            .filter_by(project_id=project_id, serial=serial)
+            .first()
+        )
+        if existing:
+            if mac:
+                existing.mac = mac
+            if date_from:
+                existing.date_from = date_from
+            if date_to:
+                existing.date_to = date_to
+        else:
+            cpe = self.ProjectCPE(
+                project_id=project_id, serial=serial,
+                mac=mac, date_from=date_from, date_to=date_to,
             )
-        return files
+            self.db.session.add(cpe)
+        try:
+            self.db.session.commit()
+            return True
+        except Exception as e:
+            self.db.session.rollback()
+            logger.error(f"Failed to save CPE {serial}: {e}")
+            return False
+
+    def save_cpe_file(self, project_id: str, cpe_id: str, file_path: Path, filename: str):
+        """Save a file record for a specific CPE."""
+        size = file_path.stat().st_size if file_path.exists() else 0
+        pf = self.ProjectFile(
+            project_id=project_id,
+            cpe_id=cpe_id,
+            filename=filename,
+            original_name=filename,
+            file_path=str(file_path),
+            file_size=size,
+        )
+        self.db.session.add(pf)
+        try:
+            self.db.session.commit()
+            return True
+        except Exception as e:
+            self.db.session.rollback()
+            logger.error(f"Failed to save CPE file {filename}: {e}")
+            return False
     
     def get_project_file_info(self, project_id:str, filename: str) -> Optional[Any]:
         return self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, filename=filename).first()
@@ -303,27 +394,36 @@ class DBManager:
         #print(self.db.session.query(self.Project).filter_by(project_id=project_id).first())
         return self.db.session.query(self.Project).filter_by(id=project_id).first()
     
-    @staticmethod
-    def _delete_qdrant_collection(project_id: str) -> None:
+    def _delete_qdrant_collections(self, project_id: str) -> None:
         """
-        Delete the Qdrant vector collection for a project.
+        Delete all Qdrant vector collections for a project.
 
-        Collection naming convention: ``project_{project_id}``.
-        Failures are logged but never propagated -- Qdrant cleanup is
-        best-effort so that project deletion always succeeds.
-
-        Args:
-            project_id: Project UUID whose collection should be removed.
+        Handles both legacy ``project_{project_id}`` and per-CPE
+        ``project_{project_id}_cpe_{serial}`` collection names.
+        Failures are logged but never propagated.
         """
-        collection_name = f"project_{project_id}"
         try:
             from qdrant_client import QdrantClient
             client = QdrantClient(url=QDRANT_URL, timeout=10)
-            client.delete_collection(collection_name)
-            logger.info(f"Deleted Qdrant collection '{collection_name}'")
+
+            # Delete main legacy collection
+            try:
+                client.delete_collection(f"project_{project_id}")
+                logger.info(f"Deleted Qdrant collection 'project_{project_id}'")
+            except Exception:
+                pass
+
+            # Delete per-CPE collections
+            cpes = self.list_project_cpes(project_id)
+            for cpe in cpes:
+                name = f"project_{project_id}_cpe_{cpe.serial}"
+                try:
+                    client.delete_collection(name)
+                    logger.info(f"Deleted Qdrant collection '{name}'")
+                except Exception:
+                    pass
         except Exception as e:
-            # Best-effort: log and continue even if Qdrant is unreachable
-            logger.warning(f"Failed to delete Qdrant collection '{collection_name}': {e}")
+            logger.warning(f"Failed to delete Qdrant collections for project {project_id}: {e}")
 
     def delete_project(self, project_id: str, user_id: int) -> Tuple[bool, Optional[str]]:
         """
@@ -355,7 +455,7 @@ class DBManager:
                         shutil.rmtree(project_dir, ignore_errors=True)
 
                     # Clean up Qdrant vector collection for this project
-                    self._delete_qdrant_collection(project_id)
+                    self._delete_qdrant_collections(project_id)
                 finally:
                     lock.release()
             except ImportError:
@@ -365,7 +465,7 @@ class DBManager:
                 project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
                 if project_dir.exists():
                     shutil.rmtree(project_dir, ignore_errors=True)
-                self._delete_qdrant_collection(project_id)
+                self._delete_qdrant_collections(project_id)
 
             logger.info(f"Project {project_id} deleted successfully")
             return True, "Project deleted successfully"
@@ -477,7 +577,7 @@ class DBManager:
                 if project_dir.exists():
                     shutil.rmtree(project_dir)
                 # Clean up Qdrant vector collection for each project
-                self._delete_qdrant_collection(project.id)
+                self._delete_qdrant_collections(project.id)
                 self.db.session.delete(project)
 
             # Finally delete the user
