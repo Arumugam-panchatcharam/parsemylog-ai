@@ -1,4 +1,6 @@
-# Flask REST API server
+# Flask REST API server — dependencies only.
+# Source code is bind-mounted at runtime via docker-compose.yml,
+# so you only need to rebuild this image when requirements.txt changes.
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -9,12 +11,6 @@ RUN apt-get update && apt-get install -y ripgrep && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY api/ ./api/
-COPY logai/ ./logai/
-COPY configs/ ./configs/
-COPY logai_api_wsgi.py run_api.py ./
-
 VOLUME ["/app/user_uploads", "/app/bge-small-en-v1.5-local"]
 
-EXPOSE 40901
+EXPOSE 5000
