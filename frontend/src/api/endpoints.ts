@@ -108,6 +108,47 @@ export const embeddingApi = {
     `${api.defaults.baseURL}/projects/${projectId}/templates/download`,
 };
 
+// ---------- Pattern Analyzer ----------
+export interface UserPattern {
+  name: string;
+  regex: string;
+  enabled: boolean;
+}
+
+/** Domain-grouped patterns: { domain_name: UserPattern[] } */
+export type DomainPatterns = Record<string, UserPattern[]>;
+
+export const patternAnalyzerApi = {
+  getPatterns: (projectId: string) =>
+    api.get<{ domains: DomainPatterns }>(`/projects/${projectId}/regex-patterns`),
+  savePatterns: (projectId: string, domains: DomainPatterns) =>
+    api.put<{ domains: DomainPatterns; saved: number }>(`/projects/${projectId}/regex-patterns`, { domains }),
+  getPresets: (projectId: string) =>
+    api.get<{ presets: DomainPatterns }>(`/projects/${projectId}/regex-patterns/presets`),
+  exportUrl: (projectId: string, format: "yaml" | "json") =>
+    `${api.defaults.baseURL}/projects/${projectId}/regex-patterns/export?format=${format}`,
+  getReboots: (projectId: string) =>
+    api.get<{ reboots: Array<{ timestamp: string; reason: string }> }>(`/projects/${projectId}/reboots`),
+  scan: (projectId: string, data: {
+    patterns: UserPattern[];
+    bucket_minutes: number;
+    time_range?: { start: string; end: string };
+    filter_pre_ntp?: boolean;
+  }) => api.post<{
+    scan_id: string;
+    total_matches: number;
+    trace_count: number;
+    reboots_count: number;
+    elapsed_ms: number;
+  }>(`/projects/${projectId}/regex-scan`, data),
+  getScanResults: (projectId: string, scanId: string) =>
+    api.get<{
+      traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
+      reboots: Array<{ timestamp: string; reason: string }>;
+      total_matches: number;
+    }>(`/projects/${projectId}/regex-scan/${scanId}/results`),
+};
+
 // ---------- Admin ----------
 export const adminApi = {
   listUsers: () => api.get("/admin/users"),

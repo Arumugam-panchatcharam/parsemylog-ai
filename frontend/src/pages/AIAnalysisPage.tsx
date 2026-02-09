@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { aiApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { highlightLogLine } from "@/lib/logHighlighter";
@@ -10,11 +11,13 @@ import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import CircularProgress from "@mui/material/CircularProgress";
 import FormatColorTextIcon from "@mui/icons-material/FormatColorText";
+import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 
 interface SearchResult { filename: string; template: string; frequency: number; similarity: number; domain: string; parquet_path: string; }
 
 export default function AIAnalysisPage() {
   const { projectId } = useProject();
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
@@ -60,11 +63,12 @@ export default function AIAnalysisPage() {
           <h3 className="text-sm font-semibold mb-2">Results ({results.length} patterns)</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
-              <thead><tr className="border-b border-border text-left"><th className="py-2 px-3">Filename</th><th className="py-2 px-3">Template</th><th className="py-2 px-3 text-center">Freq</th><th className="py-2 px-3 text-center">Score</th></tr></thead>
+              <thead><tr className="border-b border-border text-left"><th className="py-2 px-3">Filename</th><th className="py-2 px-3">Template</th><th className="py-2 px-3 text-center">Freq</th><th className="py-2 px-3 text-center">Score</th><th className="py-2 px-3 text-center w-10"></th></tr></thead>
               <tbody>{results.map((r, idx) => (
                 <tr key={idx} onClick={() => { setSelectedIdx(idx); setSelectedLogIdx(null); }} className={`border-b border-border cursor-pointer transition-colors ${selectedIdx === idx ? "bg-accent" : "hover:bg-muted"}`}>
                   <td className="py-2 px-3">{r.filename}</td><td className="py-2 px-3 font-mono max-w-md truncate">{r.template}</td>
                   <td className="py-2 px-3 text-center">{r.frequency}</td><td className={`py-2 px-3 text-center font-medium ${r.similarity >= 0.8 ? "text-green-600" : r.similarity < 0.5 ? "text-muted-foreground" : ""}`}>{r.similarity}</td>
+                  <td className="py-2 px-3 text-center"><button onClick={(e) => { e.stopPropagation(); navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(r.template)}`); }} title="Add to Pattern Analyzer" className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/20 text-muted-foreground hover:text-blue-600 transition-colors"><ManageSearchIcon style={{ fontSize: 16 }} /></button></td>
                 </tr>
               ))}</tbody>
             </table>

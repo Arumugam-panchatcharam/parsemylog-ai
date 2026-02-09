@@ -18,7 +18,7 @@ from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id
-from gui.file_manager import FileManager
+from api.file_manager import FileManager
 from logai.utils.constants import (
     UPLOAD_DIRECTORY,
     MERGED_LOGS_DIR_NAME,

@@ -94,7 +94,7 @@ export default function DashboardPage() {
       )}
 
       {/* Project Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
         {projects?.map((p: { id: string; name: string; description: string; created_at: string }) => (
           <div key={p.id} className="bg-card border border-border rounded-2xl mat-card">
             <div className="p-4">

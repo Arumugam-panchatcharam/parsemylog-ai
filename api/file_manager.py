@@ -35,7 +35,7 @@ from logai.utils.constants import (
     MERGED_LOGS_ARCHIVE_NAME,
     TELEMETRY_PROFILES_DIR_NAME,
 )
-from gui.log_merger import LogMerger
+from api.log_merger import LogMerger
 from typing import List
 
 from logai.telemetry_parser import parse_telemetry_file

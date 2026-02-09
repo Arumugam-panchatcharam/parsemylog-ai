@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDropzone } from "react-dropzone";
 import { filesApi } from "@/api/endpoints";
@@ -53,11 +53,31 @@ export default function LogViewerPage() {
   const [fontSize, setFontSize] = useState(12);
   const [showNotes, setShowNotes] = useState(false);
   const [showSearch, setShowSearch] = useState(true);
+  const [scrollToLine, setScrollToLine] = useState<number | null>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
   const { data: files, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId], queryFn: async () => (await filesApi.list(projectId!)).data, enabled: !!projectId });
   const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage)).data, enabled: !!projectId && !!selectedFile });
   const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern) });
   const { data: notesData } = useQuery({ queryKey: ["notes", projectId], queryFn: async () => (await filesApi.getNotes(projectId!)).data, enabled: !!projectId });
+
+  // After content loads, scroll to the target line
+  useEffect(() => {
+    if (scrollToLine !== null && fileContent && logContainerRef.current) {
+      const lineIdx = scrollToLine - (fileContent.start_line || 1);
+      if (lineIdx >= 0) {
+        requestAnimationFrame(() => {
+          const el = logContainerRef.current?.querySelector(`[data-line="${scrollToLine}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("bg-amber-700/40");
+            setTimeout(() => el.classList.remove("bg-amber-700/40"), 2000);
+          }
+          setScrollToLine(null);
+        });
+      }
+    }
+  }, [scrollToLine, fileContent]);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (!projectId || !acceptedFiles.length) return;
@@ -166,15 +186,18 @@ export default function LogViewerPage() {
             </div>
           )}
 
-          <div className="flex-1 overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px` }}>
+          <div ref={logContainerRef} className="flex-1 overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px` }}>
             {!selectedFile && <div className="flex items-center justify-center h-full text-slate-500 text-sm">Select a file from the sidebar to view its contents</div>}
             {contentLoading && <div className="p-4 text-slate-400 text-xs">Loading...</div>}
-            {fileContent?.lines?.map((line: string, idx: number) => (
-              <div key={idx} className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed">
-                <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{(fileContent.start_line || 1) + idx}</span>
-                {renderLine(line)}
-              </div>
-            ))}
+            {fileContent?.lines?.map((line: string, idx: number) => {
+              const lineNum = (fileContent.start_line || 1) + idx;
+              return (
+                <div key={idx} data-line={lineNum} className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed transition-colors duration-500">
+                  <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{lineNum}</span>
+                  {renderLine(line)}
+                </div>
+              );
+            })}
           </div>
 
           {searchResults && (
@@ -186,7 +209,10 @@ export default function LogViewerPage() {
               {showSearch && (
                 <div className="overflow-auto max-h-52 bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px` }}>
                   {searchResults.matches.map((m: { line_number: number; text: string; page: number }, idx: number) => (
-                    <div key={idx} onClick={() => setCurrentPage(m.page)} className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed">
+                    <div key={idx}
+                      onDoubleClick={() => { setCurrentPage(m.page); setScrollToLine(m.line_number); }}
+                      title="Double-click to jump to this line"
+                      className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none">
                       <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{m.line_number}</span>
                       {renderLine(m.text)}
                     </div>

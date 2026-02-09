@@ -6,6 +6,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import TimelineIcon from "@mui/icons-material/Timeline";
 import PsychologyIcon from "@mui/icons-material/Psychology";
+import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import LogoutIcon from "@mui/icons-material/Logout";
 import PersonIcon from "@mui/icons-material/Person";
@@ -18,6 +19,7 @@ import { useState } from "react";
 const workspaceNav = [
   { to: "/workspace/viewer", icon: SearchIcon, label: "Log Viewer" },
   { to: "/workspace/pattern", icon: AnalyticsIcon, label: "Pattern" },
+  { to: "/workspace/pattern-analyzer", icon: ManageSearchIcon, label: "Pattern Analyzer" },
   { to: "/workspace/telemetry", icon: TimelineIcon, label: "Telemetry" },
   { to: "/workspace/ai", icon: PsychologyIcon, label: "AI Analysis" },
 ];

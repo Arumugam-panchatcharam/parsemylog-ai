@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import Plot from "react-plotly.js";
@@ -12,11 +13,13 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import SelectAllIcon from "@mui/icons-material/SelectAll";
 import DeselectIcon from "@mui/icons-material/Deselect";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
 
 export default function PatternPage() {
   const { projectId } = useProject();
+  const navigate = useNavigate();
   const [selectedDomain, setSelectedDomain] = useState<string>("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [timeInterval, setTimeInterval] = useState(0);
@@ -26,7 +29,7 @@ export default function PatternPage() {
   const [appliedFiles, setAppliedFiles] = useState<string[]>([]);
   const [showFileFilter, setShowFileFilter] = useState(false);
   // Keep a stable copy of domain source files from the INITIAL (unfiltered) analysis
-  const allSourceFilesRef = useRef<string[]>([]);
+  const [allSourceFiles, setAllSourceFiles] = useState<string[]>([]);
 
   const { data: domains } = useQuery({ queryKey: ["domains", projectId], queryFn: async () => (await patternsApi.listDomains(projectId!)).data, enabled: !!projectId });
   const { data: indexStatus } = useQuery({ queryKey: ["indexingStatus", projectId], queryFn: async () => (await patternsApi.indexingStatus(projectId!)).data, enabled: !!projectId, refetchInterval: (query) => (query.state.data?.all_done ? false : 5000) });
@@ -42,14 +45,14 @@ export default function PatternPage() {
   const chartData = analysisRaw?.chart_data;
   const summary = analysisRaw?.summary;
 
-  // Populate allSourceFilesRef from UNFILTERED analysis response
+  // Populate allSourceFiles from UNFILTERED analysis response
   useEffect(() => {
     if (analysisRaw?.source_files && appliedFiles.length === 0) {
-      allSourceFilesRef.current = analysisRaw.source_files;
+      setAllSourceFiles(analysisRaw.source_files);
     }
   }, [analysisRaw, appliedFiles]);
 
-  const domainSourceFiles = allSourceFilesRef.current;
+  const domainSourceFiles = allSourceFiles;
   const fileFilterStr = appliedFiles.length > 0 ? appliedFiles.join(",") : undefined;
 
   // Reset when domain changes
@@ -58,7 +61,7 @@ export default function PatternPage() {
     setSelectedFiles([]);
     setAppliedFiles([]);
     setShowFileFilter(false);
-    allSourceFilesRef.current = [];
+    setAllSourceFiles([]);
   }, [selectedDomain]);
 
   const { data: tsData } = useQuery({ queryKey: ["timeseries", projectId, selectedDomain, selectedTemplate, timeInterval, fileFilterStr], queryFn: async () => (await patternsApi.getTimeseries(projectId!, selectedDomain, selectedTemplate, timeInterval, fileFilterStr)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
@@ -159,7 +162,15 @@ export default function PatternPage() {
 
       {selectedTemplate && (<>
         <div className="bg-card border border-border rounded-2xl p-4">
-          <h3 className="text-sm font-semibold mb-1">Selected Template</h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-semibold">Selected Template</h3>
+            <button
+              onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedTemplate)}`)}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
+            >
+              <ManageSearchIcon style={{ fontSize: 14 }} /> Add to Pattern Analyzer
+            </button>
+          </div>
           <p className="text-xs font-mono bg-muted p-2 rounded-lg break-all">{selectedTemplate}</p>
         </div>
 

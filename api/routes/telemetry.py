@@ -139,6 +139,9 @@ def parse_telemetry(project_id):
         # Key metrics
         key_metrics = _build_key_metrics_data(configured_fields, summary)
 
+        # Reboot timeline (uptime drops)
+        reboot_timeline = _build_reboot_timeline(reports)
+
         return jsonify({
             "device_info": device_info,
             "summary": {
@@ -149,11 +152,53 @@ def parse_telemetry(project_id):
             "key_metrics": key_metrics,
             "status_labels": status_labels,
             "charts": charts,
+            "reboot_timeline": reboot_timeline,
         }), 200
 
     except Exception as e:
         logger.exception(f"[Telemetry] Error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+def _build_reboot_timeline(reports):
+    """Detect reboots from uptime drops and return timeline data for charting."""
+    ok_reports = [r for r in reports if r.get("parse_ok") and r.get("time")]
+    ok_reports.sort(key=lambda x: x["time"])
+
+    uptime_key = "Device.DeviceInfo.UpTime"
+    times = []
+    reboot_counts = []  # cumulative reboot count at each timestamp
+    reboot_events = []  # individual reboot event markers
+    cumulative = 0
+    prev_uptime = None
+
+    for r in ok_reports:
+        raw = r["fields"].get(uptime_key)
+        if raw is None:
+            continue
+        # Resolve semicolons (take first sample)
+        val_str = str(raw).split(";")[0].strip()
+        try:
+            uptime = float(val_str)
+        except (ValueError, TypeError):
+            continue
+
+        ts = r["time"].isoformat()
+
+        if prev_uptime is not None and uptime < prev_uptime:
+            cumulative += 1
+            reboot_events.append({"time": ts, "count": cumulative, "prev_uptime": prev_uptime, "new_uptime": uptime})
+
+        times.append(ts)
+        reboot_counts.append(cumulative)
+        prev_uptime = uptime
+
+    return {
+        "times": times,
+        "counts": reboot_counts,
+        "total_reboots": cumulative,
+        "events": reboot_events,
+    }
 
 
 def _build_status_labels_data(configured_fields):

@@ -339,7 +339,7 @@ class DBManager:
             # Wait for any active indexer to finish before deleting files
             # to prevent write-after-delete races.
             try:
-                from gui.callbacks.log_viewer import _get_project_lock
+                from api.indexer import _get_project_lock
                 lock = _get_project_lock(project_id)
                 logger.info(f"[DeleteProject] Acquiring indexer lock for {project_id}...")
                 lock.acquire()  # Blocking: wait until indexer finishes

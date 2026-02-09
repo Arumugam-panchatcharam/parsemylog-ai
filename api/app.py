@@ -29,7 +29,7 @@ from flask_jwt_extended import JWTManager
 from logai.utils.constants import BASE_DIR, UPLOAD_DIRECTORY
 
 # Reuse the existing DBManager (shared SQLAlchemy instance)
-from gui.user_db_mngr import DBManager
+from api.user_db_mngr import DBManager
 
 # Global singletons
 dbm = DBManager()
@@ -143,6 +143,7 @@ def create_api_app():
     from api.routes.ai_analysis import ai_bp
     from api.routes.embedding import embedding_bp
     from api.routes.admin import admin_bp
+    from api.routes.regex_analyzer import regex_analyzer_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
@@ -152,6 +153,7 @@ def create_api_app():
     app.register_blueprint(ai_bp, url_prefix="/api/projects")
     app.register_blueprint(embedding_bp, url_prefix="/api/projects")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
+    app.register_blueprint(regex_analyzer_bp, url_prefix="/api/projects")
 
     # Health check
     @app.route("/api/health")

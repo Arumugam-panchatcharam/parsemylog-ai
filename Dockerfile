@@ -11,10 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY api/ ./api/
-COPY gui/ ./gui/
 COPY logai/ ./logai/
 COPY configs/ ./configs/
-COPY logai_wsgi.py logai_api_wsgi.py run_api.py run_dev.py ./
+COPY logai_api_wsgi.py run_api.py ./
 
 VOLUME ["/app/user_uploads", "/app/bge-small-en-v1.5-local"]
 
