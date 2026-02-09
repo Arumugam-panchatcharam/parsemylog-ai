@@ -237,8 +237,9 @@ def get_file_content(project_id, filename):
 
     page = request.args.get("page", 1, type=int)
     lpp = request.args.get("lines_per_page", LINES_PER_PAGE, type=int)
+    cpe_id = request.args.get("cpe_id")
 
-    file_info = dbm.get_project_file_info(project_id, filename)
+    file_info = dbm.get_project_file_info(project_id, filename, cpe_id=cpe_id)
     if not file_info:
         return jsonify({"error": "File not found"}), 404
 
@@ -279,7 +280,8 @@ def download_file(project_id, filename):
     if err:
         return err
 
-    file_info = dbm.get_project_file_info(project_id, filename)
+    cpe_id = request.args.get("cpe_id")
+    file_info = dbm.get_project_file_info(project_id, filename, cpe_id=cpe_id)
     if not file_info:
         return jsonify({"error": "File not found"}), 404
 
@@ -321,7 +323,8 @@ def search_file(project_id, filename):
     if not pattern:
         return jsonify({"error": "Search pattern is required"}), 400
 
-    file_info = dbm.get_project_file_info(project_id, filename)
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
+    file_info = dbm.get_project_file_info(project_id, filename, cpe_id=cpe_id)
     if not file_info:
         return jsonify({"error": "File not found"}), 404
 

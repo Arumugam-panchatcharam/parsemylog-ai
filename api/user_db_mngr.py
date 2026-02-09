@@ -358,8 +358,11 @@ class DBManager:
             logger.error(f"Failed to save CPE file {filename}: {e}")
             return False
     
-    def get_project_file_info(self, project_id:str, filename: str) -> Optional[Any]:
-        return self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, filename=filename).first()
+    def get_project_file_info(self, project_id:str, filename: str, cpe_id: str = None) -> Optional[Any]:
+        q = self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, filename=filename)
+        if cpe_id is not None:
+            q = q.filter_by(cpe_id=cpe_id)
+        return q.first()
     
     def get_project_file_info_orig_name(self, project_id:str, original_name: str) -> Optional[Any]:
         return self.db.session.query(self.ProjectFile).filter_by(project_id=project_id, original_name=original_name).first()

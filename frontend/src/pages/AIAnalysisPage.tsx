@@ -29,7 +29,15 @@ export default function AIAnalysisPage() {
   const [fontSize, setFontSize] = useState(12);
   const contextRef = useRef<HTMLDivElement>(null);
 
-  const searchMutation = useMutation({ mutationFn: () => aiApi.search(projectId!, query, 10, cpeId), onSuccess: (res) => { setResults(res.data.results || []); setSelectedIdx(null); } });
+  const [searchMsg, setSearchMsg] = useState<string | null>(null);
+  const searchMutation = useMutation({
+    mutationFn: () => aiApi.search(projectId!, query, 10, cpeId),
+    onSuccess: (res) => {
+      setResults(res.data.results || []);
+      setSelectedIdx(null);
+      setSearchMsg(res.data.error || null);
+    },
+  });
   const selected = selectedIdx !== null ? results[selectedIdx] : null;
   const { data: params } = useQuery({ queryKey: ["aiParams", projectId, selected?.template, selected?.parquet_path, cpeId], queryFn: async () => (await aiApi.getParameters(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: cpeId })).data, enabled: !!projectId && !!selected });
   const { data: loglines } = useQuery({ queryKey: ["aiLoglines", projectId, selected?.template, selected?.parquet_path, cpeId], queryFn: async () => (await aiApi.getLoglines(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: cpeId })).data, enabled: !!projectId && !!selected });
@@ -58,6 +66,7 @@ export default function AIAnalysisPage() {
       </div>
 
       {searchMutation.isError && <div className="p-3 bg-destructive/10 text-destructive rounded-lg text-sm">{(searchMutation.error as { response?: { data?: { error?: string } } })?.response?.data?.error || "Search failed"}</div>}
+      {searchMsg && <div className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-lg text-sm">{searchMsg}</div>}
 
       {/* Results */}
       {results.length > 0 && (

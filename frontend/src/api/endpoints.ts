@@ -39,14 +39,17 @@ export const filesApi = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
-  getContent: (projectId: string, filename: string, page = 1, linesPerPage = 1000) =>
+  getContent: (projectId: string, filename: string, page = 1, linesPerPage = 1000, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/files/${filename}/content`, {
-      params: { page, lines_per_page: linesPerPage },
+      params: { page, lines_per_page: linesPerPage, ...(cpeId ? { cpe_id: cpeId } : {}) },
     }),
-  download: (projectId: string, filename: string) =>
-    api.get(`/projects/${projectId}/files/${filename}/download`, { responseType: "blob" }),
-  search: (projectId: string, filename: string, pattern: string) =>
-    api.post(`/projects/${projectId}/files/${filename}/search`, { pattern }),
+  download: (projectId: string, filename: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/files/${filename}/download`, {
+      responseType: "blob",
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
+  search: (projectId: string, filename: string, pattern: string, cpeId?: string | null) =>
+    api.post(`/projects/${projectId}/files/${filename}/search`, { pattern, cpe_id: cpeId || undefined }),
   getNotes: (projectId: string) => api.get(`/projects/${projectId}/notes`),
   saveNotes: (projectId: string, content: string) =>
     api.put(`/projects/${projectId}/notes`, { content }),

@@ -28,9 +28,9 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 
 const LINES_OPTIONS = [100, 500, 1000, 2000, 5000];
 
-async function downloadFile(projectId: string, filename: string) {
+async function downloadFile(projectId: string, filename: string, cpeId?: string | null) {
   try {
-    const res = await filesApi.download(projectId, filename);
+    const res = await filesApi.download(projectId, filename, cpeId);
     const blob = new Blob([res.data]);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -60,10 +60,22 @@ export default function LogViewerPage() {
   const [showSearch, setShowSearch] = useState(true);
   const [scrollToLine, setScrollToLine] = useState<number | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const prevCpeId = useRef(cpeId);
+
+  // Reset selected file when CPE changes
+  useEffect(() => {
+    if (prevCpeId.current !== cpeId) {
+      setSelectedFile(null);
+      setCurrentPage(1);
+      setActiveHighlight("");
+      searchMutation.reset();
+      prevCpeId.current = cpeId;
+    }
+  }, [cpeId]);
 
   const { data: files, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
-  const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage)).data, enabled: !!projectId && !!selectedFile });
-  const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern) });
+  const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage, cpeId)).data, enabled: !!projectId && !!selectedFile });
+  const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern, cpeId) });
   const { data: notesData } = useQuery({ queryKey: ["notes", projectId], queryFn: async () => (await filesApi.getNotes(projectId!)).data, enabled: !!projectId });
 
   const hasFiles = files && files.length > 0;
@@ -219,7 +231,7 @@ export default function LogViewerPage() {
                 <DescriptionIcon style={{ fontSize: 13 }} className="text-muted-foreground shrink-0" />
                 <span className="truncate flex-1" title={f.filename}>{f.filename}</span>
                 <span className="text-[9px] text-muted-foreground shrink-0">{f.file_size_mb}M</span>
-                <button onClick={(e) => { e.stopPropagation(); if (projectId) downloadFile(projectId, f.filename); }} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted shrink-0" title="Download"><DownloadIcon style={{ fontSize: 12 }} /></button>
+                <button onClick={(e) => { e.stopPropagation(); if (projectId) downloadFile(projectId, f.filename, cpeId); }} className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted shrink-0" title="Download"><DownloadIcon style={{ fontSize: 12 }} /></button>
               </div>
             ))}
           </div>
@@ -234,7 +246,7 @@ export default function LogViewerPage() {
                 {fileContent && <span className="text-[10px] text-muted-foreground shrink-0">L{fileContent.start_line}–{fileContent.end_line} of {fileContent.total_lines}</span>}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <button onClick={() => { if (projectId && selectedFile) downloadFile(projectId, selectedFile); }} className="p-0.5 rounded hover:bg-muted" title="Download"><DownloadIcon style={{ fontSize: 16 }} className="text-muted-foreground" /></button>
+                <button onClick={() => { if (projectId && selectedFile) downloadFile(projectId, selectedFile, cpeId); }} className="p-0.5 rounded hover:bg-muted" title="Download"><DownloadIcon style={{ fontSize: 16 }} className="text-muted-foreground" /></button>
                 {fileContent && fileContent.total_pages > 1 && (<>
                   <div className="w-px h-4 bg-border mx-1" />
                   <button onClick={() => setCurrentPage(1)} disabled={currentPage <= 1} className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><FirstPageIcon style={{ fontSize: 16 }} /></button>

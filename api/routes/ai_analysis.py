@@ -80,8 +80,16 @@ def ai_search(project_id):
             top_k=top_k,
         )
     except Exception as e:
-        logger.error(f"[AI Search] Qdrant error: {e}")
-        return jsonify({"error": f"Search failed: {str(e)}"}), 500
+        err_str = str(e)
+        logger.error(f"[AI Search] Qdrant error: {err_str}")
+        if "doesn't exist" in err_str or "Not found" in err_str:
+            return jsonify({
+                "results": [],
+                "error": f"Vector index not yet built for this CPE. "
+                         f"Please wait for background indexing to complete, "
+                         f"then try again.",
+            }), 200
+        return jsonify({"error": f"Search failed: {err_str}"}), 500
 
     if not embedding_results:
         return jsonify({"results": [], "message": "No similar templates found"}), 200
