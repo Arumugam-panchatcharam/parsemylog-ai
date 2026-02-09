@@ -191,6 +191,12 @@ export const patternAnalyzerApi = {
     }),
 };
 
+// ---------- CPE Overview ----------
+export const cpeOverviewApi = {
+  getSummary: (projectId: string) =>
+    api.get(`/projects/${projectId}/cpe-overview`),
+};
+
 // ---------- Admin ----------
 export const adminApi = {
   listUsers: () => api.get("/admin/users"),

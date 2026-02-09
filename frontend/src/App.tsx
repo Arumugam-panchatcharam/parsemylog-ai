@@ -11,6 +11,7 @@ import PatternPage from "@/pages/PatternPage";
 import TelemetryPage from "@/pages/TelemetryPage";
 import AIAnalysisPage from "@/pages/AIAnalysisPage";
 import PatternAnalyzerPage from "@/pages/PatternAnalyzerPage";
+import CPEOverviewPage from "@/pages/CPEOverviewPage";
 import AdminPage from "@/pages/AdminPage";
 import type { ReactNode } from "react";
 
@@ -72,6 +73,7 @@ function AppRoutes() {
         <Route path="/workspace/telemetry" element={<TelemetryPage />} />
         <Route path="/workspace/ai" element={<AIAnalysisPage />} />
         <Route path="/workspace/pattern-analyzer" element={<PatternAnalyzerPage />} />
+        <Route path="/workspace/cpe-overview" element={<CPEOverviewPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />

@@ -8,6 +8,7 @@ import DescriptionIcon from "@mui/icons-material/Description";
 import TimelineIcon from "@mui/icons-material/Timeline";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import LogoutIcon from "@mui/icons-material/Logout";
 import PersonIcon from "@mui/icons-material/Person";
@@ -24,6 +25,7 @@ const workspaceNav = [
   { to: "/workspace/pattern-analyzer", icon: ManageSearchIcon, label: "Pattern Analyzer" },
   { to: "/workspace/telemetry", icon: TimelineIcon, label: "Telemetry" },
   { to: "/workspace/ai", icon: PsychologyIcon, label: "AI Analysis" },
+  { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
 ];
 
 export default function Sidebar() {
