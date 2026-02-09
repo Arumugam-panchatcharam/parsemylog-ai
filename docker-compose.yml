@@ -22,13 +22,16 @@ services:
       - ./configs:/app/configs:ro
       - ./logai_api_wsgi.py:/app/logai_api_wsgi.py:ro
       - ./run_api.py:/app/run_api.py:ro
+      - ./drain3.ini:/app/drain3.ini:ro
       # Persistent data
       - user_uploads:/app/user_uploads
       - bge_model:/app/bge-small-en-v1.5-local
-      - logai_users.db:/app/logai_users.db
+      - logai_data:/app/data
     restart: always
     env_file:
       - .env
+    environment:
+      - DB_PATH=/app/data/logai_users.db
     depends_on:
       qdrant:
         condition: service_started
@@ -94,7 +97,7 @@ services:
 
 volumes:
   user_uploads:
-  logai_users.db:
+  logai_data:
   bge_model:
   qdrant_storage:
   frontend_node_modules:

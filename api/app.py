@@ -96,7 +96,8 @@ def create_api_app():
     app = Flask(__name__, static_folder=UPLOAD_DIRECTORY)
 
     # Configuration
-    db_path = os.path.join(BASE_DIR, "logai_users.db")
+    db_path = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "logai_users.db"))
+    os.makedirs(os.path.dirname(db_path), exist_ok=True) if os.path.dirname(db_path) else None
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
