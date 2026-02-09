@@ -52,14 +52,15 @@ services:
       - QDRANT__SERVICE__GRPC_PORT=6334
 
   # One-shot: build React SPA into frontend_dist volume, then exit.
-  # Runs automatically before Nginx starts.  Re-run on frontend changes:
-  #   docker compose run --rm frontend-build
+  # Only runs when explicitly requested (profile: build).
+  #   docker-compose --profile build up frontend-build
   frontend-build:
+    profiles: ["build"]
     image: node:22-alpine
     container_name: frontend-build
     working_dir: /app
     volumes:
-      - ./frontend:/app:ro
+      - ./frontend:/app
       # node_modules persisted so npm install is fast after first run
       - frontend_node_modules:/app/node_modules
       # Build output written here, shared with Nginx
@@ -88,10 +89,7 @@ services:
       - frontend_dist:/usr/share/nginx/html:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      logai-api:
-        condition: service_started
-      frontend-build:
-        condition: service_completed_successfully
+      - logai-api
     restart: always
 
 volumes:
