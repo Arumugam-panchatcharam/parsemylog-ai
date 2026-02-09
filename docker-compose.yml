@@ -51,8 +51,30 @@ services:
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
 
-  # Nginx — serves pre-built React SPA and proxies /api to Flask
-  # Build frontend first:  cd frontend && npm run build
+  # One-shot: build React SPA into frontend_dist volume, then exit.
+  # Runs automatically before Nginx starts.  Re-run on frontend changes:
+  #   docker compose run --rm frontend-build
+  frontend-build:
+    image: node:22-alpine
+    container_name: frontend-build
+    working_dir: /app
+    volumes:
+      - ./frontend:/app:ro
+      # node_modules persisted so npm install is fast after first run
+      - frontend_node_modules:/app/node_modules
+      # Build output written here, shared with Nginx
+      - frontend_dist:/app/dist
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "Installing npm dependencies..."
+        npm install --prefer-offline
+        echo "Building frontend..."
+        npx tsc -b && npx vite build
+        echo "Frontend build complete."
+    restart: "no"
+
+  # Nginx — serves the built React SPA and proxies /api to Flask
   nginx:
     build:
       context: nginx
@@ -62,14 +84,19 @@ services:
     ports:
       - "${APP_PORT:-40901}:80"
     volumes:
-      # Bind-mount built frontend — rebuild with: cd frontend && npm run build
-      - ./frontend/dist:/usr/share/nginx/html:ro
+      # Serve the built SPA from the shared volume
+      - frontend_dist:/usr/share/nginx/html:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - logai-api
+      logai-api:
+        condition: service_started
+      frontend-build:
+        condition: service_completed_successfully
     restart: always
 
 volumes:
   user_uploads:
   bge_model:
   qdrant_storage:
+  frontend_node_modules:
+  frontend_dist:
