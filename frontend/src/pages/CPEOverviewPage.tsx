@@ -150,9 +150,9 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
     key: string;
     label: string;
     icon: typeof MemoryIcon;
-    format: (km: Record<string, unknown>) => string;
+    format: (km: Record<string, unknown>, cpe?: CPESummary) => string;
     higher_is_better?: boolean;
-    getValue: (km: Record<string, unknown>) => number | null;
+    getValue: (km: Record<string, unknown>, cpe?: CPESummary) => number | null;
   }> = [
     {
       key: "reports",
@@ -233,21 +233,16 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
       key: "reboots",
       label: "Total Reboots",
       icon: RestartAltIcon,
-      format: (_km, c) => String((c as unknown as CPESummary).reboot_summary.total),
-      getValue: (_km, c) => (c as unknown as CPESummary).reboot_summary.total,
+      format: (_km: Record<string, unknown>, cpe?: CPESummary) => String(cpe?.reboot_summary.total ?? 0),
+      getValue: (_km: Record<string, unknown>, cpe?: CPESummary) => cpe?.reboot_summary.total ?? 0,
       higher_is_better: false,
     },
   ];
 
-  // Extend format to accept cpe for reboot access
-  const formatWithCpe = (def: typeof metricDefs[0], km: Record<string, unknown>, cpe: CPESummary) => {
-    if (def.key === "reboots") return String(cpe.reboot_summary.total);
-    return def.format(km);
-  };
-  const getValueWithCpe = (def: typeof metricDefs[0], km: Record<string, unknown>, cpe: CPESummary) => {
-    if (def.key === "reboots") return cpe.reboot_summary.total;
-    return def.getValue(km);
-  };
+  const formatWithCpe = (def: typeof metricDefs[0], km: Record<string, unknown>, cpe: CPESummary) =>
+    def.format(km, cpe);
+  const getValueWithCpe = (def: typeof metricDefs[0], km: Record<string, unknown>, cpe: CPESummary) =>
+    def.getValue(km, cpe);
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
