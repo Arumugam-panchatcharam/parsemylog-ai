@@ -15,9 +15,11 @@ export const authApi = {
 // ---------- Projects ----------
 export const projectsApi = {
   list: () => api.get("/projects/"),
-  create: (name: string, description?: string) =>
-    api.post("/projects/", { name, description }),
+  create: (name: string, description?: string, natcoId?: number | null) =>
+    api.post("/projects/", { name, description, natco_id: natcoId || undefined }),
   get: (id: string) => api.get(`/projects/${id}`),
+  update: (id: string, data: { name?: string; description?: string; natco_id?: number | null }) =>
+    api.put(`/projects/${id}`, data),
   delete: (id: string) => api.delete(`/projects/${id}`),
 };
 
@@ -200,11 +202,108 @@ export const cpeOverviewApi = {
     api.get(`/projects/${projectId}/cpe-overview`),
 };
 
+// ---------- NATCO (user-facing) ----------
+export interface NatcoInfo {
+  id: number;
+  code: string;
+  name: string;
+  description?: string;
+}
+
+export const natcoApi = {
+  list: () => api.get<NatcoInfo[]>("/natcos/"),
+};
+
+// ---------- Pattern Governance (user-facing) ----------
+export interface DiffPattern extends UserPattern {
+  change_type: "new" | "modified";
+  global_name?: string;
+  global_enabled?: boolean;
+}
+
+export interface DomainDiff {
+  new: DiffPattern[];
+  modified: DiffPattern[];
+  unchanged: UserPattern[];
+}
+
+export const patternGovernanceApi = {
+  getGlobal: (projectId: string) =>
+    api.get<{ domains: DomainPatterns; natco: NatcoInfo | null }>(`/projects/${projectId}/patterns/global`),
+  diff: (projectId: string) =>
+    api.get<{ domains: Record<string, DomainDiff>; natco: NatcoInfo | null }>(`/projects/${projectId}/patterns/diff`),
+  sync: (projectId: string) =>
+    api.post<{ domains: DomainPatterns; synced: number }>(`/projects/${projectId}/patterns/sync`),
+  submit: (projectId: string, domain: string, patterns: Array<UserPattern & { change_type?: string }>, comment?: string) =>
+    api.post<{ id: number; message: string }>(`/projects/${projectId}/patterns/submit`, {
+      domain, patterns, comment,
+    }),
+  mySubmissions: (projectId: string) =>
+    api.get<Array<{
+      id: number;
+      domain: string;
+      patterns: Array<UserPattern & { change_type?: string }>;
+      comment: string;
+      status: string;
+      admin_comment: string;
+      created_at: string;
+      reviewed_at: string | null;
+    }>>(`/projects/${projectId}/patterns/submissions`),
+  clearResolved: (projectId: string) =>
+    api.delete<{ deleted: number }>(`/projects/${projectId}/patterns/submissions/clear`),
+};
+
 // ---------- Admin ----------
+export interface AdminNatco extends NatcoInfo {
+  pattern_count: number;
+  created_at: string;
+}
+
+export interface PatternSubmission {
+  id: number;
+  user_id: number;
+  username: string;
+  natco_id: number;
+  natco_code: string;
+  domain: string;
+  patterns: Array<UserPattern & { change_type?: string }>;
+  comment: string;
+  status: string;
+  reviewed_by: number | null;
+  admin_comment: string;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
 export const adminApi = {
   listUsers: () => api.get("/admin/users"),
   deleteUser: (userId: number) => api.delete(`/admin/users/${userId}`),
   resetPassword: (userId: number, password: string) =>
     api.put(`/admin/users/${userId}/password`, { password }),
   userProjects: (userId: number) => api.get(`/admin/users/${userId}/projects`),
+
+  // NATCO management
+  listNatcos: () => api.get<AdminNatco[]>("/admin/natcos"),
+  createNatco: (code: string, name: string, description?: string) =>
+    api.post("/admin/natcos", { code, name, description }),
+  updateNatco: (id: number, data: { code?: string; name?: string; description?: string }) =>
+    api.put(`/admin/natcos/${id}`, data),
+  deleteNatco: (id: number) => api.delete(`/admin/natcos/${id}`),
+
+  // Global patterns
+  getNatcoPatterns: (natcoId: number) =>
+    api.get<{ domains: DomainPatterns; natco: NatcoInfo }>(`/admin/natcos/${natcoId}/patterns`),
+  setNatcoPatterns: (natcoId: number, domains: DomainPatterns) =>
+    api.put(`/admin/natcos/${natcoId}/patterns`, { domains }),
+  importPresets: (natcoId: number) =>
+    api.post<{ imported: number }>(`/admin/natcos/${natcoId}/patterns/import-presets`),
+
+  // Submissions
+  listSubmissions: (status?: string) =>
+    api.get<PatternSubmission[]>("/admin/submissions", { params: status ? { status } : undefined }),
+  getSubmission: (id: number) => api.get(`/admin/submissions/${id}`),
+  approveSubmission: (id: number, comment?: string) =>
+    api.post(`/admin/submissions/${id}/approve`, { comment }),
+  rejectSubmission: (id: number, comment?: string) =>
+    api.post(`/admin/submissions/${id}/reject`, { comment }),
 };

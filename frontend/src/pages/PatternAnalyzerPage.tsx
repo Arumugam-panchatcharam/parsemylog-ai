@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { patternAnalyzerApi } from "@/api/endpoints";
-import type { UserPattern, DomainPatterns } from "@/api/endpoints";
+import { patternAnalyzerApi, patternGovernanceApi, natcoApi, projectsApi } from "@/api/endpoints";
+import type { UserPattern, DomainPatterns, DomainDiff, NatcoInfo } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
@@ -19,6 +19,10 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import CreateNewFolderIcon from "@mui/icons-material/CreateNewFolder";
+import SyncIcon from "@mui/icons-material/Sync";
+import PublishIcon from "@mui/icons-material/Publish";
+import PublicIcon from "@mui/icons-material/Public";
+import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CircularProgress from "@mui/material/CircularProgress";
 
 /* ================================================================ Types */
@@ -54,10 +58,97 @@ function drain3ToRegex(template: string): string {
   return escaped.replace(/\\<\\\\?\*\\>/g, ".*").replace(/<\*>/g, ".*");
 }
 
+/* ================================================================ NATCO Badge / Selector */
+function NatcoBadgeOrSelector({
+  projectId,
+  natco,
+  onAssigned,
+}: {
+  projectId: string;
+  natco: NatcoInfo | null;
+  onAssigned: () => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | "">("");
+  const [saving, setSaving] = useState(false);
+
+  const { data: natcoList } = useQuery({
+    queryKey: ["natcoList"],
+    queryFn: async () => (await natcoApi.list()).data,
+    enabled: picking || !natco, // fetch when selector shown or no natco yet
+  });
+
+  const handleAssign = async () => {
+    if (!selectedId) return;
+    setSaving(true);
+    try {
+      await projectsApi.update(projectId, { natco_id: Number(selectedId) });
+      setPicking(false);
+      setSelectedId("");
+      onAssigned();
+    } catch {
+      // keep selector open
+    }
+    setSaving(false);
+  };
+
+  // Already assigned — show badge with option to change
+  if (natco && !picking) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="flex items-center gap-1.5 px-3 py-1 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-full text-xs font-medium text-blue-700 dark:text-blue-400">
+          <PublicIcon style={{ fontSize: 14 }} />
+          NATCO: {natco.code} - {natco.name}
+        </span>
+        <button
+          onClick={() => setPicking(true)}
+          className="text-[10px] text-muted-foreground hover:text-foreground underline"
+        >
+          change
+        </button>
+      </div>
+    );
+  }
+
+  // Not assigned or changing — show selector
+  return (
+    <div className="flex items-center gap-2">
+      <PublicIcon style={{ fontSize: 16, color: "#9ca3af" }} />
+      <select
+        value={selectedId}
+        onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : "")}
+        className="text-xs px-2 py-1.5 border border-border rounded-lg bg-background focus:outline-none focus:ring-1 focus:ring-blue-500"
+      >
+        <option value="">-- Select NATCO --</option>
+        {natcoList?.map((n) => (
+          <option key={n.id} value={n.id}>{n.code} - {n.name}</option>
+        ))}
+      </select>
+      <button
+        onClick={handleAssign}
+        disabled={!selectedId || saving}
+        className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+      >
+        {saving ? <CircularProgress size={12} sx={{ color: "white" }} /> : <PublicIcon style={{ fontSize: 13 }} />}
+        Assign
+      </button>
+      {natco && (
+        <button
+          onClick={() => setPicking(false)}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Cancel
+        </button>
+      )}
+    </div>
+  );
+}
+
 /* ================================================================ Component */
 export default function PatternAnalyzerPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,6 +168,111 @@ export default function PatternAnalyzerPage() {
 
   // Preset import
   const [showPresets, setShowPresets] = useState(false);
+
+  // NATCO governance state
+  const [showSubmitDialog, setShowSubmitDialog] = useState(false);
+  const [submitComment, setSubmitComment] = useState("");
+  // Diff data: { domain: DomainDiff } and selection state: { "domain::regex": true }
+  const [diffData, setDiffData] = useState<Record<string, DomainDiff> | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [selectedChanges, setSelectedChanges] = useState<Record<string, boolean>>({});
+
+  // -- Load NATCO info for this project --
+  const { data: globalInfo } = useQuery({
+    queryKey: ["globalPatterns", projectId],
+    queryFn: async () => (await patternGovernanceApi.getGlobal(projectId!)).data,
+    enabled: !!projectId,
+  });
+
+  const hasNatco = !!globalInfo?.natco;
+
+  // -- Sync from global mutation --
+  const syncMutation = useMutation({
+    mutationFn: () => patternGovernanceApi.sync(projectId!),
+    onSuccess: (res) => {
+      setDomains(res.data.domains);
+      queryClient.invalidateQueries({ queryKey: ["regex-patterns", projectId] });
+    },
+  });
+
+  // -- Open submit dialog: fetch diff first --
+  const openSubmitDialog = async () => {
+    if (!projectId) return;
+    setDiffLoading(true);
+    setShowSubmitDialog(true);
+    setDiffData(null);
+    setSelectedChanges({});
+    setSubmitComment("");
+    try {
+      const res = await patternGovernanceApi.diff(projectId);
+      setDiffData(res.data.domains);
+      // Auto-select all new and modified patterns
+      const sel: Record<string, boolean> = {};
+      for (const [domain, diff] of Object.entries(res.data.domains)) {
+        for (const p of diff.new) sel[`${domain}::${p.regex}`] = true;
+        for (const p of diff.modified) sel[`${domain}::${p.regex}`] = true;
+      }
+      setSelectedChanges(sel);
+    } catch {
+      // handled by UI
+    }
+    setDiffLoading(false);
+  };
+
+  // Count selected changes
+  const selectedCount = Object.values(selectedChanges).filter(Boolean).length;
+
+  // -- Submit to global mutation (submits per-domain, one submission per domain that has selections) --
+  const submitMutation = useMutation({
+    mutationFn: async () => {
+      if (!diffData || !projectId) throw new Error("No diff data");
+      const promises: Promise<unknown>[] = [];
+      for (const [domain, diff] of Object.entries(diffData)) {
+        const patsToSubmit: Array<UserPattern & { change_type: string }> = [];
+        for (const p of diff.new) {
+          if (selectedChanges[`${domain}::${p.regex}`]) {
+            patsToSubmit.push({ name: p.name, regex: p.regex, enabled: p.enabled, change_type: "new" });
+          }
+        }
+        for (const p of diff.modified) {
+          if (selectedChanges[`${domain}::${p.regex}`]) {
+            patsToSubmit.push({ name: p.name, regex: p.regex, enabled: p.enabled, change_type: "modified" });
+          }
+        }
+        if (patsToSubmit.length > 0) {
+          promises.push(patternGovernanceApi.submit(projectId, domain, patsToSubmit, submitComment));
+        }
+      }
+      if (promises.length === 0) throw new Error("No patterns selected");
+      return Promise.all(promises);
+    },
+    onSuccess: () => {
+      setShowSubmitDialog(false);
+      setDiffData(null);
+      setSelectedChanges({});
+      setSubmitComment("");
+      queryClient.invalidateQueries({ queryKey: ["mySubmissions", projectId] });
+    },
+  });
+
+  // -- Load user's submission history --
+  const { data: mySubmissions } = useQuery({
+    queryKey: ["mySubmissions", projectId],
+    queryFn: async () => (await patternGovernanceApi.mySubmissions(projectId!)).data,
+    enabled: !!projectId && hasNatco,
+  });
+
+  const [submissionsCollapsed, setSubmissionsCollapsed] = useState(true);
+
+  const resolvedCount = mySubmissions?.filter((s) => s.status === "approved" || s.status === "rejected").length ?? 0;
+  const pendingCount = mySubmissions?.filter((s) => s.status === "pending").length ?? 0;
+
+  const clearResolvedMutation = useMutation({
+    mutationFn: () => patternGovernanceApi.clearResolved(projectId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["mySubmissions", projectId] });
+    },
+  });
 
   // Reboot selection state (any reboot as start, any as end)
   const [startRebootIdx, setStartRebootIdx] = useState<number | null>(null);
@@ -527,9 +723,18 @@ export default function PatternAnalyzerPage() {
   return (
     <div className="p-4 space-y-4 max-w-full overflow-y-auto" style={{ height: "calc(100vh - 48px)" }}>
       {/* Header */}
-      <div className="flex items-center gap-2">
-        <ManageSearchIcon style={{ fontSize: 24, color: "#1a73e8" }} />
-        <h2 className="text-lg font-semibold">Pattern Analyzer</h2>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <ManageSearchIcon style={{ fontSize: 24, color: "#1a73e8" }} />
+          <h2 className="text-lg font-semibold">Pattern Analyzer</h2>
+        </div>
+        <NatcoBadgeOrSelector
+          projectId={projectId!}
+          natco={globalInfo?.natco ?? null}
+          onAssigned={() => {
+            queryClient.invalidateQueries({ queryKey: ["globalPatterns", projectId] });
+          }}
+        />
       </div>
 
       {/* ====== PATTERN MANAGEMENT ====== */}
@@ -591,6 +796,28 @@ export default function PatternAnalyzerPage() {
                 </button>
               </div>
             </div>
+            {/* NATCO Governance buttons */}
+            {hasNatco && (
+              <>
+                <button
+                  onClick={() => syncMutation.mutate()}
+                  disabled={syncMutation.isPending}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 dark:border-purple-700 dark:bg-purple-900/20 dark:text-purple-400 transition-colors disabled:opacity-50"
+                  title="Pull latest global patterns from NATCO config"
+                >
+                  {syncMutation.isPending ? <CircularProgress size={12} /> : <SyncIcon style={{ fontSize: 14 }} />}
+                  Sync from Global
+                </button>
+                <button
+                  onClick={openSubmitDialog}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-400 transition-colors"
+                  title="Compare against global and submit changes for review"
+                >
+                  <PublishIcon style={{ fontSize: 14 }} />
+                  Submit to Global
+                </button>
+              </>
+            )}
             <button
               onClick={() => saveMutation.mutate()}
               disabled={saveMutation.isPending}
@@ -779,7 +1006,210 @@ export default function PatternAnalyzerPage() {
             {(saveMutation.error as { response?: { data?: { error?: string } } })?.response?.data?.error || "Save failed"}
           </div>
         )}
+        {syncMutation.isSuccess && (
+          <div className="px-4 py-1.5 bg-purple-50 dark:bg-purple-900/10 text-purple-700 dark:text-purple-400 text-[11px] border-t border-border flex items-center gap-1">
+            <SyncIcon style={{ fontSize: 13 }} />
+            Synced {syncMutation.data?.data.synced || 0} global patterns. Remember to Save.
+          </div>
+        )}
+        {submitMutation.isSuccess && (
+          <div className="px-4 py-1.5 bg-amber-50 dark:bg-amber-900/10 text-amber-700 dark:text-amber-400 text-[11px] border-t border-border flex items-center gap-1">
+            <PublishIcon style={{ fontSize: 13 }} />
+            Patterns submitted for admin review.
+          </div>
+        )}
       </div>
+
+      {/* NATCO Submission History — collapsible */}
+      {hasNatco && mySubmissions && mySubmissions.length > 0 && (
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          <div
+            className="px-4 py-2 border-b border-border bg-muted/30 flex items-center justify-between cursor-pointer hover:bg-muted/50 transition-colors"
+            onClick={() => setSubmissionsCollapsed((v) => !v)}
+          >
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <PublishIcon style={{ fontSize: 14, color: "#f59e0b" }} /> My Submissions
+              <span className="ml-1 text-[10px] font-normal">
+                ({mySubmissions.length} total{pendingCount > 0 ? `, ${pendingCount} pending` : ""})
+              </span>
+            </h3>
+            <div className="flex items-center gap-2">
+              {resolvedCount > 0 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`Clear ${resolvedCount} approved/rejected submission(s)?`)) {
+                      clearResolvedMutation.mutate();
+                    }
+                  }}
+                  disabled={clearResolvedMutation.isPending}
+                  className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors disabled:opacity-50"
+                  title="Remove all approved and rejected submissions from history"
+                >
+                  <DeleteIcon style={{ fontSize: 12 }} />
+                  Clear resolved ({resolvedCount})
+                </button>
+              )}
+              {submissionsCollapsed
+                ? <ExpandMoreIcon style={{ fontSize: 18 }} className="text-muted-foreground" />
+                : <ExpandLessIcon style={{ fontSize: 18 }} className="text-muted-foreground" />}
+            </div>
+          </div>
+          {!submissionsCollapsed && (
+            <div className="divide-y divide-border">
+              {mySubmissions.map((s) => (
+                <div key={s.id} className="px-4 py-2 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                      s.status === "approved" ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" :
+                      s.status === "rejected" ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" :
+                      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                    }`}>{s.status}</span>
+                    <span className="font-medium">{s.domain}</span>
+                    <span className="text-muted-foreground">{s.patterns.length} pattern{s.patterns.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    {s.admin_comment && <span className="italic max-w-[200px] truncate" title={s.admin_comment}>"{s.admin_comment}"</span>}
+                    <span>{s.created_at?.split("T")[0] || ""}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Submit to Global Dialog (diff-based) */}
+      {showSubmitDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-card border rounded-2xl shadow-lg w-full max-w-2xl max-h-[85vh] flex flex-col">
+            {/* Dialog Header */}
+            <div className="px-6 py-4 border-b border-border shrink-0">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <PublishIcon style={{ fontSize: 20, color: "#f59e0b" }} />
+                Submit Changes to Global
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                Showing only new and modified patterns compared to the global NATCO configuration. Select which changes to submit for admin review.
+              </p>
+            </div>
+
+            {/* Dialog Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {diffLoading ? (
+                <div className="flex items-center gap-2 justify-center py-12"><CircularProgress size={20} /> <span className="text-sm text-muted-foreground">Comparing against global...</span></div>
+              ) : diffData && (() => {
+                const allDomains = Object.entries(diffData);
+                const hasChanges = allDomains.some(([, d]) => d.new.length > 0 || d.modified.length > 0);
+
+                if (!hasChanges) {
+                  return (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <CheckBoxIcon style={{ fontSize: 40 }} className="mx-auto mb-2 opacity-50" />
+                      <p className="text-sm font-medium">No changes detected</p>
+                      <p className="text-xs mt-1">Your local patterns match the global configuration.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-4">
+                    {allDomains.map(([domain, diff]) => {
+                      if (diff.new.length === 0 && diff.modified.length === 0) return null;
+                      return (
+                        <div key={domain} className="border border-border rounded-xl overflow-hidden">
+                          <div className="px-4 py-2 bg-muted/30 flex items-center justify-between">
+                            <span className="text-sm font-semibold">{domain}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {diff.new.length > 0 && <span className="text-green-600 dark:text-green-400 mr-2">{diff.new.length} new</span>}
+                              {diff.modified.length > 0 && <span className="text-blue-600 dark:text-blue-400">{diff.modified.length} modified</span>}
+                            </span>
+                          </div>
+                          <div className="divide-y divide-border/50">
+                            {/* New patterns */}
+                            {diff.new.map((p) => {
+                              const key = `${domain}::${p.regex}`;
+                              const checked = !!selectedChanges[key];
+                              return (
+                                <label key={key} className="flex items-start gap-3 px-4 py-2 hover:bg-muted/20 cursor-pointer">
+                                  <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-green-600 shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px] font-bold">NEW</span>
+                                      <span className="text-xs font-medium truncate">{p.name}</span>
+                                    </div>
+                                    <code className="text-[11px] font-mono text-muted-foreground block truncate mt-0.5">{p.regex}</code>
+                                  </div>
+                                </label>
+                              );
+                            })}
+                            {/* Modified patterns */}
+                            {diff.modified.map((p) => {
+                              const key = `${domain}::${p.regex}`;
+                              const checked = !!selectedChanges[key];
+                              return (
+                                <label key={key} className="flex items-start gap-3 px-4 py-2 hover:bg-muted/20 cursor-pointer">
+                                  <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-blue-600 shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold">MODIFIED</span>
+                                      <span className="text-xs font-medium truncate">{p.name}</span>
+                                      {p.global_name && p.global_name !== p.name && (
+                                        <span className="text-[10px] text-muted-foreground line-through truncate max-w-[120px]">{p.global_name}</span>
+                                      )}
+                                    </div>
+                                    <code className="text-[11px] font-mono text-muted-foreground block truncate mt-0.5">{p.regex}</code>
+                                    {p.global_enabled !== undefined && p.global_enabled !== p.enabled && (
+                                      <span className="text-[10px] text-muted-foreground">enabled: {String(p.global_enabled)} → {String(p.enabled)}</span>
+                                    )}
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Dialog Footer */}
+            <div className="px-6 py-4 border-t border-border shrink-0 space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1">Comment (optional)</label>
+                <textarea
+                  value={submitComment}
+                  onChange={(e) => setSubmitComment(e.target.value)}
+                  placeholder="Describe what you're submitting..."
+                  className="w-full px-3 py-2 border border-input rounded-lg bg-background resize-none text-sm"
+                  rows={2}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => submitMutation.mutate()}
+                  disabled={selectedCount === 0 || submitMutation.isPending}
+                  className="flex-1 py-2.5 bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {submitMutation.isPending ? <CircularProgress size={14} sx={{ color: "white" }} /> : <PublishIcon style={{ fontSize: 16 }} />}
+                  Submit {selectedCount} Pattern{selectedCount !== 1 ? "s" : ""} for Review
+                </button>
+                <button onClick={() => { setShowSubmitDialog(false); setDiffData(null); setSelectedChanges({}); setSubmitComment(""); }} className="px-6 py-2.5 border border-border rounded-lg hover:bg-muted">
+                  Cancel
+                </button>
+              </div>
+              {submitMutation.isError && (
+                <div className="text-xs text-red-600 flex items-center gap-1">
+                  <ErrorIcon style={{ fontSize: 13 }} />
+                  {(submitMutation.error as { response?: { data?: { error?: string } } })?.response?.data?.error || "Submission failed"}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ====== SCAN CONFIGURATION ====== */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">

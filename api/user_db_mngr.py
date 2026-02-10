@@ -57,12 +57,70 @@ class DBManager:
         
         self.User = User
 
+        # ---------------- NATCO Model ----------------
+        class Natco(self.db.Model):
+            __tablename__ = "natcos"
+
+            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
+            code = self.db.Column(self.db.String(16), unique=True, nullable=False)  # e.g. "DE", "PL"
+            name = self.db.Column(self.db.String(120), nullable=False)              # e.g. "Germany"
+            description = self.db.Column(self.db.String(512), nullable=True)
+            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
+
+            global_patterns = self.db.relationship(
+                "GlobalPattern", back_populates="natco",
+                cascade="all, delete-orphan", passive_deletes=True,
+            )
+
+        self.Natco = Natco
+
+        # ---------------- Global Pattern Model ----------------
+        class GlobalPattern(self.db.Model):
+            __tablename__ = "global_patterns"
+
+            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
+            natco_id = self.db.Column(self.db.Integer, self.db.ForeignKey("natcos.id", ondelete="CASCADE"), nullable=False)
+            domain = self.db.Column(self.db.String(120), nullable=False)
+            name = self.db.Column(self.db.String(256), nullable=False)
+            regex = self.db.Column(self.db.Text, nullable=False)
+            enabled = self.db.Column(self.db.Boolean, default=True)
+            created_by = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id"), nullable=True)
+            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
+            updated_at = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
+
+            natco = self.db.relationship("Natco", back_populates="global_patterns")
+
+        self.GlobalPattern = GlobalPattern
+
+        # ---------------- Pattern Submission Model ----------------
+        class PatternSubmission(self.db.Model):
+            __tablename__ = "pattern_submissions"
+
+            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
+            user_id = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id"), nullable=False)
+            natco_id = self.db.Column(self.db.Integer, self.db.ForeignKey("natcos.id", ondelete="CASCADE"), nullable=False)
+            domain = self.db.Column(self.db.String(120), nullable=False)
+            patterns_json = self.db.Column(self.db.Text, nullable=False)   # JSON: [{name, regex, enabled}]
+            comment = self.db.Column(self.db.Text, nullable=True)
+            status = self.db.Column(self.db.String(20), default="pending") # pending / approved / rejected
+            reviewed_by = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id"), nullable=True)
+            reviewed_at = self.db.Column(self.db.DateTime, nullable=True)
+            admin_comment = self.db.Column(self.db.Text, nullable=True)
+            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
+
+            user = self.db.relationship("User", foreign_keys=[user_id])
+            reviewer = self.db.relationship("User", foreign_keys=[reviewed_by])
+            natco = self.db.relationship("Natco")
+
+        self.PatternSubmission = PatternSubmission
+
         # ---------------- Project Model ----------------
         class Project(self.db.Model):
             __tablename__ = "projects"
 
             id = self.db.Column(self.db.String(256), primary_key=True)   # matches TEXT PRIMARY KEY
             user_id = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+            natco_id = self.db.Column(self.db.Integer, self.db.ForeignKey("natcos.id"), nullable=True)
             name = self.db.Column(self.db.String(120), nullable=False)
             description = self.db.Column(self.db.String(512), nullable=True)
             created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
@@ -70,6 +128,7 @@ class DBManager:
 
             # relationships
             user = self.db.relationship("User", back_populates="projects")
+            natco = self.db.relationship("Natco")
             files = self.db.relationship(
                 "ProjectFile",
                 back_populates="project",
@@ -147,18 +206,25 @@ class DBManager:
                 self.create_user("admin", "admin123", is_admin=True)
 
     def _migrate_add_cpe_columns(self, app):
-        """Add cpe_id column to project_files if it doesn't exist (for upgrades)."""
+        """Add cpe_id column to project_files and natco_id to projects if missing."""
         try:
             with app.app_context():
                 from sqlalchemy import text, inspect as sa_inspect
                 inspector = sa_inspect(self.db.engine)
+                # project_files: cpe_id
                 cols = [c["name"] for c in inspector.get_columns("project_files")]
                 if "cpe_id" not in cols:
                     self.db.session.execute(text("ALTER TABLE project_files ADD COLUMN cpe_id VARCHAR(256)"))
                     self.db.session.commit()
                     logger.info("[Migration] Added cpe_id column to project_files")
+                # projects: natco_id
+                proj_cols = [c["name"] for c in inspector.get_columns("projects")]
+                if "natco_id" not in proj_cols:
+                    self.db.session.execute(text("ALTER TABLE projects ADD COLUMN natco_id INTEGER REFERENCES natcos(id)"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added natco_id column to projects")
         except Exception as e:
-            logger.warning(f"[Migration] Could not add cpe_id column (may already exist): {e}")
+            logger.warning(f"[Migration] Could not add columns (may already exist): {e}")
 
     # ---------------- User operations ----------------
     def create_user(self, username: str, password: str, email: Optional[str] = None, is_admin: bool = False) -> Tuple[bool, Optional[str]]:

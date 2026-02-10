@@ -146,6 +146,8 @@ def create_api_app():
     from api.routes.admin import admin_bp
     from api.routes.regex_analyzer import regex_analyzer_bp
     from api.routes.cpe_overview import cpe_overview_bp
+    from api.routes.natco_admin import natco_admin_bp
+    from api.routes.natco import natco_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
@@ -157,6 +159,8 @@ def create_api_app():
     app.register_blueprint(admin_bp, url_prefix="/api/admin")
     app.register_blueprint(regex_analyzer_bp, url_prefix="/api/projects")
     app.register_blueprint(cpe_overview_bp, url_prefix="/api/projects")
+    app.register_blueprint(natco_admin_bp, url_prefix="/api/admin")
+    app.register_blueprint(natco_bp, url_prefix="/api/natcos")
 
     # Health check
     @app.route("/api/health")

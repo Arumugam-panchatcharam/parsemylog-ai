@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { projectsApi } from "@/api/endpoints";
+import { projectsApi, natcoApi } from "@/api/endpoints";
+import type { NatcoInfo } from "@/api/endpoints";
 import { useAuth } from "@/hooks/useAuth";
 import { useProject } from "@/hooks/useProject";
 import { formatDate } from "@/lib/utils";
@@ -10,6 +11,7 @@ import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import DeleteIcon from "@mui/icons-material/Delete";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import CalendarTodayIcon from "@mui/icons-material/CalendarToday";
+import PublicIcon from "@mui/icons-material/Public";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -20,6 +22,7 @@ export default function DashboardPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [newNatcoId, setNewNatcoId] = useState<number | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const { data: projects, isLoading, refetch } = useQuery({
@@ -27,13 +30,19 @@ export default function DashboardPage() {
     queryFn: async () => (await projectsApi.list()).data,
   });
 
+  const { data: natcos } = useQuery({
+    queryKey: ["natcosList"],
+    queryFn: async () => (await natcoApi.list()).data,
+  });
+
   const createMutation = useMutation({
-    mutationFn: () => projectsApi.create(newName, newDesc),
+    mutationFn: () => projectsApi.create(newName, newDesc, newNatcoId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
+      setNewNatcoId(null);
     },
   });
 
@@ -95,7 +104,7 @@ export default function DashboardPage() {
 
       {/* Project Grid */}
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-        {projects?.map((p: { id: string; name: string; description: string; created_at: string }) => (
+        {projects?.map((p: { id: string; name: string; description: string; created_at: string; natco?: { code: string; name: string } | null }) => (
           <div key={p.id} className="bg-card border border-border rounded-2xl mat-card">
             <div className="p-4">
               <div className="flex items-start justify-between mb-2">
@@ -103,13 +112,20 @@ export default function DashboardPage() {
                   <FolderOpenIcon style={{ fontSize: 18, color: "#1a73e8" }} />
                   {p.name}
                 </h3>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setDeleteId(p.id); }}
-                  className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                  title="Delete"
-                >
-                  <DeleteIcon style={{ fontSize: 16 }} />
-                </button>
+                <div className="flex items-center gap-1">
+                  {p.natco && (
+                    <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold" title={p.natco.name}>
+                      {p.natco.code}
+                    </span>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeleteId(p.id); }}
+                    className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    title="Delete"
+                  >
+                    <DeleteIcon style={{ fontSize: 16 }} />
+                  </button>
+                </div>
               </div>
               <p className="text-xs text-muted-foreground mb-3 line-clamp-2 min-h-[2rem]">
                 {p.description || "No description"}
@@ -156,6 +172,24 @@ export default function DashboardPage() {
                   rows={3}
                 />
               </div>
+              {natcos && natcos.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+                    <PublicIcon style={{ fontSize: 16 }} /> NATCO (optional)
+                  </label>
+                  <select
+                    value={newNatcoId ?? ""}
+                    onChange={(e) => setNewNatcoId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full px-3 py-2.5 border border-input rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+                  >
+                    <option value="">-- No NATCO --</option>
+                    {natcos.map((n: NatcoInfo) => (
+                      <option key={n.id} value={n.id}>{n.code} - {n.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground mt-1">Assign a NATCO to use global pattern configurations for this country.</p>
+                </div>
+              )}
               <div className="flex gap-2 pt-2">
                 <button type="submit" disabled={createMutation.isPending} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">
                   {createMutation.isPending ? "Creating..." : "Create Project"}

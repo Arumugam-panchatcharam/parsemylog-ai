@@ -27,12 +27,19 @@ def list_projects():
 
     result = []
     for p in projects:
+        natco_info = None
+        if p.natco_id:
+            natco = dbm.db.session.get(dbm.Natco, p.natco_id)
+            if natco:
+                natco_info = {"id": natco.id, "code": natco.code, "name": natco.name}
         result.append({
             "id": p.id,
             "name": p.name,
             "description": p.description or "",
             "created_at": str(p.created_at) if p.created_at else None,
             "last_accessed": str(p.last_accessed) if p.last_accessed else None,
+            "natco_id": p.natco_id,
+            "natco": natco_info,
         })
 
     return jsonify(result), 200
@@ -44,7 +51,7 @@ def create_project():
     """
     Create a new project.
 
-    Body: { "name": str, "description"?: str }
+    Body: { "name": str, "description"?: str, "natco_id"?: int }
     Returns: { "id", "name", "message" }
     """
     user_id = get_user_id()
@@ -52,14 +59,29 @@ def create_project():
 
     name = data.get("name", "").strip()
     description = data.get("description", "").strip()
+    natco_id = data.get("natco_id")
 
     if not name:
         return jsonify({"error": "Project name is required"}), 400
+
+    # Validate natco_id if provided
+    if natco_id is not None:
+        natco_id = int(natco_id)
+        natco = dbm.db.session.get(dbm.Natco, natco_id)
+        if not natco:
+            return jsonify({"error": "NATCO not found"}), 400
 
     success, project_id, message = dbm.create_project(user_id, name, description)
 
     if not success:
         return jsonify({"error": message}), 400
+
+    # Assign NATCO if provided
+    if natco_id:
+        project = dbm.get_project_by_id(project_id)
+        if project:
+            project.natco_id = natco_id
+            dbm.db.session.commit()
 
     return jsonify({
         "id": project_id,
@@ -86,6 +108,12 @@ def get_project(project_id):
     if project.user_id != user_id:
         return jsonify({"error": "Access denied"}), 403
 
+    natco_info = None
+    if project.natco_id:
+        natco = dbm.db.session.get(dbm.Natco, project.natco_id)
+        if natco:
+            natco_info = {"id": natco.id, "code": natco.code, "name": natco.name}
+
     return jsonify({
         "id": project.id,
         "name": project.name,
@@ -93,7 +121,45 @@ def get_project(project_id):
         "created_at": str(project.created_at) if project.created_at else None,
         "last_accessed": str(project.last_accessed) if project.last_accessed else None,
         "user_id": project.user_id,
+        "natco_id": project.natco_id,
+        "natco": natco_info,
     }), 200
+
+
+@projects_bp.route("/<project_id>", methods=["PUT"])
+@jwt_required()
+def update_project(project_id):
+    """
+    Update project metadata (name, description, natco_id).
+
+    Body: { "name"?: str, "description"?: str, "natco_id"?: int | null }
+    """
+    user_id = get_user_id()
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+    if project.user_id != user_id:
+        return jsonify({"error": "Access denied"}), 403
+
+    data = request.get_json(silent=True) or {}
+    if "name" in data:
+        project.name = data["name"].strip()
+    if "description" in data:
+        project.description = data["description"].strip()
+    if "natco_id" in data:
+        natco_id = data["natco_id"]
+        if natco_id is not None:
+            natco_id = int(natco_id)
+            if not dbm.db.session.get(dbm.Natco, natco_id):
+                return jsonify({"error": "NATCO not found"}), 400
+        project.natco_id = natco_id
+
+    try:
+        dbm.db.session.commit()
+        return jsonify({"message": "Project updated"}), 200
+    except Exception as e:
+        dbm.db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 
 @projects_bp.route("/<project_id>", methods=["DELETE"])

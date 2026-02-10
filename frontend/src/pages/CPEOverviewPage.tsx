@@ -35,10 +35,27 @@ interface OverviewData {
 
 /* ================================================================ Helpers */
 
-/** Short CPE label for charts/tables */
+/** CPE label for charts/tables -- show full serial */
 function cpeLabel(c: CPESummary): string {
-  const s = c.serial || "N/A";
-  return s.length > 14 ? s.slice(0, 6) + ".." + s.slice(-4) : s;
+  return c.serial || "N/A";
+}
+
+/**
+ * Generate N visually distinct colors using the golden-angle offset on
+ * the HSL hue wheel.  This guarantees good separation even for large N.
+ * Saturation and lightness are varied slightly so consecutive colors
+ * don't look too similar even when hues happen to be close.
+ */
+function generateCpeColors(n: number): string[] {
+  const colors: string[] = [];
+  const goldenAngle = 137.508; // degrees – maximises hue separation
+  for (let i = 0; i < n; i++) {
+    const hue = (i * goldenAngle) % 360;
+    const sat = 65 + (i % 3) * 10;        // 65 / 75 / 85 %
+    const light = 50 + (i % 2) * 8;       // 50 / 58 %
+    colors.push(`hsl(${hue.toFixed(0)}, ${sat}%, ${light}%)`);
+  }
+  return colors;
 }
 
 /** Check if a set of values are all the same */
@@ -324,6 +341,7 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
 function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
   const labels = cpes.map(cpeLabel);
   const totals = cpes.map((c) => c.reboot_summary.total);
+  const colors = generateCpeColors(cpes.length);
 
   // Collect all unique reasons
   const allReasons = new Set<string>();
@@ -331,12 +349,6 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
     Object.keys(c.reboot_summary.reasons || {}).forEach((r) => allReasons.add(r));
   });
   const reasons = Array.from(allReasons).sort();
-
-  // Bar colors
-  const barColors = [
-    "#4285f4", "#ea4335", "#fbbc04", "#34a853", "#ff6d01",
-    "#46bdc6", "#7baaf7", "#f07b72", "#fcd04f", "#71c287",
-  ];
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -353,15 +365,16 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
                 type: "bar",
                 x: labels,
                 y: totals,
-                marker: { color: barColors.slice(0, cpes.length) },
+                marker: { color: colors },
                 text: totals.map(String),
                 textposition: "auto" as const,
               },
             ]}
             layout={{
               title: { text: "Total Reboots per CPE" },
-              height: 300,
-              margin: { t: 40, b: 50, l: 50, r: 20 },
+              height: 380,
+              margin: { t: 40, b: 120, l: 50, r: 20 },
+              xaxis: { tickangle: -45, automargin: true },
               yaxis: { title: { text: "Reboots" } },
               paper_bgcolor: "transparent",
               plot_bgcolor: "transparent",
@@ -417,11 +430,7 @@ function PatternComparison({ cpes }: { cpes: CPESummary[] }) {
     const first = cpes.find((c) => c.pattern_summary[d]);
     return first?.pattern_summary[d]?.label || d;
   });
-
-  const barColors = [
-    "#4285f4", "#ea4335", "#fbbc04", "#34a853", "#ff6d01",
-    "#46bdc6", "#7baaf7", "#f07b72", "#fcd04f", "#71c287",
-  ];
+  const colors = generateCpeColors(cpes.length);
 
   // Build grouped bar traces: one trace per CPE
   const loglineTraces = cpes.map((c, i) => ({
@@ -429,7 +438,7 @@ function PatternComparison({ cpes }: { cpes: CPESummary[] }) {
     name: cpeLabel(c),
     x: domainLabels,
     y: domains.map((d) => c.pattern_summary[d]?.total_loglines || 0),
-    marker: { color: barColors[i % barColors.length] },
+    marker: { color: colors[i] },
   }));
 
   const patternTraces = cpes.map((c, i) => ({
@@ -437,7 +446,7 @@ function PatternComparison({ cpes }: { cpes: CPESummary[] }) {
     name: cpeLabel(c),
     x: domainLabels,
     y: domains.map((d) => c.pattern_summary[d]?.unique_patterns || 0),
-    marker: { color: barColors[i % barColors.length] },
+    marker: { color: colors[i] },
   }));
 
   // Also build a summary table
@@ -468,13 +477,13 @@ function PatternComparison({ cpes }: { cpes: CPESummary[] }) {
           layout={{
             title: { text: "Log Lines per Domain" },
             barmode: "group",
-            height: 320,
-            margin: { t: 40, b: 60, l: 60, r: 20 },
+            height: 380,
+            margin: { t: 40, b: 80, l: 60, r: 20 },
             yaxis: { title: { text: "Log Lines" } },
             paper_bgcolor: "transparent",
             plot_bgcolor: "transparent",
             font: { color: "#888" },
-            legend: { orientation: "h" as const, y: -0.2 },
+            legend: { orientation: "h" as const, y: -0.35, font: { size: 10 } },
           }}
           config={{ displayModeBar: false }}
           style={{ width: "100%" }}
@@ -486,13 +495,13 @@ function PatternComparison({ cpes }: { cpes: CPESummary[] }) {
           layout={{
             title: { text: "Unique Patterns per Domain" },
             barmode: "group",
-            height: 320,
-            margin: { t: 40, b: 60, l: 60, r: 20 },
+            height: 380,
+            margin: { t: 40, b: 80, l: 60, r: 20 },
             yaxis: { title: { text: "Unique Patterns" } },
             paper_bgcolor: "transparent",
             plot_bgcolor: "transparent",
             font: { color: "#888" },
-            legend: { orientation: "h" as const, y: -0.2 },
+            legend: { orientation: "h" as const, y: -0.35, font: { size: 10 } },
           }}
           config={{ displayModeBar: false }}
           style={{ width: "100%" }}

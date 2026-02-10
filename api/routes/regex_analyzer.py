@@ -697,3 +697,357 @@ def get_scan_results(project_id, scan_id):
         mimetype="application/json",
         as_attachment=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# NATCO Pattern Governance: Global / Sync / Submit
+# ---------------------------------------------------------------------------
+
+@regex_analyzer_bp.route("/<project_id>/patterns/global", methods=["GET"])
+@jwt_required()
+def get_global_patterns(project_id):
+    """
+    Get the global NATCO patterns for this project's assigned NATCO.
+
+    Returns:
+        { "domains": {...}, "natco": {id, code, name} | null }
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    if not project.natco_id:
+        return jsonify({"domains": {}, "natco": None}), 200
+
+    natco = dbm.db.session.get(dbm.Natco, project.natco_id)
+    if not natco:
+        return jsonify({"domains": {}, "natco": None}), 200
+
+    patterns = (
+        dbm.db.session.query(dbm.GlobalPattern)
+        .filter_by(natco_id=natco.id)
+        .order_by(dbm.GlobalPattern.domain, dbm.GlobalPattern.name)
+        .all()
+    )
+
+    domains: Dict[str, List[Dict[str, Any]]] = {}
+    for p in patterns:
+        if p.domain not in domains:
+            domains[p.domain] = []
+        domains[p.domain].append({
+            "name": p.name,
+            "regex": p.regex,
+            "enabled": p.enabled,
+        })
+
+    return jsonify({
+        "domains": domains,
+        "natco": {"id": natco.id, "code": natco.code, "name": natco.name},
+    }), 200
+
+
+@regex_analyzer_bp.route("/<project_id>/patterns/sync", methods=["POST"])
+@jwt_required()
+def sync_from_global(project_id):
+    """
+    Merge latest global NATCO patterns into the user's local patterns.
+
+    Logic:
+      - Global patterns replace/update matching entries (by domain + regex)
+      - User-only patterns (not in global) are preserved
+      - The merged result is saved and returned
+
+    Returns:
+        { "domains": {...}, "synced": int }
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    if not project.natco_id:
+        return jsonify({"error": "Project has no NATCO assigned"}), 400
+
+    # Load global patterns
+    global_patterns = (
+        dbm.db.session.query(dbm.GlobalPattern)
+        .filter_by(natco_id=project.natco_id)
+        .order_by(dbm.GlobalPattern.domain, dbm.GlobalPattern.name)
+        .all()
+    )
+
+    global_by_domain: Dict[str, List[Dict[str, Any]]] = {}
+    for gp in global_patterns:
+        if gp.domain not in global_by_domain:
+            global_by_domain[gp.domain] = []
+        global_by_domain[gp.domain].append({
+            "name": gp.name,
+            "regex": gp.regex,
+            "enabled": gp.enabled,
+        })
+
+    # Load current user patterns
+    user_domains = load_user_patterns(user_id)
+
+    # Merge: global patterns take precedence, user-only patterns preserved
+    merged: Dict[str, List[Dict[str, Any]]] = {}
+    all_domains = set(list(global_by_domain.keys()) + list(user_domains.keys()))
+    synced = 0
+
+    for domain in all_domains:
+        global_pats = global_by_domain.get(domain, [])
+        user_pats = user_domains.get(domain, [])
+
+        # Build a map of user patterns by regex
+        user_by_regex = {p["regex"]: p for p in user_pats}
+
+        domain_result: List[Dict[str, Any]] = []
+
+        # First add all global patterns (overriding user versions)
+        global_regexes = set()
+        for gp in global_pats:
+            global_regexes.add(gp["regex"])
+            domain_result.append({
+                "name": gp["name"],
+                "regex": gp["regex"],
+                "enabled": gp["enabled"],
+            })
+            synced += 1
+
+        # Then add user-only patterns (not in global)
+        for up in user_pats:
+            if up["regex"] not in global_regexes:
+                domain_result.append(up)
+
+        if domain_result:
+            merged[domain] = domain_result
+
+    save_user_patterns(user_id, merged)
+    return jsonify({"domains": merged, "synced": synced}), 200
+
+
+@regex_analyzer_bp.route("/<project_id>/patterns/diff", methods=["GET"])
+@jwt_required()
+def diff_patterns(project_id):
+    """
+    Compare user's local patterns against the NATCO global config.
+
+    Returns per-domain categorisation:
+        {
+            "domains": {
+                "domain_name": {
+                    "new":      [{name, regex, enabled}],
+                    "modified": [{name, regex, enabled, global_name, global_enabled}],
+                    "unchanged":[{name, regex, enabled}]
+                }
+            },
+            "natco": {id, code, name} | null
+        }
+
+    A pattern is "new" if its regex doesn't exist in global.
+    A pattern is "modified" if its regex exists but name or enabled differs.
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    if not project.natco_id:
+        return jsonify({"domains": {}, "natco": None}), 200
+
+    natco = dbm.db.session.get(dbm.Natco, project.natco_id)
+    if not natco:
+        return jsonify({"domains": {}, "natco": None}), 200
+
+    # Build global lookup: {domain: {regex: {name, regex, enabled}}}
+    global_pats = (
+        dbm.db.session.query(dbm.GlobalPattern)
+        .filter_by(natco_id=natco.id)
+        .all()
+    )
+    global_by_domain: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for gp in global_pats:
+        global_by_domain.setdefault(gp.domain, {})[gp.regex] = {
+            "name": gp.name, "regex": gp.regex, "enabled": gp.enabled,
+        }
+
+    # Load user patterns
+    user_domains = load_user_patterns(user_id)
+
+    result_domains: Dict[str, Dict[str, list]] = {}
+    for domain, user_pats in user_domains.items():
+        gmap = global_by_domain.get(domain, {})
+        new_pats = []
+        modified_pats = []
+        unchanged_pats = []
+
+        for p in user_pats:
+            rx = p.get("regex", "")
+            name = p.get("name", "")
+            enabled = p.get("enabled", True)
+
+            if rx not in gmap:
+                new_pats.append({"name": name, "regex": rx, "enabled": enabled})
+            else:
+                gp = gmap[rx]
+                if gp["name"] != name or gp["enabled"] != enabled:
+                    modified_pats.append({
+                        "name": name, "regex": rx, "enabled": enabled,
+                        "global_name": gp["name"], "global_enabled": gp["enabled"],
+                    })
+                else:
+                    unchanged_pats.append({"name": name, "regex": rx, "enabled": enabled})
+
+        if new_pats or modified_pats or unchanged_pats:
+            result_domains[domain] = {
+                "new": new_pats,
+                "modified": modified_pats,
+                "unchanged": unchanged_pats,
+            }
+
+    return jsonify({
+        "domains": result_domains,
+        "natco": {"id": natco.id, "code": natco.code, "name": natco.name},
+    }), 200
+
+
+@regex_analyzer_bp.route("/<project_id>/patterns/submit", methods=["POST"])
+@jwt_required()
+def submit_patterns(project_id):
+    """
+    Submit user patterns for admin review (upstream to global).
+
+    Request body:
+        {
+            "domain": str,
+            "patterns": [{ "name": str, "regex": str, "enabled": bool }],
+            "comment": str (optional)
+        }
+
+    Returns:
+        { "id": int, "message": str }
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    if not project.natco_id:
+        return jsonify({"error": "Project has no NATCO assigned. Cannot submit to global."}), 400
+
+    data = request.get_json(silent=True) or {}
+    domain = (data.get("domain") or "").strip()
+    patterns = data.get("patterns", [])
+    comment = (data.get("comment") or "").strip()
+
+    if not domain:
+        return jsonify({"error": "Domain is required"}), 400
+    if not patterns or not isinstance(patterns, list):
+        return jsonify({"error": "At least one pattern is required"}), 400
+
+    # Validate patterns
+    validated = []
+    for p in patterns:
+        if not isinstance(p, dict):
+            continue
+        name = str(p.get("name", "")).strip()
+        regex_val = str(p.get("regex", "")).strip()
+        enabled = bool(p.get("enabled", True))
+        change_type = str(p.get("change_type", "new")).strip()
+        if not name or not regex_val:
+            continue
+        try:
+            re.compile(regex_val)
+        except re.error as e:
+            return jsonify({"error": f"Invalid regex '{regex_val}': {e}"}), 400
+        validated.append({"name": name, "regex": regex_val, "enabled": enabled, "change_type": change_type})
+
+    if not validated:
+        return jsonify({"error": "No valid patterns to submit"}), 400
+
+    submission = dbm.PatternSubmission(
+        user_id=user_id,
+        natco_id=project.natco_id,
+        domain=domain,
+        patterns_json=json.dumps(validated),
+        comment=comment,
+    )
+    dbm.db.session.add(submission)
+
+    try:
+        dbm.db.session.commit()
+        return jsonify({"id": submission.id, "message": f"Submitted {len(validated)} patterns for review."}), 201
+    except Exception as e:
+        dbm.db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@regex_analyzer_bp.route("/<project_id>/patterns/submissions", methods=["GET"])
+@jwt_required()
+def get_my_submissions(project_id):
+    """
+    List the current user's pattern submissions for this project's NATCO.
+
+    Returns:
+        [{ id, domain, status, comment, created_at, admin_comment, reviewed_at }]
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    if not project.natco_id:
+        return jsonify([]), 200
+
+    subs = (
+        dbm.db.session.query(dbm.PatternSubmission)
+        .filter_by(user_id=user_id, natco_id=project.natco_id)
+        .order_by(dbm.PatternSubmission.created_at.desc())
+        .all()
+    )
+
+    return jsonify([
+        {
+            "id": s.id,
+            "domain": s.domain,
+            "patterns": json.loads(s.patterns_json) if s.patterns_json else [],
+            "comment": s.comment or "",
+            "status": s.status,
+            "admin_comment": s.admin_comment or "",
+            "created_at": str(s.created_at) if s.created_at else None,
+            "reviewed_at": str(s.reviewed_at) if s.reviewed_at else None,
+        }
+        for s in subs
+    ]), 200
+
+
+@regex_analyzer_bp.route("/<project_id>/patterns/submissions/clear", methods=["DELETE"])
+@jwt_required()
+def clear_resolved_submissions(project_id):
+    """
+    Delete all approved/rejected submissions for the current user & project NATCO.
+
+    Returns:
+        { "deleted": int }
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    if not project.natco_id:
+        return jsonify({"deleted": 0}), 200
+
+    deleted = (
+        dbm.db.session.query(dbm.PatternSubmission)
+        .filter(
+            dbm.PatternSubmission.user_id == user_id,
+            dbm.PatternSubmission.natco_id == project.natco_id,
+            dbm.PatternSubmission.status.in_(["approved", "rejected"]),
+        )
+        .delete(synchronize_session="fetch")
+    )
+    dbm.db.session.commit()
+
+    return jsonify({"deleted": deleted}), 200
