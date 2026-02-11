@@ -20,9 +20,90 @@
 # found in the actual report data (e.g. Radio.1, Radio.2).
 # =============================================================================
 
-profile_filter: "Advanced_dynamic"   # which T2 profile to extract from
+# TR-181 keys are standardised; profile names are user-defined and vary
+# across firmware versions, so we extract from ALL profiles.
 
 field_groups:
+
+  # -------------------------------------------------------------------------
+  # WiFi Global
+  # -------------------------------------------------------------------------
+  - label: "WiFi Global"
+    fields:
+      - key: "Device.WiFi.X_TELEKOM-COM_Enable"
+        label: "WiFi Enable"
+        type: bool
+        sample: last
+  
+  # -------------------------------------------------------------------------
+  # Airties Edge
+  # -------------------------------------------------------------------------
+  - label: "Airties Edge"
+    fields:
+      - key: "Device.Services.X_AIRTIES_Edge.Enable"
+        label: "Airties Edge Enable"
+        type: bool
+        sample: last
+
+  # -------------------------------------------------------------------------
+  # CUJO Security Agent
+  # -------------------------------------------------------------------------
+  - label: "CUJO Agent"
+    fields:
+      - key: "Device.X_RDK_CujoAgent.Enable"
+        label: "CUJO Enable"
+        type: bool
+        sample: last
+
+  # -------------------------------------------------------------------------
+  # Cellular Backup
+  # -------------------------------------------------------------------------
+  - label: "Cellular Backup"
+    fields:
+      - key: "Device.Cellular.Interface.1.Enable"
+        label: "Cellular Enable"
+        type: bool
+        sample: last
+
+      - key: "Device.Cellular.X_RDK_Status"
+        label: "Cellular Backup Status"
+        type: status
+        sample: last
+
+      - key: "Device.Cellular.X_RDK_DeviceType"
+        label: "Cellular Device Type"
+        type: text
+        sample: last
+
+      - key: "Device.Cellular.Interface.1.X_RDK_RadioSignal.RadioEnvConditions"
+        label: "LTE Signal Level"
+        type: status
+        sample: last
+
+  # -------------------------------------------------------------------------
+  # SmartHome
+  # -------------------------------------------------------------------------
+  - label: "SmartHome"
+    fields:
+      - key: "Device.Services.X_T-ONLINE-DE_SmartHome.Enable"
+        label: "SmartHome Enable"
+        type: bool
+        sample: last
+
+      - key: "Device.Services.X_T-ONLINE-DE_SmartHome.Status"
+        label: "SmartHome Status"
+        type: status
+        sample: last
+
+  # -------------------------------------------------------------------------
+  # Deep Power Down (DPD)
+  # -------------------------------------------------------------------------
+  - label: "Deep Power Down"
+    fields:
+      - key: "Device.WiFi.X_TELEKOM-COM_DPD.Activated"
+        label: "DPD Activated"
+        type: bool
+        sample: last
 
   # -------------------------------------------------------------------------
   # WiFi Radio Status

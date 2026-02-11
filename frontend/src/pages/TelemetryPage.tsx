@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { telemetryApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
@@ -18,7 +19,23 @@ import ErrorIcon from "@mui/icons-material/Error";
 import WarningIcon from "@mui/icons-material/Warning";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import ExploreIcon from "@mui/icons-material/Explore";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import CachedIcon from "@mui/icons-material/Cached";
+import SignalCellularAltIcon from "@mui/icons-material/SignalCellularAlt";
+import HomeIcon from "@mui/icons-material/Home";
+import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";
+import SecurityIcon from "@mui/icons-material/Security";
+import HubIcon from "@mui/icons-material/Hub";
+import ToggleOnIcon from "@mui/icons-material/ToggleOn";
+import DeviceHubIcon from "@mui/icons-material/DeviceHub";
+import DevicesIcon from "@mui/icons-material/Devices";
+import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
+import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import CircularProgress from "@mui/material/CircularProgress";
+import Slider from "@mui/material/Slider";
 import type { SvgIconComponent } from "@mui/icons-material";
 
 /* ================================================================ Types */
@@ -28,6 +45,39 @@ interface RebootTimeline {
   total_reboots: number;
   events: Array<{ time: string; count: number; prev_uptime: number; new_uptime: number }>;
 }
+interface AvailableFieldInfo {
+  key: string;
+  type: string;
+  plottable: boolean;
+  count: number;
+  samples: string[];
+}
+interface AvailableFields {
+  configured_keys: string[];
+  unconfigured: Record<string, AvailableFieldInfo[]>;
+  stats: { total_fields: number; configured: number; unconfigured: number };
+}
+interface TopoRadio { band: string; standards: string; channel: string; bandwidth: string; temperature: string; bss_count: number; sta_count: number }
+interface TopoClient {
+  mac: string; band: string; ssid: string; operating_standard: string;
+  max_phy_rate: number; last_dl_rate: number; last_ul_rate: number;
+  signal_strength_dbm: string; bytes_rx: number; bytes_tx: number;
+  connect_time: number; retrans_count: number; is_affiliated: boolean;
+}
+interface TopoNode {
+  id: string; index: string; is_gateway: boolean;
+  manufacturer: string; model: string; serial_number: string; software_version: string;
+  backhaul_mac: string; backhaul_media_type: string; backhaul_phy_rate: number; backhaul_al_id: string;
+  radios: TopoRadio[]; connected_clients: number; clients: TopoClient[];
+  memory: { free: string; total: string; cached: string };
+  cpu: { usage: string; temperature: string };
+  onboarded: string; service_active: string;
+  backhaul_signal_strength: string; backhaul_link_utilization: string;
+}
+interface TopoEdge { from_id: string; to_id: string; media_type: string; phy_rate: number; signal_strength: string; link_utilization: string; is_wifi: boolean }
+interface TopoSnapshot { time: string; log_timestamp: string; profile: string; device_count: number; nodes: TopoNode[]; edges: TopoEdge[]; mermaid: string }
+interface MeshTopology { snapshots: TopoSnapshot[]; total_snapshots: number; time_range: { start: string; end: string } }
+
 interface TelemetryData {
   device_info: Record<string, string>;
   summary: { total: number; parsed: number; overall_time_range: { first?: string; last?: string } };
@@ -35,6 +85,9 @@ interface TelemetryData {
   status_labels: Array<{ type: string; instance: string; status: string; meta: Record<string, string> }>;
   charts: Array<{ group: string; traces: Array<{ label: string; unit: string; times: string[]; values: number[] }> }>;
   reboot_timeline?: RebootTimeline;
+  mesh_topology?: MeshTopology;
+  available_fields?: AvailableFields;
+  cached?: boolean;
 }
 
 /* ================================================================ Helpers */
@@ -86,6 +139,10 @@ const NO_TOOLBAR = { displayModeBar: false } as const;
 export default function TelemetryPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
+  const qc = useQueryClient();
+  const [reparsing, setReparsing] = useState(false);
+  const [showDiscovery, setShowDiscovery] = useState(false);
+
   const { data: rawData, isLoading, isError, error } = useQuery<TelemetryData>({
     queryKey: ["telemetry", projectId, cpeId],
     queryFn: async () => (await telemetryApi.parse(projectId!, cpeId)).data,
@@ -93,34 +150,88 @@ export default function TelemetryPage() {
   });
   const data = rawData ?? null;
 
+  const handleReparse = async () => {
+    setReparsing(true);
+    try {
+      const res = await telemetryApi.parse(projectId!, cpeId, true);
+      qc.setQueryData(["telemetry", projectId, cpeId], res.data);
+    } catch { /* ignore */ }
+    setReparsing(false);
+  };
+
   const stColor = (v: string) => {
     const s = v.trim().toLowerCase();
-    if (["up", "true", "enabled", "1"].includes(s)) return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-900/20 dark:text-green-400";
-    if (["down", "false", "disabled", "0", "error"].includes(s)) return "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-400";
+    if (["up", "true", "enabled", "1", "good", "connected"].includes(s)) return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-900/20 dark:text-green-400";
+    if (["down", "false", "disabled", "0", "error", "bad", "poor", "disconnected"].includes(s)) return "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-400";
     return "border-gray-300 bg-gray-50 text-gray-700 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400";
   };
   const stIcon = (v: string) => {
     const s = v.trim().toLowerCase();
-    if (["up", "true", "enabled", "1"].includes(s)) return <CheckCircleIcon style={{ fontSize: 15 }} className="text-green-600 dark:text-green-400" />;
-    if (["down", "false", "disabled", "0", "error"].includes(s)) return <ErrorIcon style={{ fontSize: 15 }} className="text-red-600 dark:text-red-400" />;
+    if (["up", "true", "enabled", "1", "good", "connected"].includes(s)) return <CheckCircleIcon style={{ fontSize: 15 }} className="text-green-600 dark:text-green-400" />;
+    if (["down", "false", "disabled", "0", "error", "bad", "poor", "disconnected"].includes(s)) return <ErrorIcon style={{ fontSize: 15 }} className="text-red-600 dark:text-red-400" />;
     return <WarningIcon style={{ fontSize: 15 }} className="text-yellow-600 dark:text-yellow-400" />;
+  };
+
+  const statusTypeIcon = (type: string): SvgIconComponent => {
+    const t = type.toLowerCase();
+    if (t.includes("radio")) return SettingsInputAntennaIcon;
+    if (t.includes("ssid") || t.includes("wifi")) return WifiIcon;
+    if (t.includes("cellular")) return SignalCellularAltIcon;
+    if (t.includes("smart")) return HomeIcon;
+    if (t.includes("power") || t.includes("dpd")) return PowerSettingsNewIcon;
+    if (t.includes("cujo") || t.includes("security")) return SecurityIcon;
+    if (t.includes("airties") || t.includes("edge")) return HubIcon;
+    return ToggleOnIcon;
   };
 
   return (
     <div className="p-4 space-y-4 max-w-full overflow-y-auto">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <TimelineIcon style={{ fontSize: 24, color: "#1a73e8" }} />
         <h2 className="text-lg font-semibold">Telemetry Dashboard</h2>
+        {data?.cached && (
+          <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
+            <CachedIcon style={{ fontSize: 12 }} /> cached
+          </span>
+        )}
         {data?.summary && (
-          <span className="ml-auto text-[11px] text-muted-foreground">
+          <span className="text-[11px] text-muted-foreground">
             {data.summary.parsed}/{data.summary.total} parsed
             {data.summary.overall_time_range?.first && ` | ${data.summary.overall_time_range.first.slice(0, 19)} — ${data.summary.overall_time_range.last?.slice(0, 19)}`}
           </span>
         )}
+        <div className="ml-auto flex items-center gap-2">
+          {data && (
+            <button
+              onClick={() => setShowDiscovery((v) => !v)}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors"
+            >
+              <ExploreIcon style={{ fontSize: 15 }} />
+              Available Fields
+              {data.available_fields?.stats && (
+                <span className="text-[10px] bg-primary/10 text-primary rounded px-1">{data.available_fields.stats.unconfigured}</span>
+              )}
+            </button>
+          )}
+          <button
+            onClick={handleReparse}
+            disabled={reparsing || isLoading}
+            className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors disabled:opacity-50"
+            title="Re-parse from raw log file"
+          >
+            {reparsing ? <CircularProgress size={14} /> : <RefreshIcon style={{ fontSize: 15 }} />}
+            Re-parse
+          </button>
+        </div>
       </div>
 
       {isLoading && <div className="flex items-center gap-3 justify-center py-16 text-muted-foreground"><CircularProgress size={24} /><span className="text-sm">Parsing telemetry data...</span></div>}
       {isError && <div className="p-4 bg-destructive/10 text-destructive rounded-xl text-sm flex items-center gap-2"><ErrorIcon style={{ fontSize: 18 }} />{(error as { response?: { data?: { error?: string } } })?.response?.data?.error || "Error parsing telemetry"}</div>}
+
+      {/* ========== Available Fields Discovery Panel ========== */}
+      {showDiscovery && data?.available_fields && (
+        <AvailableFieldsPanel fields={data.available_fields} onClose={() => setShowDiscovery(false)} />
+      )}
 
       {data && (
         <>
@@ -152,6 +263,11 @@ export default function TelemetryPage() {
             })}
           </div>
 
+          {/* ========== MESH TOPOLOGY ========== */}
+          {data.mesh_topology && data.mesh_topology.total_snapshots > 0 && (
+            <MeshTopologyPanel topology={data.mesh_topology} />
+          )}
+
           {/* ========== ROW 2: Radio/SSID + Key Metrics side by side ========== */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Radio / SSID Status */}
@@ -159,27 +275,31 @@ export default function TelemetryPage() {
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="px-4 py-2 border-b border-border bg-muted/30">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    <SettingsInputAntennaIcon style={{ fontSize: 14, color: "#1a73e8" }} /> Radio / SSID Status
+                    <SettingsInputAntennaIcon style={{ fontSize: 14, color: "#1a73e8" }} /> Feature Status
                   </h3>
                 </div>
-                <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {data.status_labels.map((s, idx) => (
-                    <div key={idx} className={`border rounded-lg p-2.5 ${stColor(s.status)}`}>
-                      <div className="flex items-center gap-1.5 text-xs">
-                        {stIcon(s.status)}
-                        {s.type === "Radio" ? <SettingsInputAntennaIcon style={{ fontSize: 14 }} /> : <WifiIcon style={{ fontSize: 14 }} />}
-                        <span className="font-semibold flex-1">{s.type} {s.instance}</span>
-                        <span className="text-[10px] capitalize font-bold">{s.status}</span>
-                      </div>
-                      {Object.keys(s.meta).length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1.5 pl-6">
-                          {Object.entries(s.meta).map(([k, v]) => (
-                            <span key={k} className="text-[10px] bg-white/50 dark:bg-black/15 px-1.5 py-0.5 rounded font-medium">{k}: {v}</span>
-                          ))}
+                <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {data.status_labels.map((s, idx) => {
+                    const TypeIcon = statusTypeIcon(s.type);
+                    const displayName = s.instance ? `${s.type} ${s.instance}` : s.type;
+                    return (
+                      <div key={idx} className={`border rounded-lg p-2.5 ${stColor(s.status)}`}>
+                        <div className="flex items-center gap-1.5 text-xs">
+                          {stIcon(s.status)}
+                          <TypeIcon style={{ fontSize: 14 }} />
+                          <span className="font-semibold flex-1">{displayName}</span>
+                          <span className="text-[10px] capitalize font-bold">{s.status}</span>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        {Object.keys(s.meta).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5 pl-6">
+                            {Object.entries(s.meta).map(([k, v]) => (
+                              <span key={k} className="text-[10px] bg-white/50 dark:bg-black/15 px-1.5 py-0.5 rounded font-medium">{k}: {v}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -288,8 +408,531 @@ export default function TelemetryPage() {
               </div>
             ))}
           </div>
+
         </>
       )}
+    </div>
+  );
+}
+
+/* ================================================================ Mesh Topology */
+
+/** Render a MAC address with the last two octets bolded */
+function MacBold({ mac }: { mac: string }) {
+  const parts = mac.split(":");
+  if (parts.length >= 3) {
+    const head = parts.slice(0, -2).join(":");
+    const tail = parts.slice(-2).join(":");
+    return <>{head}:<span className="font-bold">{tail}</span></>;
+  }
+  return <>{mac}</>;
+}
+
+function signalColor(sig: string): string {
+  const val = parseFloat(sig);
+  if (isNaN(val) || val === 0) return "text-gray-400";
+  // Signal is RSSI in dBm (negative values): -30 excellent, -67 good, -70 fair, -80+ poor
+  if (val >= -55) return "text-green-600 dark:text-green-400";
+  if (val >= -67) return "text-emerald-600 dark:text-emerald-400";
+  if (val >= -75) return "text-yellow-600 dark:text-yellow-400";
+  return "text-red-600 dark:text-red-400";
+}
+
+/** Badge color classes for WiFi operating standard */
+function stdBadge(std: string): { bg: string; text: string; label: string } {
+  switch (std.toLowerCase()) {
+    case "be": return { bg: "bg-purple-100 dark:bg-purple-900/40", text: "text-purple-700 dark:text-purple-300", label: "WiFi 7 (be)" };
+    case "ax": return { bg: "bg-green-100 dark:bg-green-900/40", text: "text-green-700 dark:text-green-300", label: "WiFi 6 (ax)" };
+    case "ac": return { bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-700 dark:text-blue-300", label: "WiFi 5 (ac)" };
+    case "n":  return { bg: "bg-gray-100 dark:bg-gray-800/60", text: "text-gray-600 dark:text-gray-300", label: "WiFi 4 (n)" };
+    default:   return { bg: "bg-gray-100 dark:bg-gray-800/60", text: "text-gray-500 dark:text-gray-400", label: std || "?" };
+  }
+}
+
+/** Format bytes to a human-readable string */
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return `${val < 10 ? val.toFixed(1) : Math.round(val)} ${units[i]}`;
+}
+
+/** Format Kbps rate to readable Mbps / Gbps */
+function formatRate(kbps: number): string {
+  if (kbps === 0) return "—";
+  if (kbps >= 1_000_000) return `${(kbps / 1_000_000).toFixed(1)}Gbps`;
+  if (kbps >= 1000) return `${Math.round(kbps / 1000)}Mbps`;
+  return `${kbps}Kbps`;
+}
+
+/** Format seconds to a human-readable duration */
+function formatDuration(seconds: number): string {
+  if (seconds === 0) return "—";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h${m > 0 ? ` ${m}m` : ""}`;
+  return `${m}m`;
+}
+
+function memPercent(free: string, total: string): number | null {
+  const f = parseInt(free, 10);
+  const t = parseInt(total, 10);
+  if (isNaN(f) || isNaN(t) || t === 0) return null;
+  return Math.round(((t - f) / t) * 100);
+}
+
+function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
+  const [snapshotIdx, setSnapshotIdx] = useState(topology.snapshots.length - 1);
+  const snap = topology.snapshots[snapshotIdx] ?? topology.snapshots[0];
+
+  // Build tree structure using edges (not backhaul_al_id) to avoid duplicates
+  const gateway = snap?.nodes.find((n) => n.is_gateway) ?? null;
+  const { childMap, connectedIds } = useMemo(() => {
+    const m = new Map<string, TopoNode[]>();
+    const connected = new Set<string>();
+    if (!snap) return { childMap: m, connectedIds: connected };
+    const nodeById = new Map(snap.nodes.map((n) => [n.id, n]));
+
+    // Build from edges -- each edge.to_id is a child of edge.from_id
+    for (const edge of snap.edges) {
+      const child = nodeById.get(edge.to_id);
+      if (!child) continue;
+      connected.add(edge.to_id);
+      if (!m.has(edge.from_id)) m.set(edge.from_id, []);
+      m.get(edge.from_id)!.push(child);
+    }
+    return { childMap: m, connectedIds: connected };
+  }, [snap]);
+
+  if (!snap) return null;
+
+  // Get edge info for a node
+  const edgeFor = (nodeId: string) => snap.edges.find((e) => e.to_id === nodeId);
+
+  const sliderMarks = topology.snapshots.map((s, i) => ({
+    value: i,
+    label: i === 0 || i === topology.snapshots.length - 1 ? s.time.slice(11, 16) : "",
+  }));
+
+  // Recursive render for multi-hop topology
+  const renderChildren = (parentId: string, depth: number) => {
+    const children = childMap.get(parentId) || [];
+    if (children.length === 0) return null;
+    return (
+      <div className="relative flex justify-center" style={{ marginTop: depth === 1 ? 0 : 8 }}>
+        {/* Horizontal connector bar spanning all children */}
+        {children.length > 1 && (
+          <div
+            className="absolute top-0 border-t-2 border-dashed border-blue-400"
+            style={{
+              left: `calc(${100 / (2 * children.length)}% + 4px)`,
+              right: `calc(${100 / (2 * children.length)}% + 4px)`,
+            }}
+          />
+        )}
+        <div className="flex flex-wrap justify-center gap-6">
+          {children.map((node) => {
+            const edge = edgeFor(node.id);
+            const isWifi = edge?.is_wifi ?? true;
+            return (
+              <div key={node.id} className="flex flex-col items-center">
+                {/* Vertical drop-down line from horizontal bar */}
+                <div className={`w-0 h-5 ${isWifi ? "border-l-2 border-dashed border-blue-400" : "border-l-2 border-solid border-gray-500"}`} />
+                {/* Edge label */}
+                {edge && (
+                  <span className="text-[9px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded mb-1 whitespace-nowrap">
+                    {edge.media_type.replace("IEEE ", "")} {edge.phy_rate > 0 ? `${edge.phy_rate}Mbps` : ""}
+                    {edge.signal_strength ? <span className={` ml-1 font-bold ${signalColor(edge.signal_strength)}`}>{edge.signal_strength}dBm</span> : ""}
+                  </span>
+                )}
+                {/* Node card */}
+                <DeviceNodeCard node={node} />
+                {/* Render this node's children (multi-hop) */}
+                {childMap.has(node.id) && (
+                  <div className={`w-0 h-4 mt-1 ${true ? "border-l-2 border-dashed border-blue-400" : "border-l-2 border-solid border-gray-500"}`} />
+                )}
+                {renderChildren(node.id, depth + 1)}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // Orphan = not gateway, not connected via any edge
+  const orphans = snap.nodes.filter((n) => !n.is_gateway && !connectedIds.has(n.id));
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="px-4 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
+        <DeviceHubIcon style={{ fontSize: 16, color: "#1a73e8" }} />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+          Mesh Topology
+        </h3>
+        <span className="text-[10px] text-muted-foreground ml-1">
+          {snap.device_count} devices
+        </span>
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          Snapshot {snapshotIdx + 1} of {topology.total_snapshots}
+          {snap.profile && <span className="ml-1 font-medium">({snap.profile})</span>}
+        </span>
+      </div>
+
+      {/* Time Slider */}
+      {topology.total_snapshots > 1 && (
+        <div className="px-4 pt-3 pb-1 border-b border-border bg-muted/10">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSnapshotIdx((i) => Math.max(0, i - 1))}
+              disabled={snapshotIdx === 0}
+              className="p-0.5 rounded hover:bg-muted disabled:opacity-30 transition-colors"
+            >
+              <NavigateBeforeIcon style={{ fontSize: 18 }} />
+            </button>
+            <div className="flex-1 px-2">
+              <Slider
+                value={snapshotIdx}
+                min={0}
+                max={topology.snapshots.length - 1}
+                step={1}
+                marks={sliderMarks}
+                onChange={(_, v) => setSnapshotIdx(v as number)}
+                valueLabelDisplay="auto"
+                valueLabelFormat={(v) => {
+                  const s = topology.snapshots[v];
+                  return s ? s.time.slice(0, 19).replace("T", " ") : "";
+                }}
+                size="small"
+                sx={{
+                  "& .MuiSlider-markLabel": { fontSize: "10px" },
+                  "& .MuiSlider-thumb": { width: 14, height: 14 },
+                }}
+              />
+            </div>
+            <button
+              onClick={() => setSnapshotIdx((i) => Math.min(topology.snapshots.length - 1, i + 1))}
+              disabled={snapshotIdx === topology.snapshots.length - 1}
+              className="p-0.5 rounded hover:bg-muted disabled:opacity-30 transition-colors"
+            >
+              <NavigateNextIcon style={{ fontSize: 18 }} />
+            </button>
+            <span className="text-[11px] text-muted-foreground font-mono whitespace-nowrap min-w-[140px] text-right">
+              {snap.time.slice(0, 19).replace("T", " ")}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Topology Graph */}
+      <div className="p-4 overflow-x-auto">
+        <div className="flex flex-col items-center min-w-[400px]">
+          {/* Gateway node */}
+          {gateway && <DeviceNodeCard node={gateway} />}
+
+          {/* Vertical connector from gateway down to horizontal bar */}
+          {gateway && (childMap.get(gateway.id)?.length ?? 0) > 0 && (
+            <div className="w-0 h-4 border-l-2 border-dashed border-blue-400" />
+          )}
+
+          {/* Children of gateway */}
+          {gateway && renderChildren(gateway.id, 1)}
+
+          {/* Orphan extenders (not connected by any edge) */}
+          {orphans.length > 0 && (
+            <div className="mt-6 pt-4 border-t border-dashed border-gray-300 dark:border-gray-600 w-full">
+              <p className="text-[10px] text-muted-foreground text-center mb-2 uppercase tracking-wider">Unconnected Devices</p>
+              <div className="flex flex-wrap justify-center gap-4">
+                {orphans.map((node) => (
+                  <DeviceNodeCard key={node.id} node={node} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Check if model name indicates a Speed Home WLAN device */
+function isSpeedHomeWlan(model: string): boolean {
+  return model.toUpperCase().includes("SHWLAN");
+}
+
+function DeviceNodeCard({ node }: { node: TopoNode }) {
+  const [showClients, setShowClients] = useState(false);
+  const mem = memPercent(node.memory.free, node.memory.total);
+  const bands = node.radios.map((r) => r.band).filter(Boolean);
+  const totalClients = node.connected_clients;
+  const isSHWLAN = !node.is_gateway && isSpeedHomeWlan(node.model);
+
+  // Non-affiliated clients (real WiFi clients), sorted by standard then RSSI
+  const stdOrder: Record<string, number> = { be: 0, ax: 1, ac: 2, n: 3 };
+  const visibleClients = (node.clients ?? [])
+    .filter((c) => !c.is_affiliated)
+    .sort((a, b) => {
+      const sa = stdOrder[a.operating_standard] ?? 9;
+      const sb = stdOrder[b.operating_standard] ?? 9;
+      if (sa !== sb) return sa - sb;
+      const ra = parseFloat(a.signal_strength_dbm) || -999;
+      const rb = parseFloat(b.signal_strength_dbm) || -999;
+      return rb - ra; // stronger signal first
+    });
+
+  // Shape: circle for SHWLAN extenders, rounded-lg for gateway, rounded-lg for others
+  const shapeClass = node.is_gateway
+    ? "rounded-xl border-2 p-3 min-w-[180px] max-w-[220px] shadow-sm border-blue-400 bg-blue-50/80 dark:border-blue-600 dark:bg-blue-950/30"
+    : isSHWLAN
+      ? "rounded-full border-2 p-4 w-[170px] h-[170px] flex flex-col items-center justify-center shadow-sm border-green-400 bg-green-50/60 dark:border-green-600 dark:bg-green-950/30"
+      : "rounded-xl border-2 p-3 min-w-[180px] max-w-[220px] shadow-sm border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-900/50";
+
+  return (
+    <div className="flex flex-col items-center">
+      <div className={`transition-all ${shapeClass}`}>
+        {/* Header: icon + role */}
+        <div className={`flex items-center gap-2 ${isSHWLAN ? "mb-0.5" : "mb-1.5"}`}>
+          {node.is_gateway ? (
+            <RouterIcon style={{ fontSize: 20 }} className="text-blue-600 dark:text-blue-400" />
+          ) : isSHWLAN ? (
+            <WifiIcon style={{ fontSize: 18 }} className="text-green-600 dark:text-green-400" />
+          ) : (
+            <SettingsInputAntennaIcon style={{ fontSize: 20 }} className="text-gray-600 dark:text-gray-400" />
+          )}
+          <div className="flex-1 min-w-0">
+            <div className={`font-bold truncate ${isSHWLAN ? "text-[10px]" : "text-[11px]"}`}>
+              {node.is_gateway ? "Gateway" : "Extender"}
+            </div>
+            <div className={`text-muted-foreground truncate ${isSHWLAN ? "text-[9px]" : "text-[10px]"}`} title={node.model}>
+              {node.model || node.manufacturer || "Unknown"}
+            </div>
+          </div>
+        </div>
+
+        {/* ID */}
+        <div className={`font-mono text-muted-foreground ${isSHWLAN ? "text-[8px] mb-0.5" : "text-[9px] mb-1.5"}`} title={node.id}>
+          {node.id.toUpperCase()}
+          {!isSHWLAN && node.serial_number && <div className="text-[8px]">SN: ...{node.serial_number.slice(-6)}</div>}
+        </div>
+
+        {/* Bands */}
+        {bands.length > 0 && (
+          <div className={`flex flex-wrap gap-1 ${isSHWLAN ? "justify-center mb-0.5" : "mb-1.5"}`}>
+            {bands.map((b, i) => (
+              <span key={i} className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
+                {b}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Stats row */}
+        <div className={`flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap ${isSHWLAN ? "justify-center" : ""}`}>
+          {totalClients > 0 && (
+            <span className="flex items-center gap-0.5" title="Connected clients">
+              <WifiIcon style={{ fontSize: 11 }} /> {totalClients}
+            </span>
+          )}
+          {node.cpu.usage && (
+            <span className="flex items-center gap-0.5" title="CPU usage">
+              <MemoryIcon style={{ fontSize: 11 }} /> {node.cpu.usage}%
+            </span>
+          )}
+          {node.cpu.temperature && (
+            <span className="flex items-center gap-0.5" title="CPU temperature">
+              <ThermostatIcon style={{ fontSize: 11 }} /> {node.cpu.temperature}C
+            </span>
+          )}
+          {mem !== null && (
+            <span className="flex items-center gap-0.5" title={`Memory: ${node.memory.free}/${node.memory.total} KB free`}>
+              <StorageIcon style={{ fontSize: 11 }} /> {mem}%
+            </span>
+          )}
+        </div>
+
+        {/* Software version */}
+        {node.software_version && !isSHWLAN && (
+          <div className="text-[9px] text-muted-foreground mt-1 truncate" title={node.software_version}>
+            v{node.software_version}
+          </div>
+        )}
+      </div>
+
+      {/* Collapsible client toggle + panel (outside the shaped card) */}
+      {visibleClients.length > 0 && (
+        <div className="w-full min-w-[420px] max-w-[520px]">
+          <button
+            onClick={() => setShowClients((v) => !v)}
+            className="mt-1 w-full flex items-center justify-center gap-1 text-[9px] font-medium text-muted-foreground hover:text-foreground transition-colors py-0.5 rounded hover:bg-muted/40"
+          >
+            <DevicesIcon style={{ fontSize: 11 }} />
+            {visibleClients.length} Client{visibleClients.length !== 1 ? "s" : ""}
+            {showClients ? <ExpandLessIcon style={{ fontSize: 13 }} /> : <ExpandMoreIcon style={{ fontSize: 13 }} />}
+          </button>
+          {showClients && (
+            <div className="mt-1 border border-border rounded-lg bg-card shadow-sm overflow-hidden">
+              <table className="w-full text-[9px]">
+                <thead>
+                  <tr className="bg-muted/40 text-muted-foreground">
+                    <th className="px-1.5 py-1 text-left font-semibold">MAC</th>
+                    <th className="px-1.5 py-1 text-left font-semibold">Std</th>
+                    <th className="px-1.5 py-1 text-right font-semibold">PHY</th>
+                    <th className="px-1.5 py-1 text-right font-semibold">RSSI</th>
+                    <th className="px-1.5 py-1 text-right font-semibold">TX/RX</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleClients.map((c) => {
+                    const badge = stdBadge(c.operating_standard);
+                    return (
+                      <tr key={c.mac} className="border-t border-border/50 hover:bg-muted/20">
+                        <td className="px-1.5 py-0.5 font-mono whitespace-nowrap" title={c.mac}>
+                          <MacBold mac={c.mac} />
+                          {c.band && <span className="ml-0.5 text-muted-foreground">({c.band.replace("GHz", "G")})</span>}
+                        </td>
+                        <td className="px-1.5 py-0.5">
+                          <span className={`inline-block px-1 py-0 rounded text-[8px] font-bold ${badge.bg} ${badge.text}`} title={badge.label}>
+                            {c.operating_standard.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-1.5 py-0.5 text-right whitespace-nowrap" title={`Max: ${formatRate(c.max_phy_rate)} | DL: ${formatRate(c.last_dl_rate)} | UL: ${formatRate(c.last_ul_rate)}`}>
+                          {formatRate(c.max_phy_rate)}
+                        </td>
+                        <td className={`px-1.5 py-0.5 text-right font-bold whitespace-nowrap ${signalColor(c.signal_strength_dbm)}`}>
+                          {c.signal_strength_dbm ? `${c.signal_strength_dbm}` : "—"}
+                        </td>
+                        <td className="px-1.5 py-0.5 text-right whitespace-nowrap text-muted-foreground" title={`TX: ${formatBytes(c.bytes_tx)} | RX: ${formatBytes(c.bytes_rx)} | Uptime: ${formatDuration(c.connect_time)}`}>
+                          {formatBytes(c.bytes_tx)}/{formatBytes(c.bytes_rx)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================ Available Fields Discovery */
+function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; onClose: () => void }) {
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
+
+  const toggle = (g: string) => setExpandedGroups((prev) => {
+    const next = new Set(prev);
+    next.has(g) ? next.delete(g) : next.add(g);
+    return next;
+  });
+
+  const typeBadge = (t: string) => {
+    if (t === "numeric") return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+    if (t === "status") return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400";
+    return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
+  };
+
+  const filterLower = filter.toLowerCase();
+  const filteredGroups = Object.entries(fields.unconfigured)
+    .map(([group, items]) => ({
+      group,
+      items: filterLower ? items.filter((f) => f.key.toLowerCase().includes(filterLower)) : items,
+    }))
+    .filter((g) => g.items.length > 0)
+    .sort((a, b) => b.items.length - a.items.length);
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-muted/30 flex items-center gap-2">
+        <ExploreIcon style={{ fontSize: 16, color: "#1a73e8" }} />
+        <h3 className="text-sm font-semibold flex-1">Available TR-181 Fields</h3>
+        <span className="text-[10px] text-muted-foreground">
+          {fields.stats.configured} configured / {fields.stats.unconfigured} available / {fields.stats.total_fields} total
+        </span>
+        <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border hover:bg-muted">
+          Close
+        </button>
+      </div>
+
+      <div className="px-4 py-2 border-b border-border">
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter fields... (e.g. WiFi, Ethernet, DSL, Temperature)"
+          className="w-full px-3 py-1.5 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+      </div>
+
+      <div className="max-h-[500px] overflow-y-auto divide-y divide-border">
+        {filteredGroups.length === 0 && (
+          <p className="text-sm text-muted-foreground p-4 text-center">
+            {filterLower ? "No fields match the filter" : "All available fields are already configured"}
+          </p>
+        )}
+        {filteredGroups.map(({ group, items }) => {
+          const isOpen = expandedGroups.has(group);
+          const numericCount = items.filter((f) => f.type === "numeric").length;
+          const statusCount = items.filter((f) => f.type === "status").length;
+          return (
+            <div key={group}>
+              <button
+                onClick={() => toggle(group)}
+                className="w-full flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition-colors text-left"
+              >
+                {isOpen
+                  ? <ExpandLessIcon style={{ fontSize: 16 }} />
+                  : <ExpandMoreIcon style={{ fontSize: 16 }} />}
+                <span className="text-sm font-medium flex-1">{group}</span>
+                <span className="text-[10px] text-muted-foreground">{items.length} fields</span>
+                {numericCount > 0 && (
+                  <span className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded px-1.5 py-0.5">
+                    {numericCount} plottable
+                  </span>
+                )}
+                {statusCount > 0 && (
+                  <span className="text-[10px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded px-1.5 py-0.5">
+                    {statusCount} status
+                  </span>
+                )}
+              </button>
+              {isOpen && (
+                <div className="bg-muted/20 px-4 pb-2">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="text-left py-1 font-medium">TR-181 Key</th>
+                        <th className="text-left py-1 font-medium w-16">Type</th>
+                        <th className="text-center py-1 font-medium w-10">#</th>
+                        <th className="text-left py-1 font-medium">Sample Values</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50">
+                      {items.map((f) => (
+                        <tr key={f.key} className="hover:bg-muted/30">
+                          <td className="py-1.5 font-mono text-[11px] break-all pr-2">{f.key}</td>
+                          <td className="py-1.5">
+                            <span className={`text-[10px] rounded px-1.5 py-0.5 font-medium ${typeBadge(f.type)}`}>
+                              {f.type}
+                            </span>
+                          </td>
+                          <td className="py-1.5 text-center text-muted-foreground">{f.count}</td>
+                          <td className="py-1.5 text-muted-foreground max-w-[200px] truncate" title={f.samples.join(", ")}>
+                            {f.samples.slice(0, 2).join(", ")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

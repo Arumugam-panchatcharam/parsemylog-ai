@@ -588,15 +588,29 @@ def extract_configured_fields(
     if config is None:
         config = load_report_field_config()
 
-    profile_filter = config.get("profile_filter", "Advanced_dynamic")
     field_groups_cfg = config.get("field_groups", [])
 
-    # Filter reports by profile
-    filtered = [
-        r for r in reports
-        if r["parse_ok"] and r.get("profile") == profile_filter
-    ]
-    filtered.sort(key=lambda x: x["time"] or datetime.min)
+    # Use ALL successfully parsed reports regardless of profile name.
+    # TR-181 keys are standardised; profile names are user-defined and vary
+    # across firmware versions and deployments.
+    # When different profiles report the same key at overlapping timestamps
+    # we keep the entry with the most fields (richest data).
+    ok_reports = [r for r in reports if r["parse_ok"]]
+    ok_reports.sort(key=lambda x: x["time"] or datetime.min)
+
+    # Deduplicate: if two reports share the exact same timestamp, merge
+    # their fields (later report wins for duplicate keys).
+    seen_times: Dict[Optional[datetime], Dict[str, Any]] = {}
+    for r in ok_reports:
+        t = r["time"]
+        if t in seen_times:
+            # Merge fields – keep the richer set
+            seen_times[t]["fields"].update(r["fields"])
+        else:
+            # Copy fields dict so we don't mutate originals
+            seen_times[t] = {**r, "fields": dict(r["fields"])}
+
+    filtered = sorted(seen_times.values(), key=lambda x: x["time"] or datetime.min)
 
     if not filtered:
         return {}
@@ -714,3 +728,643 @@ def parse_telemetry_file(file_path: Path) -> Tuple[List[Dict], Dict, Dict]:
     )
 
     return reports, merged, summary
+
+
+# ---------------------------------------------------------------------------
+# Cache: save / load the final API response
+# ---------------------------------------------------------------------------
+
+_TELEMETRY_CACHE_DIR = "telemetry"
+_CACHE_RESPONSE = "response.json"
+_CACHE_AVAILABLE = "available_fields.json"
+
+# Legacy cache filenames (removed on next save)
+_LEGACY_CACHE_FILES = ("reports.json", "summary.json", "configured_fields.json")
+
+
+def _serialise_datetime(obj: Any) -> Any:
+    """JSON-safe conversion for datetime objects."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
+def _cache_dir(project_dir: Path) -> Path:
+    """Return the telemetry cache directory for a project (or CPE)."""
+    return project_dir / _TELEMETRY_CACHE_DIR
+
+
+def save_telemetry_cache(
+    project_dir: Path,
+    response: Dict[str, Any],
+    available_fields: Dict[str, Any],
+) -> Path:
+    """
+    Persist the final API response and available-fields discovery data
+    as JSON files under ``<project_dir>/telemetry/``.
+
+    Args:
+        project_dir: The project (or CPE) directory.
+        response: The fully-built API response dict (device_info, summary,
+                  charts, key_metrics, status_labels, reboot_timeline).
+                  All values must be JSON-serialisable (no datetime objects).
+        available_fields: Discovery data for unconfigured TR-181 fields.
+
+    Returns the cache directory path.
+    """
+    cache = _cache_dir(project_dir)
+    cache.mkdir(parents=True, exist_ok=True)
+
+    _write_json(cache / _CACHE_RESPONSE, response)
+    _write_json(cache / _CACHE_AVAILABLE, available_fields)
+
+    # Clean up legacy cache files from the old format
+    for legacy in _LEGACY_CACHE_FILES:
+        lp = cache / legacy
+        if lp.exists():
+            lp.unlink()
+
+    logger.info(f"[TelemetryCache] Saved to {cache}")
+    return cache
+
+
+def load_telemetry_cache(project_dir: Path) -> Optional[Dict[str, Any]]:
+    """
+    Load cached API response if it exists.
+
+    Returns the response dict (ready to send to the client), or *None* if
+    no cache exists.  The dict also includes an ``available_fields`` key.
+    """
+    cache = _cache_dir(project_dir)
+    response_path = cache / _CACHE_RESPONSE
+
+    if not response_path.exists():
+        return None
+
+    try:
+        response = json.loads(response_path.read_text(encoding="utf-8"))
+
+        # Attach available_fields if present
+        avail_path = cache / _CACHE_AVAILABLE
+        if avail_path.exists():
+            response["available_fields"] = json.loads(avail_path.read_text(encoding="utf-8"))
+
+        logger.info(f"[TelemetryCache] Loaded from {cache}")
+        return response
+    except Exception as e:
+        logger.warning(f"[TelemetryCache] Failed to load: {e}")
+        return None
+
+
+def load_available_fields_cache(project_dir: Path) -> Optional[Dict[str, Any]]:
+    """Load only the available-fields discovery data from cache."""
+    cache = _cache_dir(project_dir)
+    avail_path = cache / _CACHE_AVAILABLE
+    if not avail_path.exists():
+        return None
+    try:
+        return json.loads(avail_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_json(path: Path, data: Any) -> None:
+    """Write data to a JSON file with pretty-printing."""
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, default=_serialise_datetime, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Discovery: find available TR-181 fields NOT in the YAML config
+# ---------------------------------------------------------------------------
+
+def discover_available_fields(
+    reports: List[Dict[str, Any]],
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Discover all TR-181 fields present in the telemetry data and classify them.
+
+    For each unconfigured field, infer whether it's numeric, boolean/status, or
+    text, along with sample values and data-point count.  Fields are grouped by
+    their TR-181 prefix (e.g. ``Device.WiFi``, ``Device.Ethernet``).
+
+    Args:
+        reports: Output from parse_telemetry_reports().
+        config: Loaded YAML config dict. Will load default if None.
+
+    Returns:
+        Dict with:
+            - ``configured_keys``: list of keys already in the YAML config
+            - ``unconfigured``: dict keyed by TR-181 group prefix, each value a
+              list of field info dicts
+            - ``stats``: total / configured / unconfigured counts
+    """
+    if config is None:
+        config = load_report_field_config()
+
+    # Collect configured keys (expand {N} to find all concrete keys)
+    configured_keys: set = set()
+    for group_cfg in config.get("field_groups", []):
+        for fdef in group_cfg.get("fields", []):
+            key = fdef["key"]
+            if "{N}" not in key:
+                configured_keys.add(key)
+            else:
+                # Will be expanded by concrete data below
+                pass
+
+    # Collect all fields from all OK reports
+    ok_reports = [r for r in reports if r.get("parse_ok")]
+    field_samples: Dict[str, List[str]] = defaultdict(list)
+    field_counts: Dict[str, int] = defaultdict(int)
+
+    for r in ok_reports:
+        for key, val in r.get("fields", {}).items():
+            field_counts[key] += 1
+            if len(field_samples[key]) < 5:  # keep up to 5 samples
+                field_samples[key].append(str(val)[:200])
+
+    # Expand {N} patterns to mark concrete keys as configured
+    for group_cfg in config.get("field_groups", []):
+        for fdef in group_cfg.get("fields", []):
+            key_template = fdef["key"]
+            if "{N}" not in key_template:
+                continue
+            prefix = key_template.split("{N}")[0]
+            suffix = key_template.split("{N}")[1]
+            pattern = re.compile(re.escape(prefix) + r"\d+" + re.escape(suffix))
+            for fk in field_counts:
+                if pattern.fullmatch(fk):
+                    configured_keys.add(fk)
+
+    # Classify unconfigured fields
+    # Skip meta fields like Time, Profile.Name, mac, etc.
+    _META_KEYS = {"Time", "Profile.Name", "Profile.Version", "mac", "SerialNumber",
+                  "erouterIpv4", "erouterIpv6", "PartnerId", "Version", "AccountId"}
+
+    unconfigured: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for key in sorted(field_counts):
+        if key in configured_keys or key in _META_KEYS:
+            continue
+
+        samples = field_samples[key]
+        inferred_type = _infer_field_type(samples)
+        plottable = inferred_type == "numeric"
+
+        # Group by first two TR-181 path segments (e.g. Device.WiFi)
+        parts = key.split(".")
+        group_prefix = ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
+
+        unconfigured[group_prefix].append({
+            "key": key,
+            "type": inferred_type,
+            "plottable": plottable,
+            "count": field_counts[key],
+            "samples": samples[:3],
+        })
+
+    total_keys = len(field_counts)
+    configured_count = len(configured_keys & set(field_counts.keys()))
+
+    return {
+        "configured_keys": sorted(configured_keys & set(field_counts.keys())),
+        "unconfigured": dict(unconfigured),
+        "stats": {
+            "total_fields": total_keys,
+            "configured": configured_count,
+            "unconfigured": total_keys - configured_count - len(_META_KEYS & set(field_counts.keys())),
+        },
+    }
+
+
+def _infer_field_type(samples: List[str]) -> str:
+    """Infer the most likely type from sample values."""
+    if not samples:
+        return "text"
+
+    bool_vals = {"true", "false", "up", "down", "enabled", "disabled",
+                 "connected", "disconnected", "synchronized", "1", "0"}
+    numeric_count = 0
+    bool_count = 0
+
+    for s in samples:
+        s_clean = s.split(";")[0].strip().lower()
+        if s_clean in bool_vals:
+            bool_count += 1
+            continue
+        try:
+            float(s_clean)
+            numeric_count += 1
+        except (ValueError, TypeError):
+            pass
+
+    total = len(samples)
+    if bool_count == total:
+        return "status"
+    if numeric_count >= total * 0.8:
+        return "numeric"
+    return "text"
+
+
+# ---------------------------------------------------------------------------
+# Mesh Topology Extraction
+# ---------------------------------------------------------------------------
+
+_DATAELEMENTS_KEY = "Device.WiFi.DataElements.Network.Device."
+
+# Media-type strings that indicate WiFi backhaul
+_WIFI_MEDIA_PATTERNS = ("802.11", "IEEE 802.11")
+
+
+def _is_wifi_backhaul(media_type: str) -> bool:
+    """Return True if the backhaul media type indicates WiFi (not Ethernet)."""
+    if not media_type:
+        return True  # default to WiFi if unknown
+    return any(p in media_type for p in _WIFI_MEDIA_PATTERNS)
+
+
+def _short_mac(mac: str) -> str:
+    """Shorten a MAC-like ID for display: keep last 4 hex chars."""
+    clean = mac.replace(":", "").replace("-", "")
+    if len(clean) >= 4:
+        return clean[-4:].upper()
+    return mac.upper()
+
+
+def _count_stas(radios: List[Dict[str, Any]]) -> int:
+    """Count total connected stations across all radios/BSS."""
+    total = 0
+    for radio in radios:
+        for bss in radio.get("BSS", []):
+            sta_count = bss.get("STANumberOfEntries", "0")
+            try:
+                total += int(sta_count)
+            except (ValueError, TypeError):
+                # Fall back to counting STA array length
+                total += len(bss.get("STA", []))
+    return total
+
+
+def _extract_radio_info(radios: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Extract summarised radio info from the Radio array."""
+    result = []
+    for radio in radios:
+        band = radio.get("X_AIRTIES_OperatingFrequencyBand", "")
+        standards = radio.get("X_AIRTIES_OperatingStandards", "")
+        channel = radio.get("X_AIRTIES_Channel", "")
+        bandwidth = radio.get("X_AIRTIES_Bandwidth", "")
+        temperature = radio.get("X_AIRTIES_Temperature", "")
+        bss_list = radio.get("BSS", [])
+        bss_count = len(bss_list)
+        sta_count = 0
+        for bss in bss_list:
+            try:
+                sta_count += int(bss.get("STANumberOfEntries", "0"))
+            except (ValueError, TypeError):
+                sta_count += len(bss.get("STA", []))
+
+        result.append({
+            "band": band,
+            "standards": standards,
+            "channel": channel,
+            "bandwidth": bandwidth,
+            "temperature": temperature,
+            "bss_count": bss_count,
+            "sta_count": sta_count,
+        })
+    return result
+
+
+def _rcpi_to_rssi_dbm(signal_raw: str) -> str:
+    """Convert semicolon-separated RCPI values to average RSSI in dBm.
+
+    Formula: RSSI (dBm) = (RCPI / 2) - 110
+
+    Handles mixed values like ``"110;112;NULL;NULL;108"`` by skipping
+    non-numeric entries (e.g. ``NULL``).
+    """
+    if not signal_raw or signal_raw == "0":
+        return ""
+    try:
+        rcpi_values: list[int] = []
+        for v in signal_raw.split(";"):
+            v = v.strip()
+            if not v or v.upper() == "NULL":
+                continue
+            rcpi_values.append(int(v))
+        if rcpi_values:
+            avg_rcpi = sum(rcpi_values) / len(rcpi_values)
+            rssi_dbm = round((avg_rcpi / 2) - 110, 1)
+            return str(rssi_dbm)
+    except (ValueError, ZeroDivisionError):
+        pass
+    return ""  # return empty if entirely unparseable
+
+
+def _extract_clients(radios_raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Extract connected client (STA) details from Radio > BSS > STA hierarchy.
+
+    Only includes STAs from fronthaul BSSes. Affiliated STAs (mesh backhaul
+    connections) are marked but included so the UI can decide how to display them.
+    """
+    clients: List[Dict[str, Any]] = []
+    for radio in radios_raw:
+        band = radio.get("X_AIRTIES_OperatingFrequencyBand", "")
+        for bss in radio.get("BSS", []):
+            is_fronthaul = bss.get("FronthaulUse", "false") == "true"
+            if not is_fronthaul:
+                continue
+            ssid = bss.get("SSID", "")
+            for sta in bss.get("STA", []):
+                mac = sta.get("MACAddress", "")
+                if not mac:
+                    # Skip incomplete STA entries (e.g. Basic_dynamic profile
+                    # that only reports SignalStrength without MACAddress)
+                    continue
+                op_std = sta.get("X_AIRTIES_OperatingStandard", "")
+                signal_raw = sta.get("SignalStrength", "")
+                is_affiliated = sta.get("X_AIRTIES_Affiliated", "false") == "true"
+
+                try:
+                    max_phy = int(sta.get("X_AIRTIES_MaxPhyRate", "0"))
+                except (ValueError, TypeError):
+                    max_phy = 0
+                try:
+                    last_dl = int(sta.get("LastDataDownlinkRate", "0"))
+                except (ValueError, TypeError):
+                    last_dl = 0
+                try:
+                    last_ul = int(sta.get("LastDataUplinkRate", "0"))
+                except (ValueError, TypeError):
+                    last_ul = 0
+                try:
+                    bytes_rx = int(sta.get("BytesReceived", "0"))
+                except (ValueError, TypeError):
+                    bytes_rx = 0
+                try:
+                    bytes_tx = int(sta.get("BytesSent", "0"))
+                except (ValueError, TypeError):
+                    bytes_tx = 0
+                try:
+                    connect_time = int(sta.get("LastConnectTime", "0"))
+                except (ValueError, TypeError):
+                    connect_time = 0
+                try:
+                    retrans = int(sta.get("RetransCount", "0"))
+                except (ValueError, TypeError):
+                    retrans = 0
+
+                rssi_dbm = _rcpi_to_rssi_dbm(signal_raw)
+
+                clients.append({
+                    "mac": mac,
+                    "band": band,
+                    "ssid": ssid,
+                    "operating_standard": op_std,
+                    "max_phy_rate": max_phy,
+                    "last_dl_rate": last_dl,
+                    "last_ul_rate": last_ul,
+                    "signal_strength_dbm": rssi_dbm,
+                    "bytes_rx": bytes_rx,
+                    "bytes_tx": bytes_tx,
+                    "connect_time": connect_time,
+                    "retrans_count": retrans,
+                    "is_affiliated": is_affiliated,
+                })
+    return clients
+
+
+def _sanitize_mermaid_id(raw_id: str) -> str:
+    """Create a valid mermaid node ID from a MAC/device ID."""
+    return raw_id.replace(":", "").replace("-", "").replace(".", "_")
+
+
+def _extract_single_topology(
+    device_array: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Parse one ``Device.WiFi.DataElements.Network.Device.`` JSON array
+    into a topology snapshot (nodes + edges + mermaid diagram).
+
+    Args:
+        device_array: The list of device dicts from the report.
+
+    Returns:
+        Dict with ``nodes``, ``edges``, ``mermaid``, ``device_count``.
+    """
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    id_to_node: Dict[str, Dict[str, Any]] = {}
+
+    for dev in device_array:
+        idx = dev.get("index", "")
+        device_id = dev.get("ID", "")
+        backhaul_mac = dev.get("BackhaulMACAddress", "")
+        backhaul_media = dev.get("BackhaulMediaType", "")
+        backhaul_al_id = dev.get("BackhaulALID", "")
+
+        try:
+            phy_rate = int(dev.get("BackhaulPHYRate", "0"))
+        except (ValueError, TypeError):
+            phy_rate = 0
+
+        is_gateway = (str(idx) == "1") or (not backhaul_mac and phy_rate == 0)
+
+        manufacturer = dev.get("Manufacturer", "")
+        model = dev.get("ManufacturerModel", "")
+        serial = dev.get("SerialNumber", "")
+        sw_version = dev.get("SoftwareVersion", "")
+
+        # Radio info
+        radios_raw = dev.get("Radio", [])
+        radios = _extract_radio_info(radios_raw)
+        connected_clients = _count_stas(radios_raw)
+
+        # Device info (Airties)
+        airties_info = dev.get("X_AIRTIES_DeviceInfo", {})
+        mem_info = airties_info.get("MemoryStatus", {})
+        proc_info = airties_info.get("ProcessStatus", {})
+
+        memory = {
+            "free": mem_info.get("Free", ""),
+            "total": mem_info.get("Total", ""),
+            "cached": mem_info.get("Cached", ""),
+        }
+        cpu = {
+            "usage": proc_info.get("CPUUsage", ""),
+            "temperature": proc_info.get("CPUTemperature", ""),
+        }
+
+        onboarded = dev.get("X_AIRTIES_Onboarded", "")
+        service_active = dev.get("X_AIRTIES_ServiceActive", "")
+
+        # Backhaul stats
+        multi_ap = dev.get("MultiAPDevice", {})
+        bh_stats = multi_ap.get("Backhaul", {}).get("Stats", {})
+        bh_signal_raw = bh_stats.get("SignalStrength", "")
+        bh_utilization = bh_stats.get("LinkUtilization", "")
+
+        # Convert RCPI to average RSSI in dBm
+        bh_signal = _rcpi_to_rssi_dbm(bh_signal_raw)
+
+        # Extract connected clients from Radio > BSS > STA
+        clients = _extract_clients(radios_raw)
+
+        node = {
+            "id": device_id,
+            "index": str(idx),
+            "is_gateway": is_gateway,
+            "manufacturer": manufacturer,
+            "model": model,
+            "serial_number": serial,
+            "software_version": sw_version,
+            "backhaul_mac": backhaul_mac,
+            "backhaul_media_type": backhaul_media,
+            "backhaul_phy_rate": phy_rate,
+            "backhaul_al_id": backhaul_al_id,
+            "radios": radios,
+            "connected_clients": connected_clients,
+            "memory": memory,
+            "cpu": cpu,
+            "onboarded": onboarded,
+            "service_active": service_active,
+            "backhaul_signal_strength": bh_signal,
+            "backhaul_link_utilization": bh_utilization,
+            "clients": clients,
+        }
+        nodes.append(node)
+        id_to_node[device_id] = node
+
+    # Build edges: match BackhaulALID -> parent device ID
+    for node in nodes:
+        if node["is_gateway"]:
+            continue
+        parent_id = node["backhaul_al_id"]
+        if parent_id and parent_id in id_to_node:
+            edges.append({
+                "from_id": parent_id,
+                "to_id": node["id"],
+                "media_type": node["backhaul_media_type"],
+                "phy_rate": node["backhaul_phy_rate"],
+                "signal_strength": node["backhaul_signal_strength"],
+                "link_utilization": node["backhaul_link_utilization"],
+                "is_wifi": _is_wifi_backhaul(node["backhaul_media_type"]),
+            })
+        elif not node["is_gateway"] and node["backhaul_mac"]:
+            # Fallback: if BackhaulALID not present, try to find which
+            # device's BSS BSSID matches the backhaul MAC
+            # For now, default to gateway (index=1)
+            gateway = next((n for n in nodes if n["is_gateway"]), None)
+            if gateway:
+                edges.append({
+                    "from_id": gateway["id"],
+                    "to_id": node["id"],
+                    "media_type": node["backhaul_media_type"],
+                    "phy_rate": node["backhaul_phy_rate"],
+                    "signal_strength": node["backhaul_signal_strength"],
+                    "link_utilization": node["backhaul_link_utilization"],
+                    "is_wifi": _is_wifi_backhaul(node["backhaul_media_type"]),
+                })
+
+    # Generate mermaid diagram
+    mermaid_lines = ["graph TD"]
+    for node in nodes:
+        mid = _sanitize_mermaid_id(node["id"])
+        role = "Gateway" if node["is_gateway"] else "Extender"
+        model_label = node["model"] or node["manufacturer"] or "Unknown"
+        short_id = _short_mac(node["id"])
+        label = f'{role}\\n{model_label}\\n{short_id}'
+        if node["is_gateway"]:
+            mermaid_lines.append(f'  {mid}["{label}"]')
+        else:
+            mermaid_lines.append(f'  {mid}("{label}")')
+
+    for edge in edges:
+        from_mid = _sanitize_mermaid_id(edge["from_id"])
+        to_mid = _sanitize_mermaid_id(edge["to_id"])
+        media_short = edge["media_type"].replace("IEEE ", "") if edge["media_type"] else "WiFi"
+        rate_label = f"{edge['phy_rate']}Mbps" if edge["phy_rate"] else ""
+        label = f"{media_short} {rate_label}".strip()
+        if edge["is_wifi"]:
+            mermaid_lines.append(f'  {from_mid} -."{label}".- {to_mid}')
+        else:
+            mermaid_lines.append(f'  {from_mid} --"{label}"--> {to_mid}')
+
+    mermaid_str = "\n".join(mermaid_lines)
+
+    return {
+        "device_count": len(nodes),
+        "nodes": nodes,
+        "edges": edges,
+        "mermaid": mermaid_str,
+    }
+
+
+def extract_mesh_topology_timeline(
+    reports: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Extract mesh topology from **every** parsed telemetry report that contains
+    ``Device.WiFi.DataElements.Network.Device.`` data.
+
+    Each report snapshot captures the full mesh state at that point in time
+    (devices, backhaul links, connected clients, signal strength, etc.).
+
+    Args:
+        reports: List of parsed report dicts (from ``parse_telemetry_reports``).
+
+    Returns:
+        Dict with:
+          - ``snapshots``: list of topology snapshots sorted by time
+          - ``total_snapshots``: count
+          - ``time_range``: ``{start, end}`` ISO strings
+    """
+    snapshots: List[Dict[str, Any]] = []
+
+    for report in reports:
+        fields = report.get("fields", {})
+        device_array = fields.get(_DATAELEMENTS_KEY)
+
+        if not device_array or not isinstance(device_array, list):
+            continue
+
+        # Extract report timestamp
+        report_time = report.get("time")
+        log_ts = report.get("log_timestamp", "")
+        profile = report.get("profile", "")
+
+        time_str = ""
+        if report_time:
+            time_str = report_time.isoformat() if isinstance(report_time, datetime) else str(report_time)
+        elif log_ts:
+            time_str = str(log_ts)
+
+        topology = _extract_single_topology(device_array)
+        topology["time"] = time_str
+        topology["log_timestamp"] = str(log_ts)
+        topology["profile"] = profile
+
+        snapshots.append(topology)
+
+    # Sort by time
+    snapshots.sort(key=lambda s: s.get("time", ""))
+
+    time_range = {}
+    if snapshots:
+        time_range = {
+            "start": snapshots[0].get("time", ""),
+            "end": snapshots[-1].get("time", ""),
+        }
+
+    logger.info(
+        f"[MeshTopology] Extracted {len(snapshots)} topology snapshots"
+        + (f" from {time_range.get('start', '?')} to {time_range.get('end', '?')}"
+           if time_range else "")
+    )
+
+    return {
+        "snapshots": snapshots,
+        "total_snapshots": len(snapshots),
+        "time_range": time_range,
+    }

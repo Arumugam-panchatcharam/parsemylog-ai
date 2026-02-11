@@ -93,8 +93,12 @@ export const patternsApi = {
 
 // ---------- Telemetry ----------
 export const telemetryApi = {
-  parse: (projectId: string, cpeId?: string | null) =>
+  parse: (projectId: string, cpeId?: string | null, force = false) =>
     api.post(`/projects/${projectId}/telemetry/parse`, null, {
+      params: { ...(cpeId ? { cpe_id: cpeId } : {}), ...(force ? { force: "1" } : {}) },
+    }),
+  availableFields: (projectId: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/telemetry/available-fields`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
 };
