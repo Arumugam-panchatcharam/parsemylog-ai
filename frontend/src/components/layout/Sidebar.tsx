@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
@@ -11,8 +11,6 @@ import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import LogoutIcon from "@mui/icons-material/Logout";
-import PersonIcon from "@mui/icons-material/Person";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
@@ -30,12 +28,14 @@ const workspaceNav = [
 ];
 
 export default function Sidebar() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const { projectName, clearProject } = useProject();
   const { clearCPE } = useCPE();
   const location = useLocation();
+  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
   const isWorkspace = location.pathname.startsWith("/workspace");
+  const isProfile = location.pathname === "/profile";
 
   return (
     <aside
@@ -63,16 +63,7 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* User info */}
-      {!collapsed && user && (
-        <div className="px-3 py-2 border-b border-sidebar-border">
-          <p className="text-sm font-medium text-sidebar-foreground flex items-center gap-1">
-            <PersonIcon style={{ fontSize: 16 }} />
-            {user.username}
-            {user.is_admin && <AdminPanelSettingsIcon style={{ fontSize: 14, color: "#f9ab00" }} />}
-          </p>
-        </div>
-      )}
+      {/* (user info moved to bottom avatar) */}
 
       {/* Project info */}
       {isWorkspace && !collapsed && projectName && (
@@ -158,19 +149,43 @@ export default function Sidebar() {
         )}
       </nav>
 
-      {/* Logout */}
-      <div className="p-2 border-t border-sidebar-border">
-        <button
-          onClick={logout}
-          className={cn(
-            "flex items-center gap-2 px-3 py-2 text-sm rounded-lg w-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors",
-            collapsed && "justify-center px-2"
-          )}
-        >
-          <LogoutIcon style={{ fontSize: 18 }} />
-          {!collapsed && "Logout"}
-        </button>
-      </div>
+      {/* Profile avatar */}
+      {user && (
+        <div className="p-3 border-t border-sidebar-border">
+          <button
+            onClick={() => navigate("/profile")}
+            title="Profile & Settings"
+            className={cn(
+              "flex items-center gap-3 w-full rounded-lg transition-colors",
+              collapsed ? "justify-center" : "px-2 py-1.5 hover:bg-sidebar-accent",
+              isProfile && "bg-sidebar-accent"
+            )}
+          >
+            <div
+              className={cn(
+                "shrink-0 rounded-full bg-primary/15 text-primary flex items-center justify-center font-semibold uppercase select-none",
+                "h-8 w-8 text-sm",
+                isProfile && "ring-2 ring-primary"
+              )}
+            >
+              {user.username.charAt(0)}
+            </div>
+            {!collapsed && (
+              <div className="text-left min-w-0">
+                <p className="text-sm font-medium text-sidebar-foreground truncate flex items-center gap-1">
+                  {user.username}
+                  {user.is_admin && (
+                    <AdminPanelSettingsIcon style={{ fontSize: 13, color: "#f9ab00" }} />
+                  )}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {user.email || "Manage account"}
+                </p>
+              </div>
+            )}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

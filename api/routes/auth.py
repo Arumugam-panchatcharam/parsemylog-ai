@@ -120,28 +120,67 @@ def update_profile():
     """
     Update the current user's profile.
 
-    Body: { "username"?: str, "email"?: str, "password"?: str }
-    Returns: { "message": str }
+    Body: { "username"?: str, "email"?: str }
+    Returns: { "message": str, "user": {...} }
     """
     user_id = get_user_id()
     data = request.get_json(silent=True) or {}
 
     username = data.get("username")
-    password = data.get("password")
     email = data.get("email")
-
-    # Validate password confirmation if provided
-    if password and data.get("password_confirm") and password != data["password_confirm"]:
-        return jsonify({"error": "Passwords do not match"}), 400
 
     success, error = dbm.update_user(
         user_id,
         username=username.strip() if username else None,
-        password=password if password else None,
         email=email.strip() if email is not None else None,
     )
 
     if not success:
         return jsonify({"error": error}), 400
 
-    return jsonify({"message": "Profile updated successfully"}), 200
+    user = dbm.get_user_by_id(user_id)
+    return jsonify({
+        "message": "Profile updated successfully",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email or "",
+            "is_admin": user.is_admin,
+        },
+    }), 200
+
+
+@auth_bp.route("/change-password", methods=["POST"])
+@jwt_required()
+def change_password():
+    """
+    Change the current user's password.
+    Requires the current password for verification.
+
+    Body: { "current_password": str, "new_password": str }
+    Returns: { "message": str }
+    """
+    user_id = get_user_id()
+    data = request.get_json(silent=True) or {}
+
+    current_password = data.get("current_password", "")
+    new_password = data.get("new_password", "")
+
+    if not current_password or not new_password:
+        return jsonify({"error": "Current password and new password are required"}), 400
+
+    if len(new_password) < 4:
+        return jsonify({"error": "New password must be at least 4 characters"}), 400
+
+    user = dbm.get_user_by_id(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    if not user.check_password(current_password):
+        return jsonify({"error": "Current password is incorrect"}), 403
+
+    success, error = dbm.update_user(user_id, password=new_password)
+    if not success:
+        return jsonify({"error": error}), 400
+
+    return jsonify({"message": "Password changed successfully"}), 200

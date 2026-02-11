@@ -13,6 +13,7 @@ import AIAnalysisPage from "@/pages/AIAnalysisPage";
 import PatternAnalyzerPage from "@/pages/PatternAnalyzerPage";
 import CPEOverviewPage from "@/pages/CPEOverviewPage";
 import AdminPage from "@/pages/AdminPage";
+import ProfilePage from "@/pages/ProfilePage";
 import type { ReactNode } from "react";
 
 const queryClient = new QueryClient({
@@ -67,6 +68,7 @@ function AppRoutes() {
         }
       >
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
         <Route path="/workspace/viewer" element={<LogViewerPage />} />
         <Route path="/workspace/pattern" element={<PatternPage />} />
