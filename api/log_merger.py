@@ -27,6 +27,17 @@ class LogMerger:
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
+    @staticmethod
+    def _tar_open_mode(filename: str):
+        """Return (is_tar, mode) for the given filename."""
+        if filename.endswith(".tgz") or filename.endswith(".tar.gz"):
+            return True, "r:gz"
+        if filename.endswith(".tar.bz2"):
+            return True, "r:bz2"
+        if filename.endswith(".tar"):
+            return True, "r:"
+        return False, None
+
     def _extract_logs(self):
         os.makedirs(self.temp_dir, exist_ok=True)
         for file in Path(self.directory).iterdir():
@@ -34,21 +45,31 @@ class LogMerger:
                 print(f"Skipping directory: {file}")
                 continue
 
-            #print(f"Processing file: {file}")
             filename = file.name
-            if filename.endswith(".tgz") or filename.endswith(".tar.gz"):
+            is_tar, mode = self._tar_open_mode(filename)
+            if is_tar:
                 src_file = file
-                base = file.stem
-                #print(f"Extracting {src_file} to {self.temp_dir}/{base}")
+                # Strip all tar-related suffixes for the dest folder name
+                base = filename
+                for suffix in (".tar.gz", ".tar.bz2", ".tgz", ".tar"):
+                    if base.endswith(suffix):
+                        base = base[: -len(suffix)]
+                        break
                 dest = os.path.join(self.temp_dir, base)
                 os.makedirs(dest, exist_ok=True)
                 try:
-                    with tarfile.open(src_file, "r:gz") as tar:
+                    with tarfile.open(src_file, mode) as tar:
                         tar.extractall(path=dest, filter="data")
                 except Exception as e:
                     print(f"Error extracting {src_file}: {e}")
             else:
-                shutil.move(file, self.merged_logs_path)
+                # If the file has a timestamp prefix (e.g. 2026-02-06-06-51-36_WiFilog.txt),
+                # move it to temp_dir so _merge_log_files() can strip the prefix and merge.
+                # Otherwise move directly to merged output.
+                if self.FILE_NAME_REGEX.match(filename):
+                    shutil.move(str(file), os.path.join(self.temp_dir, filename))
+                else:
+                    shutil.move(str(file), self.merged_logs_path)
 
     def _merge_log_files(self):
         # Collect log files

@@ -242,24 +242,33 @@ class FileManager:
     # e.g. provider_AABBCCDDEEFF_YYYY-MM-DD-HH-MM-SS_CPELogs_MODEL.tgz
     TGZ_CPE_RE = re.compile(r'_([0-9A-Fa-f]{12})_(\d{4}-\d{2}-\d{2})')
 
+    # Extensions recognised as tar archives (standalone uploads)
+    TAR_EXTENSIONS = (".tar", ".tgz", ".tar.gz", ".tar.bz2")
+
     @classmethod
     def detect_cpe_zips(cls, project_dir: Path):
         """
-        Detect CPE zip files in the project directory.
+        Detect CPE archive files in the project directory.
 
-        Two patterns are supported:
+        Three patterns are supported:
 
-        1. **Primary** -- ``SERIAL_YYYY-MM-DD_YYYY-MM-DD.zip``
+        1. **Primary zip** -- ``SERIAL_YYYY-MM-DD_YYYY-MM-DD.zip``
            Serial and date range come from the zip filename.
 
-        2. **Fallback** -- any other ``.zip`` containing ``.tgz`` files
+        2. **Fallback zip** -- any other ``.zip`` containing ``.tgz`` files
            whose names embed a 12-hex-digit MAC and a date, e.g.
            ``partner-id_mac_2025-12-13-23-01-27_CPELogs_*.tgz``
            The MAC is used as the CPE serial; dates are extracted from
            the tgz filenames.
 
+        3. **Standalone tar** -- any ``.tar``/``.tgz``/``.tar.gz`` whose
+           filename embeds a 12-hex-digit MAC and a date (same regex as
+           fallback).  These are treated as single-CPE uploads without
+           a zip wrapper.
+
         Returns:
-            List of dicts: {path, serial, date_from, date_to, is_fallback}
+            List of dicts: {path, serial, date_from, date_to,
+                            is_fallback, is_standalone_tar}
         """
         import zipfile
 
@@ -267,19 +276,40 @@ class FileManager:
         unmatched_zips = []
 
         for f in project_dir.iterdir():
-            if not f.is_file() or not f.name.endswith('.zip'):
+            if not f.is_file():
                 continue
-            m = cls.CPE_ZIP_RE.match(f.name)
-            if m:
-                results.append({
-                    "path": f,
-                    "serial": m.group(1),
-                    "date_from": m.group(2),
-                    "date_to": m.group(3),
-                    "is_fallback": False,
-                })
-            else:
-                unmatched_zips.append(f)
+
+            # --- ZIP archives ---
+            if f.name.endswith('.zip'):
+                m = cls.CPE_ZIP_RE.match(f.name)
+                if m:
+                    results.append({
+                        "path": f,
+                        "serial": m.group(1),
+                        "date_from": m.group(2),
+                        "date_to": m.group(3),
+                        "is_fallback": False,
+                        "is_standalone_tar": False,
+                    })
+                else:
+                    unmatched_zips.append(f)
+                continue
+
+            # --- Standalone tar/tgz/tar.gz archives ---
+            if any(f.name.endswith(ext) for ext in cls.TAR_EXTENSIONS):
+                m = cls.TGZ_CPE_RE.search(f.name)
+                if m:
+                    mac = m.group(1)
+                    date_str = m.group(2)
+                    results.append({
+                        "path": f,
+                        "serial": mac,
+                        "date_from": date_str,
+                        "date_to": date_str,
+                        "is_fallback": True,
+                        "is_standalone_tar": True,
+                    })
+                    print(f"[DetectCPE] Standalone tar: {f.name} -> MAC {mac} ({date_str})")
 
         # Fallback: peek inside unmatched zips for tgz files with MAC addresses
         for zip_path in unmatched_zips:
@@ -287,7 +317,7 @@ class FileManager:
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     tgz_names = [
                         n for n in zf.namelist()
-                        if n.endswith('.tgz') or n.endswith('.tar.gz')
+                        if n.endswith('.tgz') or n.endswith('.tar.gz') or n.endswith('.tar')
                     ]
                     # Group by MAC
                     mac_dates: dict = {}  # MAC -> list of date strings
@@ -303,6 +333,7 @@ class FileManager:
                             "date_from": min(dates),
                             "date_to": max(dates),
                             "is_fallback": True,
+                            "is_standalone_tar": False,
                         })
                         print(f"[DetectCPE] Fallback: {zip_path.name} -> MAC {mac} ({min(dates)} to {max(dates)})")
             except Exception as e:
@@ -371,31 +402,49 @@ class FileManager:
             mac = serial if is_fallback else None
 
             try:
-                # ---- Phase 1: Extract every zip, collect tgz files ----
+                # ---- Phase 1: Extract every zip / collect standalone tars ----
                 for cpe_info in zip_list:
-                    zip_path = cpe_info["path"]
+                    archive_path = cpe_info["path"]
+
+                    # --- Standalone tarball (no zip wrapper) ---
+                    if cpe_info.get("is_standalone_tar"):
+                        dest_name = f"{cpe_info['date_from']}_{archive_path.name}"
+                        shutil.copy2(str(archive_path), str(staging_dir / dest_name))
+                        # Try to extract MAC from filename
+                        if mac is None:
+                            m = self.TGZ_MAC_RE.search(archive_path.name)
+                            if m:
+                                mac = m.group(1)
+                        print(f"[MultiCPE] Standalone tar -> staging: {dest_name}")
+                        continue
+
+                    # --- ZIP archive ---
                     # Each zip gets its own temp extraction dir to avoid collisions
                     temp_dir = project_dir / f"_cpe_tmp_{serial}_{cpe_info['date_from']}"
                     os.makedirs(temp_dir, exist_ok=True)
 
                     try:
-                        with zipfile.ZipFile(zip_path, 'r') as zf:
+                        with zipfile.ZipFile(archive_path, 'r') as zf:
                             zf.extractall(temp_dir)
 
-                        # Find inner folder with .tgz files
+                        # Find inner folder with tarball files
                         # Could be directly in temp_dir or in a subfolder
                         tgz_source = temp_dir
                         subdirs = [d for d in temp_dir.iterdir() if d.is_dir()]
                         if subdirs:
                             for sd in subdirs:
-                                tgz_files = list(sd.glob("*.tgz")) + list(sd.glob("*.tar.gz"))
+                                tgz_files = (
+                                    list(sd.glob("*.tgz"))
+                                    + list(sd.glob("*.tar.gz"))
+                                    + list(sd.glob("*.tar"))
+                                )
                                 if tgz_files:
                                     tgz_source = sd
                                     break
 
-                        # Move tgz files into staging dir (rename to avoid collisions)
+                        # Move tar/tgz files into staging dir (rename to avoid collisions)
                         for f in tgz_source.iterdir():
-                            if f.is_file() and (f.name.endswith(".tgz") or f.name.endswith(".tar.gz")):
+                            if f.is_file() and any(f.name.endswith(ext) for ext in self.TAR_EXTENSIONS):
                                 # For fallback zips, only take tgz files containing this MAC
                                 if is_fallback and serial not in f.name:
                                     continue
@@ -409,7 +458,7 @@ class FileManager:
                                 shutil.move(str(f), str(staging_dir / dest_name))
 
                     except Exception as e:
-                        print(f"[MultiCPE] Error extracting {zip_path.name}: {e}")
+                        print(f"[MultiCPE] Error extracting {archive_path.name}: {e}")
                     finally:
                         if temp_dir.exists():
                             shutil.rmtree(temp_dir, ignore_errors=True)

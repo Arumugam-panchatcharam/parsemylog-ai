@@ -5,11 +5,13 @@
 domain: cellular
 
 # Log files to scan (glob patterns)
+# Leading * handles both clean names and timestamp-prefixed filenames
 files:
-  - "CellularManagerlog.txt*"
-  - "CcspCellularSsp*.log*"
-  - "lte*.log*"
-  - "modem*.log*"
+  - "*CellularManager[Ll]og.txt*"
+  - "*CELLULARMANAGERLog.txt*"
+  - "*CcspCellularSsp*.log*"
+  - "*lte*.log*"
+  - "*modem*.log*"
 
 # Number of context lines before/after each match
 context_lines: 3

@@ -5,9 +5,10 @@
 domain: mesh
 
 # Log files to scan (glob patterns)
+# Leading * handles both clean names and timestamp-prefixed filenames
 files:
-  - "wifi_vendor_apps.log*"
-  - "airties.log*"
+  - "*wifi_vendor_apps.log*"
+  - "*airties.log*"
 
 # Number of context lines before/after each match
 context_lines: 3

@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import AnalyticsIcon from "@mui/icons-material/Analytics";
+import logoImg from "@/assets/logo.png";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import TimelineIcon from "@mui/icons-material/Timeline";
@@ -48,11 +49,11 @@ export default function Sidebar() {
         <div className="flex items-center justify-between">
           {!collapsed && (
             <h1 className="text-lg font-bold text-sidebar-foreground flex items-center gap-2">
-              <AnalyticsIcon style={{ fontSize: 22, color: "#1a73e8" }} />
-              LogAI
+              <img src={logoImg} alt="ParseMyLog AI" className="h-6 w-6" />
+              ParseMyLog AI
             </h1>
           )}
-          {collapsed && <AnalyticsIcon style={{ fontSize: 22, color: "#1a73e8" }} className="mx-auto" />}
+          {collapsed && <img src={logoImg} alt="ParseMyLog AI" className="h-6 w-6 mx-auto" />}
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="p-1 rounded hover:bg-sidebar-accent text-sidebar-foreground hidden md:block"

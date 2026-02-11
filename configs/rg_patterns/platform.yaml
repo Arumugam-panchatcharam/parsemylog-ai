@@ -5,27 +5,28 @@
 domain: platform
 
 # Log files to scan (glob patterns)
+# Leading * handles both clean names and timestamp-prefixed filenames
 files:
-  - "Consolelog.txt*"
-  - "ArmConsolelog.txt*"
-  - "SelfHeal*.txt*"
-  - "SelfHeal*.log*"
-  - "LM*.txt*"
-  - "core_log.txt*"
-  - "kernel*"
-  - "messages*"
-  - "syslog.txt*"
-  - "systemdLog.txt*"
-  - "systeminfolog*"
-  - "system_eventlog*"
-  - "volatile_eventlog*"
-  - "ntpLog.log*"
-  - "dibbler-client.log*"
-  - "dibbler-server.log*"
-  - "ETHAGENTLog.txt*"
-  - "telemetry*.txt*"
-  - "telemetry*.log*"
-  - "telemetry_marker.txt*"
+  - "*Consolelog.txt*"
+  - "*ArmConsolelog.txt*"
+  - "*SelfHeal*.txt*"
+  - "*SelfHeal*.log*"
+  - "*LM*.txt*"
+  - "*core_log.txt*"
+  - "*kernel*"
+  - "*messages*"
+  - "*syslog.txt*"
+  - "*systemdLog.txt*"
+  - "*systeminfolog*"
+  - "*system_eventlog*"
+  - "*volatile_eventlog*"
+  - "*ntpLog.log*"
+  - "*dibbler-client.log*"
+  - "*dibbler-server.log*"
+  - "*ETHAGENTLog.txt*"
+  - "*BootTime.log*"
+  - "*telemetry*.txt*"
+  - "*telemetry*.log*"
 
 # Number of context lines before/after each match
 context_lines: 3

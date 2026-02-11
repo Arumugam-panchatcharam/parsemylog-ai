@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import AnalyticsIcon from "@mui/icons-material/Analytics";
-
+import logoImg from "@/assets/logo.png";
 export default function LoginPage() {
   const { login, register } = useAuth();
   const navigate = useNavigate();
@@ -59,8 +58,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-2">
-            <AnalyticsIcon style={{ fontSize: 36, color: "#1a73e8" }} />
+          <div className="inline-flex items-center gap-3 mb-2">
+            <img src={logoImg} alt="ParseMyLog AI" className="h-10 w-10" />
             <h1 className="text-3xl font-bold">ParseMyLog AI</h1>
           </div>
           <p className="text-muted-foreground text-sm">Advanced log analysis platform</p>

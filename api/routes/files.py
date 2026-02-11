@@ -121,7 +121,7 @@ def upload_files(project_id):
         # Launch all CPEs in a single background thread (sequential)
         _launch_async_indexer_batch(indexer_batch)
 
-        # Clean up zip files after processing
+        # Clean up source archives (zips + standalone tarballs) after processing
         for cpe_info in cpe_zips:
             try:
                 cpe_info["path"].unlink()

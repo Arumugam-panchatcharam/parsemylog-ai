@@ -409,6 +409,41 @@ Admin reviews in Pattern Review tab
     └── Reject → with optional comment
 ```
 
+### Architecture
+
+```mermaid
+flowchart TD
+    Admin["Admin Page"] -->|"CRUD NATCOs"| NatcoTable["DB: natcos"]
+    Admin -->|"Edit global patterns"| GlobalPatterns["DB: global_patterns"]
+    Admin -->|"Review submissions"| Submissions["DB: pattern_submissions"]
+
+    User["User: Pattern Analyzer"] -->|"Project has natco_id"| ProjectNatco["Project NATCO"]
+    ProjectNatco -->|"Sync from global"| GlobalPatterns
+    User -->|"Edit locally"| UserYAML["user_patterns.yaml (per-user)"]
+    User -->|"Submit upstream"| Submissions
+    Submissions -->|"Admin approves"| GlobalPatterns
+    GlobalPatterns -->|"Downstream to all"| OtherUsers["Other Users sync"]
+```
+
+### Data Flow
+
+```mermaid
+sequenceDiagram
+    participant A as Admin
+    participant DB as Database
+    participant U1 as User_1
+    participant U2 as User_2
+
+    A->>DB: Create NATCO "DE" + global patterns
+    U1->>DB: Create project (natco=DE)
+    U1->>DB: Sync → gets copy of DE patterns
+    U1->>U1: Edits patterns locally
+    U1->>DB: Submit new pattern for review
+    A->>DB: Reviews → Approves submission
+    Note over DB: Pattern added to DE global
+    U2->>DB: Sync → gets updated DE patterns
+```
+
 ## License
 
 See [LICENSE](LICENSE) for details.

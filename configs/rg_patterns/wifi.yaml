@@ -5,12 +5,13 @@
 domain: wireless
 
 # Log files to scan (glob patterns)
+# Leading * handles both clean names and timestamp-prefixed filenames
 files:
-  - "WiFilog.txt*"
-  - "wifi_vendor_driver.log*"
-  - "wifi_vendor_hal.log*"
-  - "wifi_vendor_hostapd.log*"
-  - "wifihealth.txt*"
+  - "*WiFilog.txt*"
+  - "*wifi_vendor_driver.log*"
+  - "*wifi_vendor_hal.log*"
+  - "*wifi_vendor_hostapd.log*"
+  - "*wifihealth.txt*"
 
 # Number of context lines before/after each match
 context_lines: 3
