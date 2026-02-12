@@ -50,6 +50,46 @@ def _get_project_dir(user_id, project_id, cpe_id=None):
     return base
 
 
+# ---------- In-memory processing status tracker ----------
+
+_processing_status: dict = {}  # project_id -> status dict
+_status_lock = threading.Lock()
+
+
+def _set_status(project_id: str, **kwargs):
+    """Update the processing status for a project (thread-safe)."""
+    with _status_lock:
+        if project_id not in _processing_status:
+            _processing_status[project_id] = {
+                "status": "pending",
+                "message": "",
+                "progress": 0,
+                "total": 0,
+                "cpes": [],
+                "error": None,
+            }
+        _processing_status[project_id].update(kwargs)
+
+
+def _get_status(project_id: str) -> dict:
+    """Get the processing status for a project (thread-safe)."""
+    with _status_lock:
+        return dict(_processing_status.get(project_id, {
+            "status": "idle",
+            "message": "No processing in progress",
+            "progress": 0,
+            "total": 0,
+            "cpes": [],
+            "error": None,
+        }))
+
+
+def _clear_status(project_id: str):
+    """Remove completed status after a delay."""
+    with _status_lock:
+        _processing_status.pop(project_id, None)
+
+
 # ---------- Upload ----------
 
 @files_bp.route("/<project_id>/files/upload", methods=["POST"])
@@ -58,10 +98,11 @@ def upload_files(project_id):
     """
     Upload files to a project (multipart/form-data).
 
-    Accepts multiple files. After saving, processes tarballs,
-    merges logs, and launches async indexing.
+    Saves files to disk immediately and returns 202. Heavy processing
+    (CPE extraction, log merging, indexing) runs in a background thread.
+    Poll ``GET /<project_id>/files/processing-status`` for progress.
 
-    Returns: { "message": str, "files": [str] }
+    Returns: { "message": str, "files": [str], "processing": bool }
     """
     user_id = get_user_id()
     project, err = _verify_project_access(project_id, user_id)
@@ -78,64 +119,56 @@ def upload_files(project_id):
     project_dir = _get_project_dir(user_id, project_id)
     project_dir.mkdir(parents=True, exist_ok=True)
 
+    # ---- Phase 1: Save files to disk (synchronous, fast) ----
     saved_filenames = []
+    total_bytes = 0
     for f in uploaded_files:
         if f.filename:
             filepath = project_dir / f.filename
             f.save(str(filepath))
+            fsize = filepath.stat().st_size
+            total_bytes += fsize
             saved_filenames.append(f.filename)
-            logger.info(f"[Upload] Saved {f.filename} ({filepath.stat().st_size} bytes)")
+            logger.info(f"[Upload] Saved {f.filename} ({fsize} bytes)")
 
-    # Detect multi-CPE zip uploads
-    file_manager = FileManager()
+    logger.info(f"[Upload] {len(saved_filenames)} file(s) saved ({total_bytes / (1024*1024):.1f} MB)")
+
+    # ---- Phase 2: Detect CPE zips (fast) ----
     cpe_zips = FileManager.detect_cpe_zips(project_dir)
 
     if cpe_zips:
-        # ---- Multi-CPE upload path ----
-        logger.info(f"[Upload] Detected {len(cpe_zips)} CPE zip(s)")
-        cpe_results = file_manager.process_multi_cpe_upload(project_dir, project.name)
+        # ---- Multi-CPE: launch background processing ----
+        cpe_count = len(set(z["serial"] for z in cpe_zips))
+        logger.info(f"[Upload] Detected {len(cpe_zips)} CPE zip(s) for {cpe_count} CPE(s) — processing in background")
+        _set_status(project_id,
+                    status="processing",
+                    message=f"Starting extraction of {cpe_count} CPE(s)...",
+                    progress=0,
+                    total=cpe_count,
+                    cpes=[],
+                    error=None)
 
-        # Collect indexing jobs — launched as a single sequential batch
-        # to avoid shared-model corruption and I/O contention.
-        indexer_batch = []
-
-        for cpe in cpe_results:
-            serial = cpe["serial"]
-            # Save CPE metadata to DB
-            dbm.save_cpe(
-                project_id=project_id,
-                serial=serial,
-                mac=cpe.get("mac"),
-                date_from=cpe.get("date_from"),
-                date_to=cpe.get("date_to"),
-            )
-            # Save CPE files to DB
-            cpe_dir = project_dir / serial
-            if cpe_dir.exists():
-                for f in cpe_dir.iterdir():
-                    if f.is_file() and f.stat().st_size > 0:
-                        dbm.save_cpe_file(project_id, serial, f, f.name)
-                # Queue per-CPE indexer (processed sequentially)
-                indexer_batch.append((cpe_dir, project_id, serial))
-
-        # Launch all CPEs in a single background thread (sequential)
-        _launch_async_indexer_batch(indexer_batch)
-
-        # Clean up source archives (zips + standalone tarballs) after processing
-        for cpe_info in cpe_zips:
-            try:
-                cpe_info["path"].unlink()
-            except Exception:
-                pass
+        # Capture values for the background thread
+        from flask import current_app
+        flask_app = current_app._get_current_object()
+        project_name = project.name
+        t = threading.Thread(
+            target=_process_multi_cpe_background,
+            args=(flask_app, project_id, user_id, project_dir, project_name, cpe_zips),
+            daemon=True,
+        )
+        t.start()
 
         return jsonify({
-            "message": f"Uploaded {len(saved_filenames)} file(s), processed {len(cpe_results)} CPE(s)",
+            "message": f"Uploaded {len(saved_filenames)} file(s) — processing {cpe_count} CPE(s) in background",
             "files": saved_filenames,
-            "cpes": [c["serial"] for c in cpe_results],
-        }), 201
+            "processing": True,
+        }), 202
+
     else:
-        # ---- Legacy single-upload path ----
+        # ---- Legacy single-upload path (usually small, keep synchronous) ----
         logger.info(f"[Upload] Processing uploaded files in {project_dir}")
+        file_manager = FileManager()
         file_manager.process_uploaded_files(project_dir, project.name)
 
         # Save merged log files to DB
@@ -162,8 +195,116 @@ def upload_files(project_id):
         return jsonify({
             "message": f"Uploaded {len(saved_filenames)} file(s)",
             "files": saved_filenames,
+            "processing": False,
         }), 201
 
+
+# ---------- Background CPE Processing ----------
+
+def _process_multi_cpe_background(flask_app, project_id, user_id, project_dir, project_name, cpe_zips):
+    """
+    Background thread: extract zips, merge logs, save to DB, launch indexing.
+
+    Updates ``_processing_status[project_id]`` so the frontend can poll for progress.
+    """
+    try:
+        with flask_app.app_context():
+            file_manager = FileManager()
+
+            # Group by serial to count unique CPEs
+            serial_set = set(z["serial"] for z in cpe_zips)
+            total = len(serial_set)
+
+            _set_status(project_id,
+                        message=f"Extracting and merging {total} CPE(s)...",
+                        total=total)
+
+            cpe_results = file_manager.process_multi_cpe_upload(
+                project_dir, project_name,
+                progress_callback=lambda done, serial: _set_status(
+                    project_id,
+                    message=f"Processing CPE {done}/{total}: {serial}",
+                    progress=done,
+                ),
+            )
+
+            _set_status(project_id,
+                        message=f"Saving metadata for {len(cpe_results)} CPE(s)...")
+
+            # Save CPE metadata + files to DB
+            indexer_batch = []
+            processed_cpes = []
+            for cpe in cpe_results:
+                serial = cpe["serial"]
+                dbm.save_cpe(
+                    project_id=project_id,
+                    serial=serial,
+                    mac=cpe.get("mac"),
+                    date_from=cpe.get("date_from"),
+                    date_to=cpe.get("date_to"),
+                )
+                cpe_dir = project_dir / serial
+                if cpe_dir.exists():
+                    for f in cpe_dir.iterdir():
+                        if f.is_file() and f.stat().st_size > 0:
+                            dbm.save_cpe_file(project_id, serial, f, f.name)
+                    indexer_batch.append((cpe_dir, project_id, serial))
+                processed_cpes.append(serial)
+
+            # Launch indexing (already runs in its own background thread)
+            _launch_async_indexer_batch(indexer_batch)
+
+            # Clean up source archives
+            for cpe_info in cpe_zips:
+                try:
+                    cpe_info["path"].unlink()
+                except Exception:
+                    pass
+
+            _set_status(project_id,
+                        status="completed",
+                        message=f"Done! {len(cpe_results)} CPE(s) processed, indexing in background",
+                        progress=total,
+                        cpes=processed_cpes)
+
+            logger.info(f"[Upload] Background processing complete: {len(cpe_results)} CPE(s)")
+
+    except Exception as e:
+        logger.exception(f"[Upload] Background processing failed: {e}")
+        _set_status(project_id,
+                    status="error",
+                    message=f"Processing failed: {str(e)}",
+                    error=str(e))
+
+
+# ---------- Processing Status ----------
+
+@files_bp.route("/<project_id>/files/processing-status", methods=["GET"])
+@jwt_required()
+def get_processing_status(project_id):
+    """
+    Poll for background processing progress.
+
+    Returns: { "status": "idle|processing|completed|error",
+               "message": str, "progress": int, "total": int,
+               "cpes": [str], "error": str|null }
+    """
+    user_id = get_user_id()
+    _, err = _verify_project_access(project_id, user_id)
+    if err:
+        return err
+
+    status = _get_status(project_id)
+
+    # Auto-clear completed/error status after it's been read
+    if status["status"] in ("completed", "error"):
+        # Schedule cleanup after a short delay so multiple polls can read it
+        threading.Timer(10.0, _clear_status, args=[project_id]).start()
+
+    return jsonify(status), 200
+
+
+# ---------- Helpers ----------
 
 def _launch_async_indexer(project_dir, project_id, cpe_id=None):
     """Launch background rg+Drain3 indexer thread (single CPE or legacy)."""

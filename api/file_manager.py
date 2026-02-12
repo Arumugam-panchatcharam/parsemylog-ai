@@ -19,6 +19,7 @@ Example:
 
 import os
 import base64
+import hashlib
 import shutil
 import tarfile
 import json
@@ -341,7 +342,8 @@ class FileManager:
 
         return results
 
-    def process_multi_cpe_upload(self, project_dir: Path, project_name: str):
+    def process_multi_cpe_upload(self, project_dir: Path, project_name: str,
+                                   progress_callback=None):
         """
         Process multi-CPE zip uploads.
 
@@ -383,12 +385,20 @@ class FileManager:
             serial_groups.setdefault(serial, []).append(cpe_info)
 
         cpe_results = []
+        done_count = 0
 
         for serial, zip_list in serial_groups.items():
+            done_count += 1
             zip_names = [z["path"].name for z in zip_list]
             is_fallback = any(z.get("is_fallback", False) for z in zip_list)
             label = f" (fallback/MAC)" if is_fallback else ""
             print(f"[MultiCPE] Processing CPE {serial}{label} — {len(zip_list)} zip(s): {zip_names}")
+
+            if progress_callback:
+                try:
+                    progress_callback(done_count, serial)
+                except Exception:
+                    pass
 
             # Compute overall date range
             date_from = min(z["date_from"] for z in zip_list)
@@ -427,41 +437,51 @@ class FileManager:
                         with zipfile.ZipFile(archive_path, 'r') as zf:
                             zf.extractall(temp_dir)
 
-                        # Find inner folder with tarball files
-                        # Could be directly in temp_dir or in a subfolder
-                        tgz_source = temp_dir
-                        subdirs = [d for d in temp_dir.iterdir() if d.is_dir()]
-                        if subdirs:
-                            for sd in subdirs:
-                                tgz_files = (
-                                    list(sd.glob("*.tgz"))
-                                    + list(sd.glob("*.tar.gz"))
-                                    + list(sd.glob("*.tar"))
-                                )
-                                if tgz_files:
-                                    tgz_source = sd
-                                    break
+                        # Find ALL tar/tgz files recursively at any depth
+                        # (zip structure may have nested subdirectories)
+                        all_tar_files = []
+                        for ext in self.TAR_EXTENSIONS:
+                            all_tar_files.extend(temp_dir.rglob(f"*{ext}"))
 
-                        # Move tar/tgz files into staging dir (rename to avoid collisions)
-                        for f in tgz_source.iterdir():
-                            if f.is_file() and any(f.name.endswith(ext) for ext in self.TAR_EXTENSIONS):
-                                # For fallback zips, only take tgz files containing this MAC
-                                if is_fallback and serial not in f.name:
-                                    continue
-                                # Try to extract MAC while we're scanning
-                                if mac is None:
-                                    m = self.TGZ_MAC_RE.search(f.name)
-                                    if m:
-                                        mac = m.group(1)
-                                # Use date prefix to avoid name collisions across zips
-                                dest_name = f"{cpe_info['date_from']}_{f.name}"
-                                shutil.move(str(f), str(staging_dir / dest_name))
+                        moved = 0
+                        for f in all_tar_files:
+                            if not f.is_file():
+                                continue
+                            # For fallback zips, only take tgz files containing this MAC
+                            if is_fallback and serial not in f.name:
+                                continue
+                            # Try to extract MAC while we're scanning
+                            if mac is None:
+                                m = self.TGZ_MAC_RE.search(f.name)
+                                if m:
+                                    mac = m.group(1)
+                            # Use date prefix to avoid name collisions across zips
+                            dest_name = f"{cpe_info['date_from']}_{f.name}"
+                            shutil.move(str(f), str(staging_dir / dest_name))
+                            moved += 1
+
+                        if moved == 0:
+                            print(f"[MultiCPE] WARNING: No matching tar files found for {serial} in {archive_path.name}")
+                        else:
+                            print(f"[MultiCPE] Staged {moved} tar file(s) for {serial} from {archive_path.name}")
 
                     except Exception as e:
                         print(f"[MultiCPE] Error extracting {archive_path.name}: {e}")
                     finally:
                         if temp_dir.exists():
                             shutil.rmtree(temp_dir, ignore_errors=True)
+
+                # ---- Phase 1.5: Deduplicate tgz files by MD5 ----
+                seen_md5: dict = {}  # md5 -> first filename
+                for f in sorted(staging_dir.iterdir()):
+                    if not f.is_file():
+                        continue
+                    md5 = hashlib.md5(f.read_bytes()).hexdigest()
+                    if md5 in seen_md5:
+                        print(f"[MultiCPE] Dropping duplicate tgz: {f.name} (same as {seen_md5[md5]})")
+                        f.unlink()
+                    else:
+                        seen_md5[md5] = f.name
 
                 # ---- Phase 2: Merge all collected tgz files at once ----
                 cpe_output_dir = project_dir / serial
@@ -474,12 +494,14 @@ class FileManager:
                 merger.merge_logs()
 
                 # Move merged files from merged_logs/ up to cpe_output_dir
+                file_count = 0
                 if merged_dir.exists():
                     for fname in os.listdir(merged_dir):
                         src = merged_dir / fname
                         dst = cpe_output_dir / fname
                         if src.is_file():
                             shutil.move(str(src), str(dst))
+                            file_count += 1
                     shutil.rmtree(merged_dir, ignore_errors=True)
 
                 cpe_results.append({
@@ -488,7 +510,7 @@ class FileManager:
                     "date_from": date_from,
                     "date_to": date_to,
                 })
-                print(f"[MultiCPE] CPE {serial} processed ({len(zip_list)} zips merged) -> {cpe_output_dir}")
+                print(f"[MultiCPE] CPE {serial} processed ({len(zip_list)} zips merged, {file_count} files) -> {cpe_output_dir}")
 
             except Exception as e:
                 print(f"[MultiCPE] Error processing CPE {serial}: {e}")

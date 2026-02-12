@@ -107,31 +107,68 @@ export default function LogViewerPage() {
     }
   }, [scrollToLine, fileContent]);
 
+  const pollProcessingStatus = useCallback(async (pid: string) => {
+    // Poll every 2s until processing completes or errors
+    const poll = async (): Promise<void> => {
+      try {
+        const res = await filesApi.processingStatus(pid);
+        const { status, message, progress, total, cpes } = res.data;
+        setProcessingStatus(
+          total > 0 ? `${message}  (${progress}/${total})` : message
+        );
+        if (status === "completed") {
+          if (cpes && cpes.length > 0) {
+            setCPE({ serial: cpes[0], mac: null, date_from: null, date_to: null });
+            qc.invalidateQueries({ queryKey: ["cpes", pid] });
+          }
+          qc.invalidateQueries({ queryKey: ["files", pid] });
+          qc.invalidateQueries({ queryKey: ["indexingStatus", pid] });
+          setProcessingStatus(`Done! ${cpes.length} CPE(s) processed, indexing in background...`);
+          setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 3000);
+          return;
+        }
+        if (status === "error") {
+          setProcessingStatus(`Processing failed: ${res.data.error}`);
+          setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 5000);
+          return;
+        }
+        // Still processing — poll again
+        await new Promise((r) => setTimeout(r, 2000));
+        return poll();
+      } catch {
+        // Network blip — retry
+        await new Promise((r) => setTimeout(r, 3000));
+        return poll();
+      }
+    };
+    // Initial delay to let the backend start processing
+    await new Promise((r) => setTimeout(r, 1000));
+    return poll();
+  }, [qc, setCPE]);
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (!projectId || !acceptedFiles.length) return;
     setIsUploading(true);
     setProcessingStatus("Uploading files...");
     try {
-      setProcessingStatus("Processing and extracting log files...");
       const res = await filesApi.upload(projectId, acceptedFiles);
 
-      // If CPEs were created, set the first one immediately so file list is scoped
-      if (res.data.cpes && res.data.cpes.length > 0) {
-        setCPE({ serial: res.data.cpes[0], mac: null, date_from: null, date_to: null });
-        qc.invalidateQueries({ queryKey: ["cpes", projectId] });
+      if (res.status === 202 && res.data.processing) {
+        // Background processing — switch to polling
+        setProcessingStatus("Files uploaded. Extracting and merging CPE logs...");
+        pollProcessingStatus(projectId);
+      } else {
+        // Sync (legacy) path — done immediately
+        qc.invalidateQueries({ queryKey: ["files", projectId] });
+        qc.invalidateQueries({ queryKey: ["indexingStatus", projectId] });
+        setProcessingStatus("Done! Indexing logs in background...");
+        setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 2500);
       }
-
-      qc.invalidateQueries({ queryKey: ["files", projectId] });
-      qc.invalidateQueries({ queryKey: ["indexingStatus", projectId] });
-      setProcessingStatus("Done! Indexing logs in background...");
-      setTimeout(() => setProcessingStatus(null), 2500);
     } catch {
       setProcessingStatus("Upload failed. Please try again.");
-      setTimeout(() => setProcessingStatus(null), 3000);
-    } finally {
-      setIsUploading(false);
+      setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 3000);
     }
-  }, [projectId, qc, setCPE, cpeId]);
+  }, [projectId, qc, setCPE, cpeId, pollProcessingStatus]);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
   const doSearch = (p?: string) => { const pat = p || searchPattern; if (pat && selectedFile) { setActiveHighlight(pat); searchMutation.mutate(pat); } };

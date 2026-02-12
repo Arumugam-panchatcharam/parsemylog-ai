@@ -113,7 +113,7 @@ def create_api_app():
     app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(
         seconds=int(os.environ.get("JWT_REFRESH_EXPIRES", 86400 * 30))
     )
-    app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500MB max upload
+    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2GB max upload
 
     app.secret_key = hashlib.sha256(f"logai-flask-{db_path}".encode()).hexdigest()
 

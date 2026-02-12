@@ -44,8 +44,18 @@ export const filesApi = {
     files.forEach((f) => formData.append("files", f));
     return api.post(`/projects/${projectId}/files/upload`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
+      timeout: 600_000, // 10 min for large uploads
     });
   },
+  processingStatus: (projectId: string) =>
+    api.get<{
+      status: "idle" | "processing" | "completed" | "error";
+      message: string;
+      progress: number;
+      total: number;
+      cpes: string[];
+      error: string | null;
+    }>(`/projects/${projectId}/files/processing-status`),
   getContent: (projectId: string, filename: string, page = 1, linesPerPage = 1000, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/files/${filename}/content`, {
       params: { page, lines_per_page: linesPerPage, ...(cpeId ? { cpe_id: cpeId } : {}) },
