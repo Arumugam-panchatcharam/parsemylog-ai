@@ -111,15 +111,48 @@ def _parse_and_build(project_dir: Path):
 
     Returns (response_dict, available_fields_dict, None) on success,
     or (None, None, error_message) on failure.
+
+    When telemetry2_0 is missing or has no parsable reports, falls back to
+    PARODUSlog.txt + telemetry_marker.txt + version.txt to provide at least
+    the device identity information.
     """
     telemetry_file = _find_telemetry_file(project_dir)
-    if not telemetry_file:
-        return None, None, "No telemetry2_0 file found"
+    telemetry_ok = False
+    reports = None
+    summary = None
 
-    reports, _merged, summary = parse_telemetry_file(telemetry_file)
-    if not reports or summary.get("parsed", 0) == 0:
-        return None, None, "No parseable telemetry reports found"
+    if telemetry_file:
+        reports, _merged, summary = parse_telemetry_file(telemetry_file)
+        if reports and summary.get("parsed", 0) > 0:
+            telemetry_ok = True
 
+    # -- Fallback: build a partial response from PARODUSlog / marker / version
+    if not telemetry_ok:
+        try:
+            from logai.info_extractor import find_and_build_fallback_device_info
+            fallback_info = find_and_build_fallback_device_info(project_dir)
+        except Exception:
+            fallback_info = {}
+
+        if not fallback_info:
+            return None, None, "No telemetry or device info found"
+
+        response = {
+            "device_info": fallback_info,
+            "summary": {"total": 0, "parsed": 0, "overall_time_range": {}},
+            "key_metrics": [],
+            "status_labels": [],
+            "charts": [],
+            "reboot_timeline": None,
+            "mesh_topology": None,
+            "available_fields": None,
+            "cached": False,
+        }
+
+        save_telemetry_cache(project_dir, response, {})
+        return response, {}, None
+
+    # -- Normal path: full telemetry parsing succeeded
     field_config = load_report_field_config()
     configured_fields = extract_configured_fields(reports, field_config)
     available_fields = discover_available_fields(reports, field_config)

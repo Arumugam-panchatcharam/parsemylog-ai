@@ -7,13 +7,18 @@ for side-by-side comparison: device info, key metrics, reboot history,
 pattern summary per domain, and log file statistics.
 """
 
+import json
 import logging
+import shutil
+import subprocess
+import time
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, send_file
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
@@ -59,57 +64,77 @@ def _find_telemetry_file(project_dir: Path) -> Optional[Path]:
 
 
 def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
-    """Parse telemetry and version.txt to collect device info and key metrics."""
+    """Parse telemetry and version.txt to collect device info and key metrics.
+
+    When telemetry2_0 is missing or has no parsable reports, falls back to
+    PARODUSlog.txt + telemetry_marker.txt + version.txt for device identity.
+    """
     result: Dict[str, Any] = {"device_info": {}, "key_metrics": {}}
 
     telemetry_file = _find_telemetry_file(project_dir)
-    if not telemetry_file:
-        return result
+    telemetry_ok = False
 
-    try:
-        from logai.telemetry_parser import (
-            parse_telemetry_file,
-            extract_configured_fields,
-            load_report_field_config,
-        )
-
-        reports, merged, summary = parse_telemetry_file(telemetry_file)
-
-        if not reports or summary.get("parsed", 0) == 0:
-            return result
-
-        # Device info
-        device_info = summary.get("device_info", {})
-
-        # Enrich with version.txt
+    if telemetry_file:
         try:
-            from logai.info_extractor import find_and_parse_version_txt
-            version_info = find_and_parse_version_txt(project_dir)
-            if version_info:
-                if version_info.get("sdk_version"):
-                    device_info["sdk_version"] = version_info["sdk_version"]
-                if version_info.get("sw_upgrade_detected"):
-                    device_info["sw_upgrade"] = f"Yes ({version_info['sw_upgrade_detail']})"
-                else:
-                    device_info["sw_upgrade"] = "No"
-        except ImportError:
-            pass
+            from logai.telemetry_parser import (
+                parse_telemetry_file,
+                extract_configured_fields,
+                load_report_field_config,
+            )
 
-        result["device_info"] = device_info
+            reports, merged, summary = parse_telemetry_file(telemetry_file)
 
-        # Key metrics
-        field_config = load_report_field_config()
-        configured_fields = extract_configured_fields(reports, field_config)
+            if reports and summary.get("parsed", 0) > 0:
+                telemetry_ok = True
 
-        result["key_metrics"] = _build_flat_metrics(configured_fields, summary)
-        result["summary"] = {
-            "total_reports": summary.get("total", 0),
-            "parsed_reports": summary.get("parsed", 0),
-            "time_range": summary.get("overall_time_range", {}),
-        }
+                # Device info
+                device_info = summary.get("device_info", {})
 
-    except Exception as e:
-        logger.warning(f"[CPEOverview] Error collecting device info from {project_dir}: {e}")
+                # Enrich with version.txt
+                try:
+                    from logai.info_extractor import find_and_parse_version_txt
+                    version_info = find_and_parse_version_txt(project_dir)
+                    if version_info:
+                        if version_info.get("sdk_version"):
+                            device_info["sdk_version"] = version_info["sdk_version"]
+                        if version_info.get("sw_upgrade_detected"):
+                            device_info["sw_upgrade"] = f"Yes ({version_info['sw_upgrade_detail']})"
+                        else:
+                            device_info["sw_upgrade"] = "No"
+                except ImportError:
+                    pass
+
+                result["device_info"] = device_info
+
+                # Key metrics
+                field_config = load_report_field_config()
+                configured_fields = extract_configured_fields(reports, field_config)
+
+                result["key_metrics"] = _build_flat_metrics(configured_fields, summary)
+                result["summary"] = {
+                    "total_reports": summary.get("total", 0),
+                    "parsed_reports": summary.get("parsed", 0),
+                    "time_range": summary.get("overall_time_range", {}),
+                }
+
+        except Exception as e:
+            logger.warning(f"[CPEOverview] Error collecting device info from {project_dir}: {e}")
+
+    # Fallback: PARODUSlog + telemetry_marker + version.txt
+    if not telemetry_ok:
+        try:
+            from logai.info_extractor import find_and_build_fallback_device_info
+            fallback_info = find_and_build_fallback_device_info(project_dir)
+            if fallback_info:
+                result["device_info"] = fallback_info
+                logger.info(
+                    f"[CPEOverview] Using fallback device info for {project_dir.name}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[CPEOverview] Error collecting fallback device info "
+                f"from {project_dir}: {e}"
+            )
 
     return result
 
@@ -352,3 +377,187 @@ def get_cpe_overview(project_id):
         })
 
     return jsonify({"cpes": result_cpes}), 200
+
+
+# ---------------------------------------------------------------------------
+# Pattern Analyzer Scan (cross-CPE comparison)
+# ---------------------------------------------------------------------------
+
+_PATTERN_SCAN_CACHE = ".cpe_overview_pattern_scan.json"
+
+
+def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
+    """Run ``rg -c`` and return total match count across all files."""
+    cmd = [
+        rg_binary,
+        "-c",
+        "-i",
+        "--max-filesize", "500M",
+        "--no-filename",
+        "-e", regex,
+        str(search_dir),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"[CPEOverview] rg -c timed out for regex: {regex[:80]}")
+        return 0
+    except Exception as e:
+        logger.warning(f"[CPEOverview] rg -c error: {e}")
+        return 0
+
+    if result.returncode not in (0, 1):
+        return 0
+
+    total = 0
+    for line in result.stdout.strip().splitlines():
+        # rg -c --no-filename outputs one count per file
+        try:
+            total += int(line.strip())
+        except ValueError:
+            pass
+    return total
+
+
+@cpe_overview_bp.route("/<project_id>/cpe-overview/pattern-scan", methods=["GET"])
+@jwt_required()
+def get_pattern_scan_cache(project_id):
+    """
+    Return cached pattern-analyzer scan results for the CPE overview, or
+    ``{"cached": false}`` if no cache exists yet.
+    """
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cache_path = base_dir / _PATTERN_SCAN_CACHE
+
+    if not cache_path.exists():
+        return jsonify({"cached": False}), 200
+
+    return send_file(
+        cache_path,
+        mimetype="application/json",
+        as_attachment=False,
+    )
+
+
+@cpe_overview_bp.route("/<project_id>/cpe-overview/pattern-scan", methods=["POST"])
+@jwt_required()
+def run_pattern_scan(project_id):
+    """
+    Run the project's regex patterns against every CPE and cache the result.
+
+    For each domain / pattern / CPE the endpoint runs ``rg -c`` (count-only)
+    which is very fast.  Results are written to
+    ``<project_dir>/.cpe_overview_pattern_scan.json`` so subsequent page
+    loads can use the GET endpoint above.
+
+    Returns:
+        {
+            "cached": true,
+            "scanned_at": "2026-02-12T10:30:00",
+            "elapsed_ms": int,
+            "domains": {
+                "<domain>": {
+                    "patterns": [str, ...],
+                    "cpes": [{"serial": str, "counts": [int, ...]}, ...]
+                }
+            }
+        }
+    """
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    rg_binary = shutil.which("rg")
+    if not rg_binary:
+        return jsonify({"error": "ripgrep (rg) binary not found on server"}), 500
+
+    # Load project patterns
+    from api.routes.regex_analyzer import load_project_patterns
+
+    all_domains = load_project_patterns(user_id, project_id)
+
+    if not all_domains:
+        return jsonify({
+            "error": "No patterns configured for this project. "
+                     "Add patterns on the Pattern Analyzer page first."
+        }), 400
+
+    # Resolve CPE directories
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cpes = dbm.list_project_cpes(project_id)
+
+    cpe_dirs: List[Dict[str, Any]] = []
+    if cpes:
+        for cpe in cpes:
+            cpe_dir = base_dir / cpe.serial
+            if cpe_dir.exists():
+                cpe_dirs.append({"serial": cpe.serial, "dir": cpe_dir})
+    else:
+        # Legacy single-CPE project
+        cpe_dirs.append({"serial": "default", "dir": base_dir})
+
+    if not cpe_dirs:
+        return jsonify({"error": "No CPE directories found"}), 404
+
+    start_time = time.perf_counter()
+
+    result_domains: Dict[str, Any] = {}
+
+    for domain_name, patterns in all_domains.items():
+        enabled = [
+            p for p in patterns
+            if isinstance(p, dict)
+            and p.get("enabled", True)
+            and p.get("regex", "").strip()
+        ]
+        if not enabled:
+            continue
+
+        pattern_names = [p["name"] for p in enabled]
+        cpe_results = []
+
+        for cpe_info in cpe_dirs:
+            counts = []
+            for pat in enabled:
+                count = _run_rg_count(rg_binary, pat["regex"], cpe_info["dir"])
+                counts.append(count)
+            cpe_results.append({
+                "serial": cpe_info["serial"],
+                "counts": counts,
+            })
+
+        result_domains[domain_name] = {
+            "patterns": pattern_names,
+            "cpes": cpe_results,
+        }
+
+    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+
+    payload = {
+        "cached": True,
+        "scanned_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "elapsed_ms": elapsed_ms,
+        "domains": result_domains,
+    }
+
+    # Write cache
+    cache_path = base_dir / _PATTERN_SCAN_CACHE
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    logger.info(
+        f"[CPEOverview] Pattern scan complete for project {project_id}: "
+        f"{len(result_domains)} domains, {len(cpe_dirs)} CPEs, {elapsed_ms}ms"
+    )
+
+    return jsonify(payload), 200

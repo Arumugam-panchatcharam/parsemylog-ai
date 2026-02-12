@@ -2,11 +2,11 @@
 Pattern Analyzer API Routes
 =============================
 
-Endpoints for per-user regex pattern management and ripgrep-based
+Endpoints for per-project regex pattern management and ripgrep-based
 log scanning with time-bucketed occurrence graphs and reboot boundaries.
 
-Patterns are stored per-user as YAML files grouped by domain:
-    ``UPLOAD_DIRECTORY/{user_id}/user_patterns.yaml``
+Patterns are stored per-project as YAML files grouped by domain:
+    ``UPLOAD_DIRECTORY/{user_id}/{project_id}/project_patterns.yaml``
 
 Format::
 
@@ -68,21 +68,17 @@ def _verify_project(project_id: str, user_id: int):
 
 
 def _user_patterns_path(user_id: int) -> Path:
-    """Return the path to the user's pattern YAML file."""
+    """Return the path to the legacy per-user pattern YAML file (migration only)."""
     return Path(UPLOAD_DIRECTORY) / str(user_id) / "user_patterns.yaml"
 
 
-def load_user_patterns(user_id: int) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Load user-specific regex patterns from YAML, grouped by domain.
+def _project_patterns_path(user_id: int, project_id: str) -> Path:
+    """Return the path to the per-project pattern YAML file."""
+    return Path(UPLOAD_DIRECTORY) / str(user_id) / project_id / "project_patterns.yaml"
 
-    Returns:
-        Dict mapping domain names to lists of pattern dicts.
-        Example: {"WLAN_Issues": [{name, regex, enabled}, ...], ...}
 
-    Handles backward-compatible migration from old flat format.
-    """
-    path = _user_patterns_path(user_id)
+def _load_yaml_patterns(path: Path) -> Dict[str, List[Dict[str, Any]]]:
+    """Load domain-grouped patterns from a YAML file (internal helper)."""
     if not path.exists():
         return {}
     try:
@@ -91,29 +87,55 @@ def load_user_patterns(user_id: int) -> Dict[str, List[Dict[str, Any]]]:
         if not data:
             return {}
 
-        # New domain-grouped format
         if "domains" in data and isinstance(data["domains"], dict):
             return data["domains"]
 
         # Backward compat: old flat format → migrate to "General" domain
         if "patterns" in data and isinstance(data["patterns"], list):
-            logger.info(
-                f"[PatternAnalyzer] Migrating flat patterns for user {user_id} "
-                f"to domain-grouped format"
-            )
-            domains = {"General": data["patterns"]}
-            save_user_patterns(user_id, domains)
-            return domains
+            return {"General": data["patterns"]}
 
         return {}
     except Exception as e:
-        logger.warning(f"[PatternAnalyzer] Error loading patterns for user {user_id}: {e}")
+        logger.warning(f"[PatternAnalyzer] Error loading patterns from {path}: {e}")
         return {}
 
 
-def save_user_patterns(user_id: int, domains: Dict[str, List[Dict[str, Any]]]) -> None:
-    """Save user-specific regex patterns to YAML (domain-grouped)."""
-    path = _user_patterns_path(user_id)
+def load_project_patterns(user_id: int, project_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Load per-project regex patterns from YAML, grouped by domain.
+
+    Falls back to the legacy per-user ``user_patterns.yaml`` on first access
+    and copies it into the project directory for future use.
+
+    Returns:
+        Dict mapping domain names to lists of pattern dicts.
+        Example: {"WLAN_Issues": [{name, regex, enabled}, ...], ...}
+    """
+    # Try project-level file first
+    project_path = _project_patterns_path(user_id, project_id)
+    domains = _load_yaml_patterns(project_path)
+    if domains:
+        return domains
+
+    # Migration fallback: copy from legacy per-user file
+    legacy_path = _user_patterns_path(user_id)
+    legacy_domains = _load_yaml_patterns(legacy_path)
+    if legacy_domains:
+        logger.info(
+            f"[PatternAnalyzer] Migrating per-user patterns to project "
+            f"{project_id} for user {user_id}"
+        )
+        save_project_patterns(user_id, project_id, legacy_domains)
+        return legacy_domains
+
+    return {}
+
+
+def save_project_patterns(
+    user_id: int, project_id: str, domains: Dict[str, List[Dict[str, Any]]]
+) -> None:
+    """Save per-project regex patterns to YAML (domain-grouped)."""
+    path = _project_patterns_path(user_id, project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump({"domains": domains}, f, default_flow_style=False, sort_keys=False)
@@ -389,7 +411,7 @@ def get_patterns(project_id):
     if err:
         return err
 
-    domains = load_user_patterns(user_id)
+    domains = load_project_patterns(user_id, project_id)
     return jsonify({"domains": domains}), 200
 
 
@@ -449,7 +471,7 @@ def save_patterns(project_id):
             validated_domains[domain_name] = validated
             total_saved += len(validated)
 
-    save_user_patterns(user_id, validated_domains)
+    save_project_patterns(user_id, project_id, validated_domains)
     return jsonify({"domains": validated_domains, "saved": total_saved}), 200
 
 
@@ -470,7 +492,7 @@ def export_patterns(project_id):
     if err:
         return err
 
-    domains = load_user_patterns(user_id)
+    domains = load_project_patterns(user_id, project_id)
     fmt = request.args.get("format", "json").lower()
 
     if fmt == "yaml":
@@ -787,10 +809,10 @@ def sync_from_global(project_id):
             "enabled": gp.enabled,
         })
 
-    # Load current user patterns
-    user_domains = load_user_patterns(user_id)
+    # Load current project patterns
+    user_domains = load_project_patterns(user_id, project_id)
 
-    # Merge: global patterns take precedence, user-only patterns preserved
+    # Merge: global patterns take precedence, project-only patterns preserved
     merged: Dict[str, List[Dict[str, Any]]] = {}
     all_domains = set(list(global_by_domain.keys()) + list(user_domains.keys()))
     synced = 0
@@ -823,7 +845,7 @@ def sync_from_global(project_id):
         if domain_result:
             merged[domain] = domain_result
 
-    save_user_patterns(user_id, merged)
+    save_project_patterns(user_id, project_id, merged)
     return jsonify({"domains": merged, "synced": synced}), 200
 
 
@@ -872,8 +894,8 @@ def diff_patterns(project_id):
             "name": gp.name, "regex": gp.regex, "enabled": gp.enabled,
         }
 
-    # Load user patterns
-    user_domains = load_user_patterns(user_id)
+    # Load project patterns
+    user_domains = load_project_patterns(user_id, project_id)
 
     result_domains: Dict[str, Dict[str, list]] = {}
     for domain, user_pats in user_domains.items():

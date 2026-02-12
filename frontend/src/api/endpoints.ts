@@ -206,9 +206,23 @@ export const patternAnalyzerApi = {
 };
 
 // ---------- CPE Overview ----------
+export interface PatternScanDomain {
+  patterns: string[];
+  cpes: Array<{ serial: string; counts: number[] }>;
+}
+export interface PatternScanResult {
+  cached: boolean;
+  scanned_at?: string;
+  elapsed_ms?: number;
+  domains?: Record<string, PatternScanDomain>;
+}
 export const cpeOverviewApi = {
   getSummary: (projectId: string) =>
     api.get(`/projects/${projectId}/cpe-overview`),
+  getPatternScan: (projectId: string) =>
+    api.get<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
+  runPatternScan: (projectId: string) =>
+    api.post<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
 };
 
 // ---------- NATCO (user-facing) ----------

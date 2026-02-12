@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cpeOverviewApi } from "@/api/endpoints";
+import type { PatternScanResult } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import Plot from "react-plotly.js";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -14,6 +15,11 @@ import RouterIcon from "@mui/icons-material/Router";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import WarningIcon from "@mui/icons-material/Warning";
 import ErrorIcon from "@mui/icons-material/Error";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import SearchIcon from "@mui/icons-material/Search";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 
 /* ================================================================ Types */
 interface CPESummary {
@@ -82,6 +88,49 @@ function fmtUptime(sec: unknown): string {
 
 /* ================================================================ Components */
 
+import { useState } from "react";
+
+/** Reusable collapsible card wrapper */
+function CollapsibleCard({
+  icon,
+  title,
+  defaultOpen = true,
+  headerRight,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  defaultOpen?: boolean;
+  headerRight?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2 text-left hover:bg-muted/50 transition-colors cursor-pointer"
+      >
+        {icon}
+        <h3 className="text-sm font-semibold flex-1">{title}</h3>
+        {headerRight && (
+          <span onClick={(e) => e.stopPropagation()} className="flex items-center">
+            {headerRight}
+          </span>
+        )}
+        {open ? (
+          <ExpandLessIcon style={{ fontSize: 20 }} className="text-muted-foreground" />
+        ) : (
+          <ExpandMoreIcon style={{ fontSize: 20 }} className="text-muted-foreground" />
+        )}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 /** Section 1: Device Info Comparison Table */
 function DeviceInfoTable({ cpes }: { cpes: CPESummary[] }) {
   const fields = [
@@ -97,11 +146,10 @@ function DeviceInfoTable({ cpes }: { cpes: CPESummary[] }) {
   ];
 
   return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
-        <DevicesIcon style={{ fontSize: 20 }} className="text-primary" />
-        <h3 className="text-sm font-semibold">Device Info Comparison</h3>
-      </div>
+    <CollapsibleCard
+      icon={<DevicesIcon style={{ fontSize: 20 }} className="text-primary" />}
+      title="Device Info Comparison"
+    >
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -157,7 +205,7 @@ function DeviceInfoTable({ cpes }: { cpes: CPESummary[] }) {
           </tbody>
         </table>
       </div>
-    </div>
+    </CollapsibleCard>
   );
 }
 
@@ -262,11 +310,10 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
     def.getValue(km, cpe);
 
   return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
-        <CompareArrowsIcon style={{ fontSize: 20 }} className="text-primary" />
-        <h3 className="text-sm font-semibold">Key Metrics Comparison</h3>
-      </div>
+    <CollapsibleCard
+      icon={<CompareArrowsIcon style={{ fontSize: 20 }} className="text-primary" />}
+      title="Key Metrics Comparison"
+    >
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -333,7 +380,7 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
           </tbody>
         </table>
       </div>
-    </div>
+    </CollapsibleCard>
   );
 }
 
@@ -351,11 +398,10 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
   const reasons = Array.from(allReasons).sort();
 
   return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
-        <RestartAltIcon style={{ fontSize: 20 }} className="text-primary" />
-        <h3 className="text-sm font-semibold">Reboot Comparison</h3>
-      </div>
+    <CollapsibleCard
+      icon={<RestartAltIcon style={{ fontSize: 20 }} className="text-primary" />}
+      title="Reboot Comparison"
+    >
       <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Total reboots bar chart */}
         <div>
@@ -419,148 +465,245 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
           </div>
         )}
       </div>
-    </div>
+    </CollapsibleCard>
   );
 }
 
-/** Section 4: Pattern Domain Comparison */
-function PatternComparison({ cpes }: { cpes: CPESummary[] }) {
-  const domains = ["wireless", "platform", "core_router", "cellular", "mesh"];
-  const domainLabels = domains.map((d) => {
-    const first = cpes.find((c) => c.pattern_summary[d]);
-    return first?.pattern_summary[d]?.label || d;
+/** Truncate a pattern name for chart X-axis labels */
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
+}
+
+/** Section 4: Pattern Analyzer Comparison */
+function PatternAnalyzerComparison({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+
+  // Auto-load cached scan results on mount
+  const {
+    data: scanData,
+    isLoading: loadingCache,
+  } = useQuery<PatternScanResult>({
+    queryKey: ["cpe-overview-pattern-scan", projectId],
+    queryFn: async () => {
+      const res = await cpeOverviewApi.getPatternScan(projectId);
+      return res.data;
+    },
+    enabled: !!projectId,
   });
-  const colors = generateCpeColors(cpes.length);
 
-  // Build grouped bar traces: one trace per CPE
-  const loglineTraces = cpes.map((c, i) => ({
-    type: "bar" as const,
-    name: cpeLabel(c),
-    x: domainLabels,
-    y: domains.map((d) => c.pattern_summary[d]?.total_loglines || 0),
-    marker: { color: colors[i] },
-  }));
+  // Mutation for running a new scan
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await cpeOverviewApi.runPatternScan(projectId);
+      return res.data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["cpe-overview-pattern-scan", projectId], data);
+    },
+  });
 
-  const patternTraces = cpes.map((c, i) => ({
-    type: "bar" as const,
-    name: cpeLabel(c),
-    x: domainLabels,
-    y: domains.map((d) => c.pattern_summary[d]?.unique_patterns || 0),
-    marker: { color: colors[i] },
-  }));
+  const isScanning = scanMutation.isPending;
+  const hasCachedData = scanData?.cached === true && scanData.domains && Object.keys(scanData.domains).length > 0;
+  const domainEntries = hasCachedData ? Object.entries(scanData!.domains!) : [];
 
-  // Also build a summary table
-  const hasAnyPatterns = cpes.some((c) =>
-    domains.some((d) => c.pattern_summary[d]?.indexed)
+  // ---- Render helpers ----
+
+  const scanButton = (
+    <button
+      onClick={() => scanMutation.mutate()}
+      disabled={isScanning}
+      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-muted hover:bg-muted/80 text-xs font-medium disabled:opacity-50"
+    >
+      {isScanning ? (
+        <>
+          <CircularProgress size={14} />
+          Scanning...
+        </>
+      ) : (
+        <>
+          <RefreshIcon style={{ fontSize: 16 }} />
+          Re-scan
+        </>
+      )}
+    </button>
   );
 
-  if (!hasAnyPatterns) {
+  const headerTimestamp = scanData?.scanned_at ? (
+    <span className="text-xs text-muted-foreground ml-2">
+      Last scanned: {new Date(scanData.scanned_at).toLocaleString()}
+      {scanData.elapsed_ms != null && ` (${(scanData.elapsed_ms / 1000).toFixed(1)}s)`}
+    </span>
+  ) : null;
+
+  // ---- Render: loading ----
+  if (loadingCache) {
     return (
-      <div className="bg-card border border-border rounded-xl p-6 text-center text-muted-foreground">
-        <WarningIcon style={{ fontSize: 32 }} className="mb-2" />
-        <p>No pattern data available. Make sure log indexing is complete.</p>
+      <div className="bg-card border border-border rounded-xl p-6 flex items-center justify-center gap-2 text-muted-foreground">
+        <CircularProgress size={20} />
+        <span className="text-sm">Loading pattern scan data...</span>
       </div>
     );
   }
 
+  // ---- Render: no cached data ----
+  if (!hasCachedData) {
+    return (
+      <CollapsibleCard
+        icon={<SearchIcon style={{ fontSize: 20 }} className="text-primary" />}
+        title="Pattern Analyzer Comparison"
+      >
+        <div className="p-6 flex flex-col items-center gap-3 text-center">
+          <p className="text-sm text-muted-foreground">
+            Run your project&apos;s regex patterns against all CPEs to compare match counts.
+          </p>
+          {scanMutation.isError && (
+            <p className="text-sm text-destructive">
+              {(scanMutation.error as Error)?.message
+                || (scanMutation.error as { response?: { data?: { error?: string } } })?.response?.data?.error
+                || "Scan failed"}
+            </p>
+          )}
+          <button
+            onClick={() => scanMutation.mutate()}
+            disabled={isScanning}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isScanning ? (
+              <>
+                <CircularProgress size={16} color="inherit" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <PlayArrowIcon style={{ fontSize: 18 }} />
+                Run Pattern Scan
+              </>
+            )}
+          </button>
+        </div>
+      </CollapsibleCard>
+    );
+  }
+
+  // Custom blue-teal colorscale: light background for 0, dark teal/blue for high values
+  const heatmapColorscale: Array<[number, string]> = [
+    [0,    "#f0f4f8"],
+    [0.15, "#d0e2f2"],
+    [0.3,  "#a3c4e0"],
+    [0.5,  "#5b9bd5"],
+    [0.7,  "#2e75b6"],
+    [0.85, "#1b4f8a"],
+    [1,    "#0d2e5c"],
+  ];
+
+  // ---- Render: cached data with heatmaps ----
   return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
-        <DescriptionIcon style={{ fontSize: 20 }} className="text-primary" />
-        <h3 className="text-sm font-semibold">Pattern Domain Comparison</h3>
-      </div>
+    <CollapsibleCard
+      icon={<SearchIcon style={{ fontSize: 20 }} className="text-primary" />}
+      title="Pattern Analyzer Comparison"
+      headerRight={
+        <span className="flex items-center gap-2">
+          {headerTimestamp}
+          {scanButton}
+        </span>
+      }
+    >
+      {domainEntries.map(([domain, domData]) => {
+        const cpeSerials = domData.cpes.map((c) => c.serial);
+        const patternNames = domData.patterns;
 
-      <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Log lines per domain */}
-        <Plot
-          data={loglineTraces}
-          layout={{
-            title: { text: "Log Lines per Domain" },
-            barmode: "group",
-            height: 380,
-            margin: { t: 40, b: 80, l: 60, r: 20 },
-            yaxis: { title: { text: "Log Lines" } },
-            paper_bgcolor: "transparent",
-            plot_bgcolor: "transparent",
-            font: { color: "#888" },
-            legend: { orientation: "h" as const, y: -0.35, font: { size: 10 } },
-          }}
-          config={{ displayModeBar: false }}
-          style={{ width: "100%" }}
-        />
+        // Compute total matches per pattern (sum across CPEs) for sorting
+        const patternTotals = patternNames.map((_, pIdx) =>
+          domData.cpes.reduce((sum, cpe) => sum + (cpe.counts[pIdx] ?? 0), 0)
+        );
 
-        {/* Unique patterns per domain */}
-        <Plot
-          data={patternTraces}
-          layout={{
-            title: { text: "Unique Patterns per Domain" },
-            barmode: "group",
-            height: 380,
-            margin: { t: 40, b: 80, l: 60, r: 20 },
-            yaxis: { title: { text: "Unique Patterns" } },
-            paper_bgcolor: "transparent",
-            plot_bgcolor: "transparent",
-            font: { color: "#888" },
-            legend: { orientation: "h" as const, y: -0.35, font: { size: 10 } },
-          }}
-          config={{ displayModeBar: false }}
-          style={{ width: "100%" }}
-        />
-      </div>
+        // Filter out zero-count patterns, then sort ascending
+        const sortedIndices = patternTotals
+          .map((total, idx) => ({ total, idx }))
+          .filter((item) => item.total > 0)
+          .sort((a, b) => a.total - b.total)
+          .map((item) => item.idx);
 
-      {/* Summary table */}
-      <div className="px-4 pb-4 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-muted/20">
-              <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Domain</th>
-              {cpes.map((c) => (
-                <th key={c.serial} className="text-center px-3 py-1.5 font-medium" colSpan={2}>
-                  {cpeLabel(c)}
-                </th>
-              ))}
-            </tr>
-            <tr className="border-b border-border bg-muted/10">
-              <th className="px-3 py-1" />
-              {cpes.map((c) => (
-                <React.Fragment key={c.serial}>
-                  <th className="text-center px-2 py-1 text-xs text-muted-foreground font-normal">Lines</th>
-                  <th className="text-center px-2 py-1 text-xs text-muted-foreground font-normal">Patterns</th>
-                </React.Fragment>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {domains.map((domain) => {
-              const label = cpes[0]?.pattern_summary[domain]?.label || domain;
-              return (
-                <tr key={domain} className="border-b border-border/50 hover:bg-muted/10">
-                  <td className="px-3 py-1.5 text-muted-foreground font-medium">{label}</td>
-                  {cpes.map((c) => {
-                    const ps = c.pattern_summary[domain];
-                    return (
-                      <React.Fragment key={c.serial}>
-                        <td className="text-center px-2 py-1.5">
-                          {ps?.indexed ? ps.total_loglines.toLocaleString() : "-"}
-                        </td>
-                        <td className="text-center px-2 py-1.5">
-                          {ps?.indexed ? ps.unique_patterns.toLocaleString() : "-"}
-                        </td>
-                      </React.Fragment>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+        // Skip domain entirely if no patterns have matches
+        if (sortedIndices.length === 0) return null;
+
+        const sortedPatternNames = sortedIndices.map((i) => patternNames[i]);
+
+        // Build heatmap z-matrix in sorted order
+        const zValues = sortedIndices.map((pIdx) =>
+          domData.cpes.map((cpe) => cpe.counts[pIdx] ?? 0)
+        );
+
+        // Find the max value across the whole domain for consistent scaling
+        const maxVal = Math.max(1, ...zValues.flat());
+
+        // Annotation text for heatmap cells -- dark text on light cells, white on dark
+        const annotations: Array<{
+          x: string; y: string; text: string; showarrow: boolean;
+          font: { color: string; size: number };
+        }> = [];
+        sortedPatternNames.forEach((pat, rowIdx) => {
+          cpeSerials.forEach((serial, cIdx) => {
+            const val = zValues[rowIdx][cIdx];
+            const ratio = val / maxVal;
+            annotations.push({
+              x: serial,
+              y: truncate(pat, 45),
+              text: val > 0 ? val.toLocaleString() : "-",
+              showarrow: false,
+              font: {
+                color: ratio > 0.45 ? "#fff" : "#334155",
+                size: 11,
+              },
+            });
+          });
+        });
+
+        return (
+          <div key={domain} className="border-b border-border/50 last:border-b-0">
+            <div className="px-4 pt-3 pb-1">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{domain}</p>
+            </div>
+
+            <div className="px-4 pb-3">
+              <Plot
+                data={[
+                  {
+                    type: "heatmap",
+                    z: zValues,
+                    x: cpeSerials,
+                    y: sortedPatternNames.map((p) => truncate(p, 45)),
+                    colorscale: heatmapColorscale,
+                    showscale: true,
+                    zmin: 0,
+                    zmax: maxVal,
+                    hoverongaps: false,
+                    hovertemplate:
+                      "<b>%{y}</b><br>CPE: %{x}<br>Matches: %{z}<extra></extra>",
+                  } as any,
+                ]}
+                layout={{
+                  height: Math.max(220, sortedPatternNames.length * 30 + 140),
+                  margin: { t: 10, b: 20, l: 20, r: 80 },
+                  xaxis: { side: "bottom" as const, tickangle: -45, automargin: true },
+                  yaxis: { autorange: false as const, range: [-0.5, sortedPatternNames.length - 0.5], dtick: 1, automargin: true },
+                  annotations,
+                  paper_bgcolor: "transparent",
+                  plot_bgcolor: "transparent",
+                  font: { color: "#888", size: 11 },
+                }}
+                config={{ displayModeBar: false }}
+                style={{ width: "100%" }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </CollapsibleCard>
   );
 }
 
 /* ================================================================ Main Page */
-import React from "react";
 
 export default function CPEOverviewPage() {
   const { projectId } = useProject();
@@ -634,8 +777,8 @@ export default function CPEOverviewPage() {
       {/* Section 3: Reboot Comparison */}
       <RebootComparison cpes={cpes} />
 
-      {/* Section 4: Pattern Domain Comparison */}
-      <PatternComparison cpes={cpes} />
+      {/* Section 4: Pattern Analyzer Comparison */}
+      <PatternAnalyzerComparison projectId={projectId} />
     </div>
   );
 }

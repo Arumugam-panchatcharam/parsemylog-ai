@@ -172,8 +172,10 @@ def find_and_parse_version_txt(project_dir: Path) -> Dict[str, Any]:
 # PARODUSlog.txt parser
 # ---------------------------------------------------------------------------
 
-# Fields we want to extract from PARODUS startup blocks
-_PARODUS_FIELDS = {
+# Fields we want to extract from PARODUS startup blocks.
+# Keys are normalised (hyphens → underscores) so that any mix of
+# hw_serial_number / hw_serial-number / hw-serial-number all match.
+_PARODUS_FIELDS_RAW = {
     "hw-model": "hw_model",
     "hw_serial-number": "serial_number",
     "hw_manufacturer": "manufacturer",
@@ -186,10 +188,61 @@ _PARODUS_FIELDS = {
     "webpa_url": "webpa_url",
     "webpa_interface_used": "webpa_interface",
 }
+# Build a normalised lookup: replace all hyphens with underscores in the key
+_PARODUS_FIELDS = {k.replace("-", "_"): v for k, v in _PARODUS_FIELDS_RAW.items()}
+
+
+def _normalise_parodus_key(key: str) -> str:
+    """Normalise a PARODUS field name so hyphens and underscores are equivalent."""
+    return key.replace("-", "_")
+
+# Mapping from X-WebPA-Convey JSON keys to our internal field names.
+_WEBPA_CONVEY_FIELDS = {
+    "hw-model": "hw_model",
+    "hw-serial-number": "serial_number",
+    "hw-manufacturer": "manufacturer",
+    "fw-name": "fw_name",
+    "boot-time": "boot_time_epoch",
+    "hw-last-reboot-reason": "last_reboot_reason",
+    "webpa-interface-used": "webpa_interface",
+}
 
 _PARODUS_RE = re.compile(
     r"PARODUS:\s+([\w_-]+)\s+is\s+(.+)$"
 )
+
+# Regex for X-WebPA-Convey Header JSON blob
+_WEBPA_CONVEY_RE = re.compile(
+    r"PARODUS:\s+X-WebPA-Convey Header:\s*\[\d+\](\{.+\})"
+)
+
+# Regex for Device_id mac line
+_DEVICE_ID_MAC_RE = re.compile(
+    r"PARODUS:\s+Device_id\s+mac:(\S+)"
+)
+
+
+def _parse_webpa_convey_json(json_str: str) -> Dict[str, str]:
+    """Parse the X-WebPA-Convey JSON header and return mapped fields.
+
+    The JSON values for string fields are sometimes double-quoted internally
+    (e.g. ``"hw-model":"\\\"FGA2233\\\""``) so we strip surrounding quotes.
+    """
+    result: Dict[str, str] = {}
+    try:
+        raw = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        return result
+
+    for json_key, mapped_name in _WEBPA_CONVEY_FIELDS.items():
+        val = raw.get(json_key)
+        if val is None:
+            continue
+        val_str = str(val).strip().strip('"').strip("'")
+        if val_str:
+            result[mapped_name] = val_str
+
+    return result
 
 
 def parse_parodus_log(content: str) -> Dict[str, Any]:
@@ -200,6 +253,10 @@ def parse_parodus_log(content: str) -> Dict[str, Any]:
     ``PARODUS: hw-model is DT-HGW01A-ARC``).  Multiple startup blocks
     may exist (one per reboot).  We collect ALL startup blocks to track
     changes (e.g. WAN IP changes, reboot reason changes).
+
+    Also parses the ``X-WebPA-Convey Header`` JSON blob and
+    ``Device_id mac:`` lines as secondary sources for device identity
+    when the "field is value" lines are not present.
 
     Args:
         content: Raw text content of PARODUSlog.txt.
@@ -217,51 +274,98 @@ def parse_parodus_log(content: str) -> Dict[str, Any]:
     current_block: Dict[str, str] = {}
     current_timestamp: str = ""
 
+    # Collect X-WebPA-Convey and Device_id mac data per startup block
+    current_convey: Dict[str, str] = {}
+    current_device_mac: str = ""
+
     for line in content.splitlines():
-        m = _PARODUS_RE.search(line)
-        if not m:
-            continue
-
-        field_name = m.group(1)
-        field_value = m.group(2).strip()
-
-        if field_name not in _PARODUS_FIELDS:
-            continue
-
-        mapped_name = _PARODUS_FIELDS[field_name]
-
-        # Detect start of a new startup block (hw-model is always first)
-        if field_name == "hw-model" and current_block:
-            current_block["_timestamp"] = current_timestamp
-            startup_blocks.append(current_block)
-            current_block = {}
-
-        # Clean up "updated with value: X" pattern for wan_ipv4_address
-        if mapped_name == "wan_ipv4" and field_value.startswith("updated with value:"):
-            field_value = field_value.replace("updated with value:", "").strip()
-
-        current_block[mapped_name] = field_value
-
         # Extract timestamp from the log line
         ts_match = re.match(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", line)
-        if ts_match and not current_timestamp:
-            current_timestamp = ts_match.group(1)
-        elif ts_match and field_name == "hw-model":
-            current_timestamp = ts_match.group(1)
 
-    # Don't forget the last block
-    if current_block:
-        current_block["_timestamp"] = current_timestamp
-        startup_blocks.append(current_block)
+        # --- Try "field is value" pattern ---
+        m = _PARODUS_RE.search(line)
+        if m:
+            field_name_raw = m.group(1)
+            field_value = m.group(2).strip()
+            norm_key = _normalise_parodus_key(field_name_raw)
+
+            if norm_key in _PARODUS_FIELDS:
+                mapped_name = _PARODUS_FIELDS[norm_key]
+
+                # Detect start of a new startup block (hw_model is always first)
+                if norm_key == "hw_model" and current_block:
+                    # Merge convey data into block (only fills gaps)
+                    for k, v in current_convey.items():
+                        current_block.setdefault(k, v)
+                    if current_device_mac:
+                        current_block.setdefault("mac", current_device_mac)
+
+                    current_block["_timestamp"] = current_timestamp
+                    startup_blocks.append(current_block)
+                    current_block = {}
+                    current_convey = {}
+                    current_device_mac = ""
+
+                # Clean up "updated with value: X" pattern for wan_ipv4_address
+                if mapped_name == "wan_ipv4" and field_value.startswith("updated with value:"):
+                    field_value = field_value.replace("updated with value:", "").strip()
+
+                # Strip surrounding quotes from values like '"FGA2233"'
+                field_value = field_value.strip('"').strip("'")
+
+                current_block[mapped_name] = field_value
+
+                if ts_match and not current_timestamp:
+                    current_timestamp = ts_match.group(1)
+                elif ts_match and norm_key == "hw_model":
+                    current_timestamp = ts_match.group(1)
+
+            continue
+
+        # --- Try X-WebPA-Convey Header JSON ---
+        convey_m = _WEBPA_CONVEY_RE.search(line)
+        if convey_m:
+            current_convey = _parse_webpa_convey_json(convey_m.group(1))
+            if ts_match and not current_timestamp:
+                current_timestamp = ts_match.group(1)
+            continue
+
+        # --- Try Device_id mac ---
+        mac_m = _DEVICE_ID_MAC_RE.search(line)
+        if mac_m:
+            current_device_mac = mac_m.group(1).strip()
+            if ts_match and not current_timestamp:
+                current_timestamp = ts_match.group(1)
+            continue
+
+    # Don't forget the last block — merge convey + mac
+    if current_block or current_convey or current_device_mac:
+        for k, v in current_convey.items():
+            current_block.setdefault(k, v)
+        if current_device_mac:
+            current_block.setdefault("mac", current_device_mac)
+        if current_block:
+            current_block["_timestamp"] = current_timestamp
+            startup_blocks.append(current_block)
 
     if not startup_blocks:
-        return {}
+        # Last resort: if we only found X-WebPA-Convey without any "field is"
+        # lines, build a single block from convey data
+        if current_convey:
+            block = dict(current_convey)
+            if current_device_mac:
+                block.setdefault("mac", current_device_mac)
+            block["_timestamp"] = current_timestamp
+            startup_blocks.append(block)
+        else:
+            return {}
 
     # Latest startup block has the most recent info
     latest = startup_blocks[-1]
 
     result: Dict[str, Any] = {}
-    for key in _PARODUS_FIELDS.values():
+    all_mapped_keys = set(_PARODUS_FIELDS.values()) | set(_WEBPA_CONVEY_FIELDS.values())
+    for key in all_mapped_keys:
         if key in latest:
             result[key] = latest[key]
 
@@ -288,6 +392,140 @@ def parse_parodus_log(content: str) -> Dict[str, Any]:
     result["parodus_startup_count"] = len(startup_blocks)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# telemetry_marker.txt — WAN Operating Mode
+# ---------------------------------------------------------------------------
+
+_WAN_MODE_RE = re.compile(r"WAN Operating Mode:(\S+)")
+
+
+def parse_wan_mode_from_marker(content: str) -> str:
+    """
+    Extract the WAN Operating Mode from ``telemetry_marker.txt``.
+
+    Looks for lines like::
+
+        WAN Operating Mode:GPON
+
+    Args:
+        content: Raw text content of telemetry_marker.txt.
+
+    Returns:
+        The WAN mode string (e.g. ``"GPON"``, ``"WANoE"``, ``"Ethernet"``)
+        or ``""`` if not found.
+    """
+    if not content:
+        return ""
+    m = _WAN_MODE_RE.search(content)
+    return m.group(1).strip() if m else ""
+
+
+# ---------------------------------------------------------------------------
+# Fallback device info builder
+# ---------------------------------------------------------------------------
+
+
+def find_and_build_fallback_device_info(project_dir: Path) -> Dict[str, str]:
+    """
+    Build a ``device_info`` dict from non-telemetry sources.
+
+    This is used as a fallback when ``telemetry2_0.txt`` has no parsable
+    reports.  It combines data from:
+
+        1. ``PARODUSlog.txt`` — device model, serial, manufacturer, MAC,
+           firmware version, reboot reason (via both "field is value"
+           lines and the X-WebPA-Convey JSON header).
+        2. ``telemetry_marker.txt`` — WAN Operating Mode.
+        3. ``version.txt`` — SDK version, SW upgrade detection.
+
+    The returned dict uses the same keys as
+    :func:`~logai.telemetry_parser.extract_telemetry_summary` so that
+    the CPE Overview and Telemetry pages can render it without changes.
+
+    Args:
+        project_dir: Path to the CPE directory (e.g.
+            ``UPLOAD_DIRECTORY/{user_id}/{project_id}/{cpe_serial}``).
+
+    Returns:
+        A dict with keys like ``model``, ``serial``, ``manufacturer``,
+        ``mac``, ``version``, ``wan_type``, ``sdk_version``, ``sw_upgrade``.
+        Returns an empty dict if no fallback data can be found.
+    """
+    device_info: Dict[str, str] = {}
+
+    # --- 1. PARODUSlog.txt ---
+    parodus_path = project_dir / "PARODUSlog.txt"
+    if parodus_path.exists() and parodus_path.is_file():
+        try:
+            raw = parodus_path.read_text(encoding="utf-8", errors="ignore")
+            parodus = parse_parodus_log(raw)
+            if parodus:
+                # Map PARODUS field names to the standard device_info keys
+                _map = {
+                    "hw_model": "model",
+                    "serial_number": "serial",
+                    "manufacturer": "manufacturer",
+                    "mac": "mac",
+                    "fw_name": "version",
+                    "last_reboot_reason": "last_reboot_reason",
+                    "boot_time_epoch": "boot_time_epoch",
+                }
+                for src_key, dst_key in _map.items():
+                    val = parodus.get(src_key, "")
+                    if val:
+                        device_info[dst_key] = str(val)
+                logger.debug(
+                    f"[InfoExtractor] Fallback PARODUSlog: "
+                    f"model={device_info.get('model', 'N/A')}, "
+                    f"serial={device_info.get('serial', 'N/A')}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[InfoExtractor] Error reading fallback PARODUSlog "
+                f"{parodus_path}: {e}"
+            )
+
+    # --- 2. telemetry_marker.txt — WAN mode ---
+    marker_path = project_dir / "telemetry_marker.txt"
+    if marker_path.exists() and marker_path.is_file():
+        try:
+            raw = marker_path.read_text(encoding="utf-8", errors="ignore")
+            wan_mode = parse_wan_mode_from_marker(raw)
+            if wan_mode:
+                device_info["wan_type"] = wan_mode
+                logger.debug(
+                    f"[InfoExtractor] Fallback marker WAN mode: {wan_mode}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[InfoExtractor] Error reading fallback marker "
+                f"{marker_path}: {e}"
+            )
+
+    # --- 3. version.txt — SDK version, SW upgrade ---
+    try:
+        version_info = find_and_parse_version_txt(project_dir)
+        if version_info:
+            if version_info.get("sdk_version"):
+                device_info["sdk_version"] = version_info["sdk_version"]
+            if version_info.get("sw_upgrade_detected"):
+                device_info["sw_upgrade"] = (
+                    f"Yes ({version_info['sw_upgrade_detail']})"
+                )
+            else:
+                device_info["sw_upgrade"] = "No"
+            # Use machine_name as a fallback for model if not set
+            if not device_info.get("model") and version_info.get("machine_name"):
+                device_info["model"] = version_info["machine_name"]
+    except Exception as e:
+        logger.warning(
+            f"[InfoExtractor] Error reading fallback version.txt "
+            f"in {project_dir}: {e}"
+        )
+
+    return device_info
 
 
 # ---------------------------------------------------------------------------
