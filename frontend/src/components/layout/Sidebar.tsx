@@ -10,13 +10,15 @@ import TimelineIcon from "@mui/icons-material/Timeline";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import CPESelector from "@/components/CPESelector";
+import { chatApi, patternsApi } from "@/api/endpoints";
 
 const workspaceNav = [
   { to: "/workspace/viewer", icon: SearchIcon, label: "Log Viewer" },
@@ -29,13 +31,31 @@ const workspaceNav = [
 
 export default function Sidebar() {
   const { user } = useAuth();
-  const { projectName, clearProject } = useProject();
-  const { clearCPE } = useCPE();
+  const { projectId, projectName, clearProject } = useProject();
+  const { cpeId, clearCPE } = useCPE();
   const location = useLocation();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
   const isWorkspace = location.pathname.startsWith("/workspace");
   const isProfile = location.pathname === "/profile";
+
+  // AI Chat visibility: only show when LLM is enabled + indexing done
+  const [showAiChat, setShowAiChat] = useState(false);
+  useEffect(() => {
+    if (!isWorkspace || !projectId) {
+      setShowAiChat(false);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      chatApi.llmStatus(projectId).catch(() => ({ data: { enabled: false, available: false } })),
+      patternsApi.indexingStatus(projectId, cpeId).catch(() => ({ data: { all_done: false } })),
+    ]).then(([llmRes, idxRes]) => {
+      if (cancelled) return;
+      setShowAiChat(llmRes.data.enabled && llmRes.data.available && (idxRes.data.all_done ?? false));
+    });
+    return () => { cancelled = true; };
+  }, [isWorkspace, projectId, cpeId]);
 
   return (
     <aside
@@ -110,6 +130,27 @@ export default function Sidebar() {
                 {!collapsed && item.label}
               </NavLink>
             ))}
+            {/* AI Chat — only visible when LLM is enabled and indexing is complete */}
+            {showAiChat && (
+              <>
+                <div className="my-2 border-t border-sidebar-border" />
+                <NavLink
+                  to="/workspace/chat"
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                        : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                      collapsed && "justify-center px-2"
+                    )
+                  }
+                >
+                  <SmartToyIcon style={{ fontSize: 18 }} className="shrink-0" />
+                  {!collapsed && "AI Chat"}
+                </NavLink>
+              </>
+            )}
           </>
         ) : (
           <>

@@ -14,6 +14,7 @@ import PatternAnalyzerPage from "@/pages/PatternAnalyzerPage";
 import CPEOverviewPage from "@/pages/CPEOverviewPage";
 import AdminPage from "@/pages/AdminPage";
 import ProfilePage from "@/pages/ProfilePage";
+import ChatPage from "@/pages/ChatPage";
 import type { ReactNode } from "react";
 
 const queryClient = new QueryClient({
@@ -76,6 +77,7 @@ function AppRoutes() {
         <Route path="/workspace/ai" element={<AIAnalysisPage />} />
         <Route path="/workspace/pattern-analyzer" element={<PatternAnalyzerPage />} />
         <Route path="/workspace/cpe-overview" element={<CPEOverviewPage />} />
+        <Route path="/workspace/chat" element={<ChatPage />} />
       </Route>
 
       <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />

@@ -2,7 +2,7 @@
 Admin API Routes
 =================
 
-Endpoints for user management (admin-only).
+Endpoints for user management (admin-only) and system settings.
 """
 
 from flask import Blueprint, request, jsonify
@@ -110,4 +110,52 @@ def user_projects(user_id):
     return jsonify({
         "username": user.username,
         "projects": result,
+    }), 200
+
+
+# =====================================================================
+# LLM Settings
+# =====================================================================
+
+@admin_bp.route("/settings/llm", methods=["GET"])
+@admin_required
+def get_llm_settings():
+    """
+    Get LLM settings (admin only).
+
+    Returns: { enabled: bool, available: bool, model_info: {...} | null }
+    """
+    import api.llm_service as llm
+
+    enabled = llm.is_enabled(dbm)
+    available = llm.is_available() if enabled else False
+    model_info = llm.get_model_info() if available else None
+
+    return jsonify({
+        "enabled": enabled,
+        "available": available,
+        "model_info": model_info,
+    }), 200
+
+
+@admin_bp.route("/settings/llm", methods=["PUT"])
+@admin_required
+def update_llm_settings():
+    """
+    Toggle LLM on/off (admin only).
+
+    Body: { "enabled": bool }
+    Returns: { enabled: bool, message: str }
+    """
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("enabled")
+
+    if enabled is None:
+        return jsonify({"error": "'enabled' field is required"}), 400
+
+    dbm.set_setting("llm_enabled", "true" if enabled else "false")
+
+    return jsonify({
+        "enabled": bool(enabled),
+        "message": f"LLM {'enabled' if enabled else 'disabled'} successfully",
     }), 200

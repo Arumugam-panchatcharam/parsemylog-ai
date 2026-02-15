@@ -192,6 +192,51 @@ class DBManager:
 
         self.ProjectFile = ProjectFile
 
+        # ---------------- System Setting Model ----------------
+        class SystemSetting(self.db.Model):
+            __tablename__ = "system_settings"
+
+            key = self.db.Column(self.db.String(120), primary_key=True)
+            value = self.db.Column(self.db.Text, nullable=False, default="")
+            updated_at = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
+
+        self.SystemSetting = SystemSetting
+
+        # ---------------- Chat Conversation Model ----------------
+        class ChatConversation(self.db.Model):
+            __tablename__ = "chat_conversations"
+
+            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
+            project_id = self.db.Column(self.db.String(256), self.db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+            user_id = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+            cpe_id = self.db.Column(self.db.String(256), nullable=True)
+            title = self.db.Column(self.db.String(256), nullable=False, default="New conversation")
+            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
+            updated_at = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
+
+            messages = self.db.relationship(
+                "ChatMessage", back_populates="conversation",
+                cascade="all, delete-orphan", passive_deletes=True,
+                order_by="ChatMessage.created_at",
+            )
+
+        self.ChatConversation = ChatConversation
+
+        # ---------------- Chat Message Model ----------------
+        class ChatMessage(self.db.Model):
+            __tablename__ = "chat_messages"
+
+            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
+            conversation_id = self.db.Column(self.db.Integer, self.db.ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False)
+            role = self.db.Column(self.db.String(20), nullable=False)  # system, user, assistant
+            content = self.db.Column(self.db.Text, nullable=False)
+            context_used = self.db.Column(self.db.Text, nullable=True)  # JSON metadata
+            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
+
+            conversation = self.db.relationship("ChatConversation", back_populates="messages")
+
+        self.ChatMessage = ChatMessage
+
     # ---------------- Initialization ----------------
     def init_app(self, app):
         self.db.init_app(app)
@@ -204,6 +249,10 @@ class DBManager:
             # create default admin user if not exists
             if not self.db.session.query(self.User).filter_by(username='admin').first():
                 self.create_user("admin", "admin123", is_admin=True)
+            # Seed default system settings
+            if not self.db.session.query(self.SystemSetting).filter_by(key="llm_enabled").first():
+                self.db.session.add(self.SystemSetting(key="llm_enabled", value="false"))
+                self.db.session.commit()
 
     def _migrate_add_cpe_columns(self, app):
         """Add cpe_id column to project_files and natco_id to projects if missing."""
@@ -631,6 +680,77 @@ class DBManager:
         )
         #print(query.all())
         return query.all()
+
+    # ---------------- System Settings ----------------
+    def get_setting(self, key: str, default: str = "") -> str:
+        row = self.db.session.query(self.SystemSetting).filter_by(key=key).first()
+        return row.value if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        row = self.db.session.query(self.SystemSetting).filter_by(key=key).first()
+        if row:
+            row.value = value
+        else:
+            row = self.SystemSetting(key=key, value=value)
+            self.db.session.add(row)
+        self.db.session.commit()
+
+    # ---------------- Chat Conversations ----------------
+    def create_conversation(self, project_id: str, user_id: int,
+                            cpe_id: str = None, title: str = "New conversation"):
+        conv = self.ChatConversation(
+            project_id=project_id, user_id=user_id,
+            cpe_id=cpe_id, title=title,
+        )
+        self.db.session.add(conv)
+        self.db.session.commit()
+        return conv
+
+    def get_conversations(self, project_id: str, user_id: int, cpe_id: str = None):
+        q = (
+            self.db.session.query(self.ChatConversation)
+            .filter_by(project_id=project_id, user_id=user_id)
+        )
+        if cpe_id is not None:
+            q = q.filter_by(cpe_id=cpe_id)
+        return q.order_by(self.ChatConversation.updated_at.desc()).all()
+
+    def get_conversation_by_id(self, conv_id: int):
+        return self.db.session.get(self.ChatConversation, int(conv_id))
+
+    def delete_conversation(self, conv_id: int) -> bool:
+        conv = self.db.session.get(self.ChatConversation, int(conv_id))
+        if not conv:
+            return False
+        self.db.session.delete(conv)
+        self.db.session.commit()
+        return True
+
+    # ---------------- Chat Messages ----------------
+    def save_message(self, conversation_id: int, role: str, content: str,
+                     context_used: str = None):
+        msg = self.ChatMessage(
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            context_used=context_used,
+        )
+        self.db.session.add(msg)
+        # Touch the conversation's updated_at
+        conv = self.db.session.get(self.ChatConversation, int(conversation_id))
+        if conv:
+            conv.updated_at = datetime.now()
+        self.db.session.commit()
+        return msg
+
+    def get_messages(self, conversation_id: int, limit: int = 50):
+        return (
+            self.db.session.query(self.ChatMessage)
+            .filter_by(conversation_id=conversation_id)
+            .order_by(self.ChatMessage.created_at.asc())
+            .limit(limit)
+            .all()
+        )
 
     def delete_user_and_projects(self, user_id: int) -> Tuple[bool, Optional[str]]:
         user = self.db.session.get(self.User, int(user_id))

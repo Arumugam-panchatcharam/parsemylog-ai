@@ -114,6 +114,7 @@ def create_api_app():
         seconds=int(os.environ.get("JWT_REFRESH_EXPIRES", 86400 * 30))
     )
     app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2GB max upload
+    app.config["LLM_URL"] = os.environ.get("LLM_URL", "http://localhost:8000/v1")
 
     app.secret_key = hashlib.sha256(f"logai-flask-{db_path}".encode()).hexdigest()
 
@@ -148,6 +149,7 @@ def create_api_app():
     from api.routes.cpe_overview import cpe_overview_bp
     from api.routes.natco_admin import natco_admin_bp
     from api.routes.natco import natco_bp
+    from api.routes.chat import chat_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
@@ -161,6 +163,7 @@ def create_api_app():
     app.register_blueprint(cpe_overview_bp, url_prefix="/api/projects")
     app.register_blueprint(natco_admin_bp, url_prefix="/api/admin")
     app.register_blueprint(natco_bp, url_prefix="/api/natcos")
+    app.register_blueprint(chat_bp, url_prefix="/api/projects")
 
     # Health check
     @app.route("/api/health")

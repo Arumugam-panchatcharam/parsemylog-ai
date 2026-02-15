@@ -286,6 +286,32 @@ export const patternGovernanceApi = {
     api.delete<{ deleted: number }>(`/projects/${projectId}/patterns/submissions/clear`),
 };
 
+// ---------- Chat (AI LLM) ----------
+export const chatApi = {
+  llmStatus: (projectId: string) =>
+    api.get<{ enabled: boolean; available: boolean; model_info: Record<string, unknown> | null }>(
+      `/projects/${projectId}/chat/llm-status`
+    ),
+  listConversations: (projectId: string, cpeId?: string | null) =>
+    api.get<Array<{ id: number; title: string; cpe_id: string | null; created_at: string | null; updated_at: string | null }>>(
+      `/projects/${projectId}/chat/conversations`,
+      { params: cpeId ? { cpe_id: cpeId } : undefined }
+    ),
+  createConversation: (projectId: string, title?: string, cpeId?: string | null) =>
+    api.post<{ id: number; title: string; cpe_id: string | null }>(
+      `/projects/${projectId}/chat/conversations`,
+      { title, cpe_id: cpeId || undefined }
+    ),
+  deleteConversation: (projectId: string, convId: number) =>
+    api.delete(`/projects/${projectId}/chat/conversations/${convId}`),
+  getMessages: (projectId: string, conversationId: number, limit?: number) =>
+    api.get<Array<{ id: number; role: string; content: string; context_used: Record<string, unknown> | null; created_at: string | null }>>(
+      `/projects/${projectId}/chat/messages`,
+      { params: { conversation_id: conversationId, ...(limit ? { limit } : {}) } }
+    ),
+  // Note: send is done via fetch() + SSE streaming, not Axios
+};
+
 // ---------- Admin ----------
 export interface AdminNatco extends NatcoInfo {
   pattern_count: number;
@@ -330,6 +356,12 @@ export const adminApi = {
     api.put(`/admin/natcos/${natcoId}/patterns`, { domains }),
   importPresets: (natcoId: number) =>
     api.post<{ imported: number }>(`/admin/natcos/${natcoId}/patterns/import-presets`),
+
+  // LLM settings
+  getLlmSettings: () =>
+    api.get<{ enabled: boolean; available: boolean; model_info: Record<string, unknown> | null }>("/admin/settings/llm"),
+  setLlmSettings: (enabled: boolean) =>
+    api.put<{ enabled: boolean; message: string }>("/admin/settings/llm", { enabled }),
 
   // Submissions
   listSubmissions: (status?: string) =>

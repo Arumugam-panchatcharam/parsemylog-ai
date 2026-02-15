@@ -12,6 +12,8 @@ import FolderIcon from "@mui/icons-material/Folder";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import PublicIcon from "@mui/icons-material/Public";
 import RateReviewIcon from "@mui/icons-material/RateReview";
+import SettingsIcon from "@mui/icons-material/Settings";
+import SmartToyIcon from "@mui/icons-material/SmartToy";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
@@ -36,7 +38,7 @@ interface AdminUser {
   file_count: number;
 }
 
-type TabKey = "users" | "natcos" | "reviews";
+type TabKey = "users" | "natcos" | "reviews" | "settings";
 
 /* ================================================================ Main */
 export default function AdminPage() {
@@ -46,6 +48,7 @@ export default function AdminPage() {
     { key: "users", label: "Users", icon: PeopleIcon },
     { key: "natcos", label: "NATCO Management", icon: PublicIcon },
     { key: "reviews", label: "Pattern Review", icon: RateReviewIcon },
+    { key: "settings", label: "Settings", icon: SettingsIcon },
   ];
 
   return (
@@ -77,6 +80,7 @@ export default function AdminPage() {
       {activeTab === "users" && <UsersTab />}
       {activeTab === "natcos" && <NatcoTab />}
       {activeTab === "reviews" && <ReviewTab />}
+      {activeTab === "settings" && <SettingsTab />}
     </div>
   );
 }
@@ -847,6 +851,100 @@ function ReviewTab() {
             </div>
           );
         })}
+      </div>
+    </>
+  );
+}
+
+
+/* ================================================================ Settings Tab (LLM) */
+function SettingsTab() {
+  const queryClient = useQueryClient();
+
+  const { data: llmSettings, isLoading } = useQuery({
+    queryKey: ["adminLlmSettings"],
+    queryFn: async () => (await adminApi.getLlmSettings()).data,
+    refetchInterval: 15000, // poll every 15s for health changes
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: (enabled: boolean) => adminApi.setLlmSettings(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adminLlmSettings"] }),
+  });
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <SettingsIcon style={{ fontSize: 22 }} /> System Settings
+        </h2>
+        <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminLlmSettings"] })} className="p-2 border border-border rounded-lg hover:bg-muted">
+          <RefreshIcon style={{ fontSize: 18 }} />
+        </button>
+      </div>
+
+      {/* LLM Settings Card */}
+      <div className="bg-card border border-border rounded-2xl p-6 max-w-xl">
+        <div className="flex items-start gap-4">
+          <div className="shrink-0 h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
+            <SmartToyIcon style={{ fontSize: 28 }} className="text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-base font-semibold">AI Chat (Local LLM)</h3>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Enable or disable the AI-powered log analysis chat for all users.
+            </p>
+
+            {/* Toggle */}
+            <div className="flex items-center gap-3 mt-4">
+              <button
+                onClick={() => toggleMutation.mutate(!llmSettings?.enabled)}
+                disabled={isLoading || toggleMutation.isPending}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary/30 ${
+                  llmSettings?.enabled ? "bg-primary" : "bg-gray-300 dark:bg-gray-600"
+                } disabled:opacity-50`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    llmSettings?.enabled ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+              <span className="text-sm font-medium">
+                {llmSettings?.enabled ? "Enabled" : "Disabled"}
+              </span>
+              {toggleMutation.isPending && <CircularProgress size={14} />}
+            </div>
+
+            {/* Server Health */}
+            <div className="mt-4 flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">LLM Server:</span>
+              {isLoading ? (
+                <CircularProgress size={12} />
+              ) : llmSettings?.available ? (
+                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                  <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                  Online
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-red-500">
+                  <span className="h-2 w-2 rounded-full bg-red-500" />
+                  {llmSettings?.enabled ? "Offline — check the LLM Docker service" : "Not checked (disabled)"}
+                </span>
+              )}
+            </div>
+
+            {/* Model Info */}
+            {llmSettings?.model_info && (
+              <div className="mt-3 p-3 bg-muted/50 rounded-lg text-xs space-y-1">
+                <p className="font-medium">Model Info</p>
+                <p className="text-muted-foreground">
+                  ID: {String((llmSettings.model_info as Record<string, unknown>).id || "unknown")}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </>
   );
