@@ -113,7 +113,7 @@ export const telemetryApi = {
     }),
 };
 
-// ---------- AI Analysis ----------
+// ---------- Semantic Search ----------
 export const aiApi = {
   search: (projectId: string, query: string, topK = 10, cpeId?: string | null) =>
     api.post(`/projects/${projectId}/ai/search`, {

@@ -15,9 +15,14 @@ fi
 mkdir -p "$MODEL_DIR"
 
 echo "[llm-init] Downloading Qwen2.5-Coder-7B-Instruct (Q4_K_M, ~4.5 GB)..."
-huggingface-cli download \
-    Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
-    qwen2.5-coder-7b-instruct-q4_k_m.gguf \
-    --local-dir "$MODEL_DIR"
+python -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id='Qwen/Qwen2.5-Coder-7B-Instruct-GGUF',
+    filename='qwen2.5-coder-7b-instruct-q4_k_m.gguf',
+    local_dir='$MODEL_DIR',
+)
+print('[llm-init] Download complete.')
+"
 
-echo "[llm-init] Download complete. Model saved to $MODEL_FILE"
+echo "[llm-init] Model saved to $MODEL_FILE"

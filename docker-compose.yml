@@ -80,7 +80,7 @@ services:
       --port 8000
       --n_ctx 8192
       --n_threads 8
-      --n_parallel 2
+      --use_mlock false
       --chat_format chatml
     volumes:
       - llm_models:/models

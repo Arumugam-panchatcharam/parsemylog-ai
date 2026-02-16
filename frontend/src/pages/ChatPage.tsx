@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
+import { useAuth } from "@/hooks/useAuth";
 import { chatApi } from "@/api/endpoints";
 import { patternsApi } from "@/api/endpoints";
 import Markdown from "react-markdown";
@@ -14,6 +15,7 @@ import ChatIcon from "@mui/icons-material/Chat";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import CircularProgress from "@mui/material/CircularProgress";
 import { cn } from "@/lib/utils";
 
@@ -38,12 +40,14 @@ interface Message {
 export default function ChatPage() {
   const { projectId, projectName } = useProject();
   const { cpeId } = useCPE();
+  const { user } = useAuth();
 
   // Gate states
   const [gateLoading, setGateLoading] = useState(true);
   const [llmEnabled, setLlmEnabled] = useState(false);
   const [llmAvailable, setLlmAvailable] = useState(false);
   const [indexingDone, setIndexingDone] = useState(false);
+  const [isIndexing, setIsIndexing] = useState(false);
 
   // Conversation states
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -75,6 +79,7 @@ export default function ChatPage() {
         setLlmEnabled(llmRes.data.enabled);
         setLlmAvailable(llmRes.data.available);
         setIndexingDone(idxRes.data.all_done ?? false);
+        setIsIndexing(idxRes.data.is_indexing ?? false);
       })
       .catch(() => {
         setLlmEnabled(false);
@@ -98,10 +103,11 @@ export default function ChatPage() {
   }, [projectId, cpeId]);
 
   useEffect(() => {
-    if (llmEnabled && llmAvailable) {
+    const canAccess = llmAvailable && (llmEnabled || user?.is_admin);
+    if (canAccess) {
       loadConversations();
     }
-  }, [llmEnabled, llmAvailable, loadConversations]);
+  }, [llmEnabled, llmAvailable, loadConversations, user?.is_admin]);
 
   // ------------------------------------------------------------------ Load messages
   useEffect(() => {
@@ -112,7 +118,7 @@ export default function ChatPage() {
     setLoadingMsgs(true);
     chatApi
       .getMessages(projectId, activeConvId)
-      .then((res) => setMessages(res.data))
+      .then((res) => setMessages(res.data as Message[]))
       .catch(() => setMessages([]))
       .finally(() => setLoadingMsgs(false));
   }, [activeConvId, projectId]);
@@ -201,19 +207,28 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
       let accumulated = "";
       let fullContent = "";
+      let chunkCount = 0;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        accumulated += decoder.decode(value, { stream: true });
+        chunkCount++;
+        const chunkText = decoder.decode(value, { stream: true });
+        accumulated += chunkText;
+
+        // #region agent log — H1,H2,H3: log raw chunks from fetch stream
+        if (chunkCount <= 5) {
+          fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:206',message:'raw_chunk',data:{chunkCount,chunkLen:chunkText.length,first200:chunkText.slice(0,200),totalAccumulated:accumulated.length},timestamp:Date.now(),hypothesisId:'H1_H3'})}).catch(()=>{});
+        }
+        // #endregion
+
         const lines = accumulated.split("\n");
         accumulated = lines.pop() || "";
 
         for (const line of lines) {
           if (line.startsWith("event: ")) {
-            const eventType = line.slice(7).trim();
-            // next line should be "data: ..."
+            // SSE event type marker — data follows on the next line
             continue;
           }
           if (line.startsWith("data: ")) {
@@ -241,6 +256,10 @@ export default function ChatPage() {
         }
       }
 
+      // #region agent log — H2: log final state after stream
+      fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:250',message:'stream_end',data:{chunkCount,fullContentLen:fullContent.length,fullContentFirst200:fullContent.slice(0,200),remainingAccumulated:accumulated},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+      // #endregion
+
       // Add the assistant message
       if (fullContent) {
         const assistantMsg: Message = {
@@ -251,6 +270,14 @@ export default function ChatPage() {
           created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMsg]);
+
+        // #region agent log — H6: confirm assistant message was added to state
+        fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:268',message:'assistant_msg_added',data:{contentLen:fullContent.length,contentFirst100:fullContent.slice(0,100)},timestamp:Date.now(),hypothesisId:'H6'})}).catch(()=>{});
+        // #endregion
+      } else {
+        // #region agent log — H5: confirm 0-token case
+        fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:275',message:'zero_content',data:{chunkCount,fullContentLen:0},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
+        // #endregion
       }
     } catch (err) {
       const errMsg: Message = {
@@ -287,7 +314,7 @@ export default function ChatPage() {
     );
   }
 
-  if (!llmEnabled) {
+  if (!llmEnabled && !user?.is_admin) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
         <SmartToyIcon style={{ fontSize: 64, opacity: 0.3 }} />
@@ -312,20 +339,46 @@ export default function ChatPage() {
   }
 
   if (!indexingDone) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
-        <CircularProgress size={48} />
-        <h2 className="text-xl font-semibold text-muted-foreground">Indexing in Progress</h2>
-        <p className="text-sm text-muted-foreground max-w-md">
-          AI Chat will be available after log parsing and indexing is complete. Please check back shortly.
-        </p>
-      </div>
-    );
+    // Admin users can proceed past this gate; non-admin users are blocked.
+    if (!user?.is_admin) {
+      // Non-admin: distinguish "no logs" vs "indexing in progress"
+      if (isIndexing) {
+        return (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
+            <CircularProgress size={48} />
+            <h2 className="text-xl font-semibold text-muted-foreground">Indexing in Progress</h2>
+            <p className="text-sm text-muted-foreground max-w-md">
+              AI Chat will be available after log parsing and indexing is complete. Please check back shortly.
+            </p>
+          </div>
+        );
+      }
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
+          <CloudUploadIcon style={{ fontSize: 64, opacity: 0.3 }} />
+          <h2 className="text-xl font-semibold text-muted-foreground">No Logs Available</h2>
+          <p className="text-sm text-muted-foreground max-w-md">
+            Please upload log files to this project first. AI Chat requires parsed and indexed logs to provide answers.
+          </p>
+        </div>
+      );
+    }
+    // Admin: show a subtle banner but let them proceed
   }
 
   // ================================================================== Main UI
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
+      {/* Admin warning when indexing is not complete */}
+      {!indexingDone && user?.is_admin && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs">
+          <InfoOutlinedIcon style={{ fontSize: 16 }} />
+          {isIndexing
+            ? "Log indexing is in progress — AI responses may have limited context until indexing completes."
+            : "No indexed logs found — please upload and parse logs for best results."}
+        </div>
+      )}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* ---- Left Panel: Conversation List ---- */}
       <div className="w-64 shrink-0 border-r border-border flex flex-col bg-muted/30">
         <div className="p-3 border-b border-border">
@@ -485,6 +538,7 @@ export default function ChatPage() {
           </>
         )}
       </div>
+      </div>
     </div>
   );
 }
@@ -547,16 +601,18 @@ function MessageBubble({ message }: { message: Message }) {
 
             {showSources && (
               <div className="mt-1.5 text-xs text-muted-foreground space-y-1 bg-background/50 rounded-lg p-2">
-                {context.project && (
+                {"project" in context && context.project ? (
                   <p>
-                    <span className="font-medium">Project:</span> {String(context.project)}
+                    <span className="font-medium">Project:</span>{" "}
+                    {String(context.project as string)}
                   </p>
-                )}
-                {context.cpe_id && (
+                ) : null}
+                {"cpe_id" in context && context.cpe_id ? (
                   <p>
-                    <span className="font-medium">CPE:</span> {String(context.cpe_id)}
+                    <span className="font-medium">CPE:</span>{" "}
+                    {String(context.cpe_id as string)}
                   </p>
-                )}
+                ) : null}
                 {Array.isArray(context.evidence_sources) && (
                   <p>
                     <span className="font-medium">Evidence from:</span>{" "}

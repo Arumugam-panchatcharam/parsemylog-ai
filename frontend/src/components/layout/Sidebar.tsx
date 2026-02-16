@@ -25,7 +25,7 @@ const workspaceNav = [
   { to: "/workspace/pattern", icon: AnalyticsIcon, label: "Pattern" },
   { to: "/workspace/pattern-analyzer", icon: ManageSearchIcon, label: "Pattern Analyzer" },
   { to: "/workspace/telemetry", icon: TimelineIcon, label: "Telemetry" },
-  { to: "/workspace/ai", icon: PsychologyIcon, label: "AI Analysis" },
+  { to: "/workspace/ai", icon: PsychologyIcon, label: "Semantic Search" },
   { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
 ];
 
@@ -39,7 +39,9 @@ export default function Sidebar() {
   const isWorkspace = location.pathname.startsWith("/workspace");
   const isProfile = location.pathname === "/profile";
 
-  // AI Chat visibility: only show when LLM is enabled + indexing done
+  // AI Chat visibility:
+  // Admin: always visible when LLM server is available (ignores enabled toggle + indexing)
+  // Regular users: visible when LLM is enabled + available + indexing done
   const [showAiChat, setShowAiChat] = useState(false);
   useEffect(() => {
     if (!isWorkspace || !projectId) {
@@ -52,10 +54,16 @@ export default function Sidebar() {
       patternsApi.indexingStatus(projectId, cpeId).catch(() => ({ data: { all_done: false } })),
     ]).then(([llmRes, idxRes]) => {
       if (cancelled) return;
-      setShowAiChat(llmRes.data.enabled && llmRes.data.available && (idxRes.data.all_done ?? false));
+      const { enabled, available } = llmRes.data;
+      const indexingOk = idxRes.data.all_done ?? false;
+      if (user?.is_admin) {
+        setShowAiChat(available);
+      } else {
+        setShowAiChat(enabled && available && indexingOk);
+      }
     });
     return () => { cancelled = true; };
-  }, [isWorkspace, projectId, cpeId]);
+  }, [isWorkspace, projectId, cpeId, user?.is_admin]);
 
   return (
     <aside

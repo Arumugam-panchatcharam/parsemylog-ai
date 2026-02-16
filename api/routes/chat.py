@@ -46,9 +46,12 @@ def _verify_project(project_id: str, user_id: int):
 
 
 def _check_llm_gates():
-    """Check if LLM is enabled. Returns error response or None."""
+    """Check if LLM is enabled. Admin users bypass the enabled toggle."""
     from api.llm_service import is_enabled, is_available
-    if not is_enabled(dbm):
+    user_id = get_user_id()
+    user = dbm.get_user_by_id(user_id)
+    is_admin = user and user.is_admin
+    if not is_admin and not is_enabled(dbm):
         return jsonify({"error": "AI Chat is disabled by admin"}), 403
     if not is_available():
         return jsonify({"error": "LLM server is not available. Please contact admin."}), 503
@@ -225,12 +228,9 @@ def send_message(project_id):
     if not conv or conv.user_id != user_id:
         return jsonify({"error": "Conversation not found"}), 404
 
-    # Save user message
-    dbm.save_message(conv_id, "user", user_message)
-
-    # Auto-title from first message
+    # Auto-title from first message (before saving, so count is pre-save)
     msg_count = len(dbm.get_messages(conv_id, limit=3))
-    if msg_count <= 1:
+    if msg_count == 0:
         conv.title = user_message[:80] + ("..." if len(user_message) > 80 else "")
         dbm.db.session.commit()
 
@@ -257,11 +257,32 @@ def send_message(project_id):
                 user_query=user_message,
             )
 
-            # Get conversation history
+            # Get conversation history BEFORE saving the new user message
+            # to avoid duplicating it in build_messages()
             history = dbm.get_messages(conv_id, limit=llm.MAX_HISTORY_MESSAGES)
 
-            # Assemble messages
+            # Save user message to DB now (after fetching history)
+            dbm.save_message(conv_id, "user", user_message)
+
+            # Assemble messages (history does NOT contain the new user message,
+            # so build_messages adds it exactly once)
             messages = llm.build_messages(system_prompt, history, user_message)
+
+            # #region agent log — H4,H10: log system prompt size AND full system prompt content
+            _total_chars = sum(len(m["content"]) for m in messages)
+            _sys_chars = len(system_prompt)
+            import time as _t; _log_data = json.dumps({"location":"chat.py:264","message":"prompt_size","data":{"system_prompt_chars":_sys_chars,"total_message_chars":_total_chars,"num_messages":len(messages)},"timestamp":int(_t.time()*1000),"hypothesisId":"H4"})
+            with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_log_data+"\n")
+            _prompt_log = json.dumps({"location":"chat.py:266","message":"full_system_prompt","data":{"system_prompt":system_prompt},"timestamp":int(_t.time()*1000),"hypothesisId":"H10"})
+            with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_prompt_log+"\n")
+            # #endregion
+
+            # #region agent log — H5: log last 4 messages to detect duplicate user messages
+            _last4 = [{"role": m["role"], "content": m["content"][:80]} for m in messages[-4:]]
+            _dup_check = (len(messages) >= 2 and messages[-1]["role"] == "user" and messages[-2]["role"] == "user" and messages[-1]["content"] == messages[-2]["content"])
+            _h5_data = json.dumps({"location":"chat.py:270","message":"message_array_check","data":{"last_4_messages":_last4,"duplicate_user_msg":_dup_check,"total_messages":len(messages),"history_count":len(list(history))},"timestamp":int(_t.time()*1000),"hypothesisId":"H5"})
+            with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_h5_data+"\n")
+            # #endregion
 
             # Build context metadata for the "Sources" panel
             context_meta = {
@@ -280,9 +301,12 @@ def send_message(project_id):
 
             # Stream LLM response
             full_response = []
+            logger.info(f"[Chat] Starting LLM stream for conv {conv_id}")
             for token in llm.chat_completion_stream(messages):
                 full_response.append(token)
                 yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
+
+            logger.info(f"[Chat] LLM stream done, {len(full_response)} tokens, {len(''.join(full_response))} chars")
 
             # Save assistant response
             assistant_content = "".join(full_response)
@@ -322,7 +346,7 @@ def llm_status(project_id):
     import api.llm_service as llm
 
     enabled = llm.is_enabled(dbm)
-    available = llm.is_available() if enabled else False
+    available = llm.is_available()
     model_info = llm.get_model_info() if available else None
 
     return jsonify({

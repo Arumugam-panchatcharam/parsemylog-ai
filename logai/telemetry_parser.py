@@ -1236,14 +1236,61 @@ def _extract_single_topology(
         nodes.append(node)
         id_to_node[device_id] = node
 
+    # Build auxiliary lookups for robust edge matching
+    # Case-insensitive device ID lookup
+    id_lower_map: Dict[str, str] = {did.lower(): did for did in id_to_node}
+
+    # BSSID → device ID map: match backhaul_mac against BSS BSSIDs
+    bssid_to_device: Dict[str, str] = {}
+    for dev in device_array:
+        dev_id = dev.get("ID", "")
+        for radio in dev.get("Radio", []):
+            for bss in radio.get("BSS", []):
+                bssid = bss.get("BSSID", "")
+                if bssid:
+                    bssid_to_device[bssid.lower()] = dev_id
+
+    gateway_node = next((n for n in nodes if n["is_gateway"]), None)
+
     # Build edges: match BackhaulALID -> parent device ID
     for node in nodes:
         if node["is_gateway"]:
             continue
+
         parent_id = node["backhaul_al_id"]
+        matched_parent = None
+
+        # 1) Direct BackhaulALID match
         if parent_id and parent_id in id_to_node:
+            matched_parent = parent_id
+
+        # 2) Case-insensitive BackhaulALID match
+        if not matched_parent and parent_id:
+            canonical = id_lower_map.get(parent_id.lower())
+            if canonical:
+                matched_parent = canonical
+
+        # 3) BSSID match: find which device owns the BSS that this node
+        #    is backhauled to (by matching backhaul_mac against BSS BSSIDs)
+        if not matched_parent and node["backhaul_mac"]:
+            bh_mac_lower = node["backhaul_mac"].lower()
+            owner = bssid_to_device.get(bh_mac_lower)
+            if owner and owner != node["id"]:
+                matched_parent = owner
+
+        # 4) Final fallback: connect to gateway if backhaul info exists
+        if not matched_parent and gateway_node:
+            has_backhaul_info = (
+                node["backhaul_mac"]
+                or node["backhaul_phy_rate"] > 0
+                or node["backhaul_media_type"]
+            )
+            if has_backhaul_info:
+                matched_parent = gateway_node["id"]
+
+        if matched_parent:
             edges.append({
-                "from_id": parent_id,
+                "from_id": matched_parent,
                 "to_id": node["id"],
                 "media_type": node["backhaul_media_type"],
                 "phy_rate": node["backhaul_phy_rate"],
@@ -1251,21 +1298,6 @@ def _extract_single_topology(
                 "link_utilization": node["backhaul_link_utilization"],
                 "is_wifi": _is_wifi_backhaul(node["backhaul_media_type"]),
             })
-        elif not node["is_gateway"] and node["backhaul_mac"]:
-            # Fallback: if BackhaulALID not present, try to find which
-            # device's BSS BSSID matches the backhaul MAC
-            # For now, default to gateway (index=1)
-            gateway = next((n for n in nodes if n["is_gateway"]), None)
-            if gateway:
-                edges.append({
-                    "from_id": gateway["id"],
-                    "to_id": node["id"],
-                    "media_type": node["backhaul_media_type"],
-                    "phy_rate": node["backhaul_phy_rate"],
-                    "signal_strength": node["backhaul_signal_strength"],
-                    "link_utilization": node["backhaul_link_utilization"],
-                    "is_wifi": _is_wifi_backhaul(node["backhaul_media_type"]),
-                })
 
     # Generate mermaid diagram
     mermaid_lines = ["graph TD"]

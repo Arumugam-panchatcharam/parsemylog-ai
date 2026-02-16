@@ -5,12 +5,13 @@ ENV CMAKE_ARGS="-DGGML_AVX512=ON -DGGML_AVX2=ON -DGGML_NATIVE=OFF"
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential cmake curl && \
+        build-essential cmake curl libgomp1 && \
     pip install --no-cache-dir \
         llama-cpp-python[server] \
         huggingface-hub && \
     apt-get purge -y build-essential cmake && \
     apt-get autoremove -y && \
+    apt-get install -y --no-install-recommends libgomp1 curl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

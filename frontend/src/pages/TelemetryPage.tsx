@@ -34,6 +34,7 @@ import DeviceHubIcon from "@mui/icons-material/DeviceHub";
 import DevicesIcon from "@mui/icons-material/Devices";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
+import FilterListIcon from "@mui/icons-material/FilterList";
 import CircularProgress from "@mui/material/CircularProgress";
 import Slider from "@mui/material/Slider";
 import type { SvgIconComponent } from "@mui/icons-material";
@@ -483,8 +484,31 @@ function memPercent(free: string, total: string): number | null {
 }
 
 function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
-  const [snapshotIdx, setSnapshotIdx] = useState(topology.snapshots.length - 1);
-  const snap = topology.snapshots[snapshotIdx] ?? topology.snapshots[0];
+  // Detect unique profiles across all snapshots
+  const profiles = useMemo(() => {
+    const s = new Set<string>();
+    for (const snap of topology.snapshots) {
+      if (snap.profile) s.add(snap.profile);
+    }
+    return Array.from(s).sort();
+  }, [topology.snapshots]);
+
+  const [selectedProfile, setSelectedProfile] = useState<string>("all");
+
+  // Filter snapshots by selected profile
+  const filteredSnapshots = useMemo(() => {
+    if (selectedProfile === "all") return topology.snapshots;
+    return topology.snapshots.filter((s) => s.profile === selectedProfile);
+  }, [topology.snapshots, selectedProfile]);
+
+  const [snapshotIdx, setSnapshotIdx] = useState(filteredSnapshots.length - 1);
+
+  // Clamp snapshot index when filtered list changes
+  if (snapshotIdx >= filteredSnapshots.length && filteredSnapshots.length > 0) {
+    setSnapshotIdx(filteredSnapshots.length - 1);
+  }
+
+  const snap = filteredSnapshots[snapshotIdx] ?? filteredSnapshots[0];
 
   // Build tree structure using edges (not backhaul_al_id) to avoid duplicates
   const gateway = snap?.nodes.find((n) => n.is_gateway) ?? null;
@@ -505,14 +529,18 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
     return { childMap: m, connectedIds: connected };
   }, [snap]);
 
-  if (!snap) return null;
+  if (!snap) return (
+    <div className="bg-card border border-border rounded-xl p-6 text-center text-sm text-muted-foreground">
+      No topology snapshots found for the selected profile.
+    </div>
+  );
 
   // Get edge info for a node
   const edgeFor = (nodeId: string) => snap.edges.find((e) => e.to_id === nodeId);
 
-  const sliderMarks = topology.snapshots.map((s, i) => ({
+  const sliderMarks = filteredSnapshots.map((s, i) => ({
     value: i,
-    label: i === 0 || i === topology.snapshots.length - 1 ? s.time.slice(11, 16) : "",
+    label: i === 0 || i === filteredSnapshots.length - 1 ? s.time.slice(11, 16) : "",
   }));
 
   // Recursive render for multi-hop topology
@@ -531,12 +559,14 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
             }}
           />
         )}
-        <div className="flex flex-wrap justify-center gap-6">
+        {/* flex-nowrap prevents children from wrapping to a second row,
+            which would break the horizontal connector bar alignment */}
+        <div className="flex flex-nowrap justify-center gap-3">
           {children.map((node) => {
             const edge = edgeFor(node.id);
             const isWifi = edge?.is_wifi ?? true;
             return (
-              <div key={node.id} className="flex flex-col items-center">
+              <div key={node.id} className="flex flex-col items-center shrink-0 transition-all duration-200">
                 {/* Vertical drop-down line from horizontal bar */}
                 <div className={`w-0 h-5 ${isWifi ? "border-l-2 border-dashed border-blue-400" : "border-l-2 border-solid border-gray-500"}`} />
                 {/* Edge label */}
@@ -550,7 +580,7 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
                 <DeviceNodeCard node={node} />
                 {/* Render this node's children (multi-hop) */}
                 {childMap.has(node.id) && (
-                  <div className={`w-0 h-4 mt-1 ${true ? "border-l-2 border-dashed border-blue-400" : "border-l-2 border-solid border-gray-500"}`} />
+                  <div className="w-0 h-5 mt-1 border-l-2 border-dashed border-blue-400" />
                 )}
                 {renderChildren(node.id, depth + 1)}
               </div>
@@ -574,14 +604,40 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
         <span className="text-[10px] text-muted-foreground ml-1">
           {snap.device_count} devices
         </span>
+
+        {/* Profile selector (shown only when multiple profiles exist) */}
+        {profiles.length > 1 && (
+          <div className="flex items-center gap-1.5 ml-2">
+            <FilterListIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+            <select
+              value={selectedProfile}
+              onChange={(e) => {
+                setSelectedProfile(e.target.value);
+                setSnapshotIdx(0);
+              }}
+              className="text-[11px] px-2 py-0.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer"
+            >
+              <option value="all">All Profiles ({topology.total_snapshots})</option>
+              {profiles.map((p) => {
+                const count = topology.snapshots.filter((s) => s.profile === p).length;
+                return (
+                  <option key={p} value={p}>
+                    {p} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        )}
+
         <span className="ml-auto text-[10px] text-muted-foreground">
-          Snapshot {snapshotIdx + 1} of {topology.total_snapshots}
+          Snapshot {snapshotIdx + 1} of {filteredSnapshots.length}
           {snap.profile && <span className="ml-1 font-medium">({snap.profile})</span>}
         </span>
       </div>
 
       {/* Time Slider */}
-      {topology.total_snapshots > 1 && (
+      {filteredSnapshots.length > 1 && (
         <div className="px-4 pt-3 pb-1 border-b border-border bg-muted/10">
           <div className="flex items-center gap-2">
             <button
@@ -595,13 +651,13 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
               <Slider
                 value={snapshotIdx}
                 min={0}
-                max={topology.snapshots.length - 1}
+                max={filteredSnapshots.length - 1}
                 step={1}
                 marks={sliderMarks}
                 onChange={(_, v) => setSnapshotIdx(v as number)}
                 valueLabelDisplay="auto"
                 valueLabelFormat={(v) => {
-                  const s = topology.snapshots[v];
+                  const s = filteredSnapshots[v];
                   return s ? s.time.slice(0, 19).replace("T", " ") : "";
                 }}
                 size="small"
@@ -612,8 +668,8 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
               />
             </div>
             <button
-              onClick={() => setSnapshotIdx((i) => Math.min(topology.snapshots.length - 1, i + 1))}
-              disabled={snapshotIdx === topology.snapshots.length - 1}
+              onClick={() => setSnapshotIdx((i) => Math.min(filteredSnapshots.length - 1, i + 1))}
+              disabled={snapshotIdx === filteredSnapshots.length - 1}
               className="p-0.5 rounded hover:bg-muted disabled:opacity-30 transition-colors"
             >
               <NavigateNextIcon style={{ fontSize: 18 }} />
@@ -642,10 +698,22 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
           {/* Orphan extenders (not connected by any edge) */}
           {orphans.length > 0 && (
             <div className="mt-6 pt-4 border-t border-dashed border-gray-300 dark:border-gray-600 w-full">
-              <p className="text-[10px] text-muted-foreground text-center mb-2 uppercase tracking-wider">Unconnected Devices</p>
+              <p className="text-[10px] text-muted-foreground text-center mb-2 uppercase tracking-wider">
+                Unconnected Devices ({orphans.length})
+              </p>
               <div className="flex flex-wrap justify-center gap-4">
                 {orphans.map((node) => (
-                  <DeviceNodeCard key={node.id} node={node} />
+                  <div key={node.id} className="flex flex-col items-center">
+                    {/* Show available backhaul info even for orphans */}
+                    {(node.backhaul_media_type || node.backhaul_phy_rate > 0) && (
+                      <span className="text-[9px] text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/30 px-1.5 py-0.5 rounded mb-1 whitespace-nowrap border border-orange-200 dark:border-orange-800">
+                        {node.backhaul_media_type.replace("IEEE ", "")} {node.backhaul_phy_rate > 0 ? `${node.backhaul_phy_rate}Mbps` : ""}
+                        {node.backhaul_signal_strength ? <span className={` ml-1 font-bold ${signalColor(node.backhaul_signal_strength)}`}>{node.backhaul_signal_strength}dBm</span> : ""}
+                        <span className="ml-1 text-orange-500">(no parent found)</span>
+                      </span>
+                    )}
+                    <DeviceNodeCard node={node} />
+                  </div>
                 ))}
               </div>
             </div>
@@ -683,10 +751,10 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
 
   // Shape: circle for SHWLAN extenders, rounded-lg for gateway, rounded-lg for others
   const shapeClass = node.is_gateway
-    ? "rounded-xl border-2 p-3 min-w-[180px] max-w-[220px] shadow-sm border-blue-400 bg-blue-50/80 dark:border-blue-600 dark:bg-blue-950/30"
+    ? "rounded-xl border-2 p-2.5 min-w-[160px] max-w-[200px] shadow-sm border-blue-400 bg-blue-50/80 dark:border-blue-600 dark:bg-blue-950/30"
     : isSHWLAN
-      ? "rounded-full border-2 p-4 w-[170px] h-[170px] flex flex-col items-center justify-center shadow-sm border-green-400 bg-green-50/60 dark:border-green-600 dark:bg-green-950/30"
-      : "rounded-xl border-2 p-3 min-w-[180px] max-w-[220px] shadow-sm border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-900/50";
+      ? "rounded-full border-2 p-3 w-[148px] h-[148px] flex flex-col items-center justify-center shadow-sm border-green-400 bg-green-50/60 dark:border-green-600 dark:bg-green-950/30"
+      : "rounded-xl border-2 p-2.5 min-w-[160px] max-w-[200px] shadow-sm border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-900/50";
 
   return (
     <div className="flex flex-col items-center">
@@ -761,7 +829,7 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
 
       {/* Collapsible client toggle + panel (outside the shaped card) */}
       {visibleClients.length > 0 && (
-        <div className="w-full min-w-[420px] max-w-[520px]">
+        <div>
           <button
             onClick={() => setShowClients((v) => !v)}
             className="mt-1 w-full flex items-center justify-center gap-1 text-[9px] font-medium text-muted-foreground hover:text-foreground transition-colors py-0.5 rounded hover:bg-muted/40"
@@ -771,8 +839,8 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
             {showClients ? <ExpandLessIcon style={{ fontSize: 13 }} /> : <ExpandMoreIcon style={{ fontSize: 13 }} />}
           </button>
           {showClients && (
-            <div className="mt-1 border border-border rounded-lg bg-card shadow-sm overflow-hidden">
-              <table className="w-full text-[9px]">
+            <div className="mt-1 border border-border rounded-lg bg-card shadow-sm overflow-x-auto max-w-[380px]">
+              <table className="w-full text-[9px] min-w-[340px]">
                 <thead>
                   <tr className="bg-muted/40 text-muted-foreground">
                     <th className="px-1.5 py-1 text-left font-semibold">MAC</th>

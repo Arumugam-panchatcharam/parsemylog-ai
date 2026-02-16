@@ -216,7 +216,7 @@ class DBManager:
 
             messages = self.db.relationship(
                 "ChatMessage", back_populates="conversation",
-                cascade="all, delete-orphan", passive_deletes=True,
+                cascade="all, delete-orphan",
                 order_by="ChatMessage.created_at",
             )
 
@@ -240,6 +240,15 @@ class DBManager:
     # ---------------- Initialization ----------------
     def init_app(self, app):
         self.db.init_app(app)
+
+        # Enable SQLite foreign key enforcement (required for ON DELETE CASCADE)
+        from sqlalchemy import event as sa_event
+        with app.app_context():
+            @sa_event.listens_for(self.db.engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
     
     def create_tables(self, app):
         with app.app_context():
@@ -251,8 +260,24 @@ class DBManager:
                 self.create_user("admin", "admin123", is_admin=True)
             # Seed default system settings
             if not self.db.session.query(self.SystemSetting).filter_by(key="llm_enabled").first():
-                self.db.session.add(self.SystemSetting(key="llm_enabled", value="false"))
+                self.db.session.add(self.SystemSetting(key="llm_enabled", value="true"))
                 self.db.session.commit()
+
+            # Clean up orphaned chat messages (from past deletes without FK enforcement)
+            orphaned = (
+                self.db.session.query(self.ChatMessage)
+                .filter(
+                    ~self.ChatMessage.conversation_id.in_(
+                        self.db.session.query(self.ChatConversation.id)
+                    )
+                )
+                .all()
+            )
+            if orphaned:
+                for msg in orphaned:
+                    self.db.session.delete(msg)
+                self.db.session.commit()
+                logger.info(f"Cleaned up {len(orphaned)} orphaned chat messages")
 
     def _migrate_add_cpe_columns(self, app):
         """Add cpe_id column to project_files and natco_id to projects if missing."""

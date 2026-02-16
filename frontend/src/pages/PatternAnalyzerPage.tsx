@@ -878,7 +878,7 @@ export default function PatternAnalyzerPage() {
           ) : domainNames.length === 0 ? (
             <div className="text-center py-6 text-muted-foreground">
               <p className="text-sm">No patterns configured yet.</p>
-              <p className="text-xs mt-1">Add a domain, import from presets/JSON, or use "Add to Pattern Analyzer" from the Pattern or AI Analysis pages.</p>
+              <p className="text-xs mt-1">Add a domain, import from presets/JSON, or use "Add to Pattern Analyzer" from the Pattern or Semantic Search pages.</p>
             </div>
           ) : (
             domainNames.map((domain) => {

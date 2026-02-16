@@ -105,10 +105,11 @@ Do NOT speculate or invent information not present in the logs. If you are uncer
 {evidence}
 
 === INSTRUCTIONS ===
-- Summarize issues using the evidence above
-- When referencing events, include timestamps and filenames
-- If asked about something not covered by the evidence, say "I don't have enough log data to answer that"
-- Format your responses in clear markdown with headers for different topics
+- Provide thorough and complete answers. Cover ALL relevant evidence sections (device info, reboots, telemetry, error patterns) when summarizing.
+- When referencing events, include timestamps and filenames.
+- If asked about something not covered by the evidence, say "I don't have enough log data to answer that."
+- Format your responses in clear markdown with headers for different topics.
+- Always finish your response completely — do not stop mid-sentence or mid-section.
 """
 
 
@@ -207,19 +208,20 @@ def _load_rag_context(project_id: str, cpe_id: Optional[str],
             return "No indexed log data available for semantic search."
 
         model = get_embedding_model()
-        query_vector = model.encode(query).tolist()
+        query_vector = model.encode([query], normalize_embeddings=True)[0].tolist()
 
-        results = client.search(
+        results = client.query_points(
             collection_name=collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
         )
 
-        if not results:
+        points = results.points if hasattr(results, "points") else []
+        if not points:
             return "No matching log templates found."
 
         lines = ["Matching log patterns (by semantic similarity):"]
-        for i, r in enumerate(results, 1):
+        for i, r in enumerate(points, 1):
             payload = r.payload or {}
             template = payload.get("template", "N/A")
             count = payload.get("count", "?")
@@ -316,52 +318,77 @@ def build_messages(system_prompt: str, history: list,
 
 
 # ---------------------------------------------------------------------------
-# Streaming chat completion
+# Chat completion (non-streaming to LLM, chunked yield for SSE)
 # ---------------------------------------------------------------------------
 
 def chat_completion_stream(messages: List[Dict[str, str]],
-                           temperature: float = 0.3,
+                           temperature: float = 0.4,
                            max_tokens: int = 2048) -> Generator[str, None, None]:
     """
-    Call the LLM server with streaming and yield tokens as they arrive.
+    Call the LLM server and yield the response in chunks for SSE delivery.
+
+    Uses a non-streaming request to the LLM to avoid connection drops
+    caused by Werkzeug/WSGI closing the chained streaming pipeline.
+    The complete response is fetched first, then yielded in line-based
+    chunks to provide a progressive display experience.
 
     Blocks until an inference slot is available (request queue).
-    Yields individual token strings.
     """
     _acquire_slot()
     try:
+        logger.info(f"[LLM] Sending non-streaming request ({len(messages)} messages, "
+                     f"max_tokens={max_tokens}, temp={temperature})")
+
         resp = requests.post(
             f"{LLM_URL}/chat/completions",
             json={
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
-                "stream": True,
             },
-            stream=True,
-            timeout=120,
+            timeout=180,
         )
         resp.raise_for_status()
+        data = resp.json()
 
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            if line.startswith("data: "):
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        delta = choices[0].get("delta", {})
-                        token = delta.get("content", "")
-                        if token:
-                            yield token
-                except json.JSONDecodeError:
-                    continue
+        choices = data.get("choices", [])
+        if not choices:
+            logger.warning("[LLM] No choices in response")
+            yield "\n\n*The AI model did not produce a response. Please try rephrasing your question.*"
+            return
+
+        content = choices[0].get("message", {}).get("content", "")
+        finish_reason = choices[0].get("finish_reason", "unknown")
+        usage = data.get("usage", {})
+
+        # #region agent log — H11: log non-streaming response details
+        import time as _t
+        _dbg = json.dumps({"location":"llm_service.py:360","message":"llm_complete_response","data":{"content_len":len(content),"finish_reason":finish_reason,"prompt_tokens":usage.get("prompt_tokens"),"completion_tokens":usage.get("completion_tokens"),"content_preview":content[:200] if content else ""},"timestamp":int(_t.time()*1000),"hypothesisId":"H11"})
+        with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_dbg+"\n")
+        # #endregion
+
+        logger.info(f"[LLM] Response: {len(content)} chars, "
+                     f"finish_reason={finish_reason}, "
+                     f"prompt_tokens={usage.get('prompt_tokens')}, "
+                     f"completion_tokens={usage.get('completion_tokens')}")
+
+        if not content:
+            yield "\n\n*The AI model did not produce a response. Please try rephrasing your question.*"
+            return
+
+        # Yield response in line-based chunks for progressive SSE display
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            if i < len(lines) - 1:
+                yield line + '\n'
+            else:
+                yield line
+
+    except requests.exceptions.Timeout:
+        logger.error("[LLM] Request timed out (180s)")
+        yield "\n\n**Error**: The AI model took too long to respond. Please try a simpler question."
     except requests.exceptions.RequestException as e:
-        logger.error(f"[LLM] Streaming request error: {e}")
+        logger.error(f"[LLM] Request error: {e}")
         yield f"\n\n**Error**: Could not reach the LLM server. Please try again later."
     finally:
         _release_slot()
