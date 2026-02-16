@@ -268,22 +268,6 @@ def send_message(project_id):
             # so build_messages adds it exactly once)
             messages = llm.build_messages(system_prompt, history, user_message)
 
-            # #region agent log — H4,H10: log system prompt size AND full system prompt content
-            _total_chars = sum(len(m["content"]) for m in messages)
-            _sys_chars = len(system_prompt)
-            import time as _t; _log_data = json.dumps({"location":"chat.py:264","message":"prompt_size","data":{"system_prompt_chars":_sys_chars,"total_message_chars":_total_chars,"num_messages":len(messages)},"timestamp":int(_t.time()*1000),"hypothesisId":"H4"})
-            with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_log_data+"\n")
-            _prompt_log = json.dumps({"location":"chat.py:266","message":"full_system_prompt","data":{"system_prompt":system_prompt},"timestamp":int(_t.time()*1000),"hypothesisId":"H10"})
-            with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_prompt_log+"\n")
-            # #endregion
-
-            # #region agent log — H5: log last 4 messages to detect duplicate user messages
-            _last4 = [{"role": m["role"], "content": m["content"][:80]} for m in messages[-4:]]
-            _dup_check = (len(messages) >= 2 and messages[-1]["role"] == "user" and messages[-2]["role"] == "user" and messages[-1]["content"] == messages[-2]["content"])
-            _h5_data = json.dumps({"location":"chat.py:270","message":"message_array_check","data":{"last_4_messages":_last4,"duplicate_user_msg":_dup_check,"total_messages":len(messages),"history_count":len(list(history))},"timestamp":int(_t.time()*1000),"hypothesisId":"H5"})
-            with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_h5_data+"\n")
-            # #endregion
-
             # Build context metadata for the "Sources" panel
             context_meta = {
                 "project": project.name,

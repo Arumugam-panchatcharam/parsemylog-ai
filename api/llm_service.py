@@ -361,12 +361,6 @@ def chat_completion_stream(messages: List[Dict[str, str]],
         finish_reason = choices[0].get("finish_reason", "unknown")
         usage = data.get("usage", {})
 
-        # #region agent log — H11: log non-streaming response details
-        import time as _t
-        _dbg = json.dumps({"location":"llm_service.py:360","message":"llm_complete_response","data":{"content_len":len(content),"finish_reason":finish_reason,"prompt_tokens":usage.get("prompt_tokens"),"completion_tokens":usage.get("completion_tokens"),"content_preview":content[:200] if content else ""},"timestamp":int(_t.time()*1000),"hypothesisId":"H11"})
-        with open("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug.log","a") as _f: _f.write(_dbg+"\n")
-        # #endregion
-
         logger.info(f"[LLM] Response: {len(content)} chars, "
                      f"finish_reason={finish_reason}, "
                      f"prompt_tokens={usage.get('prompt_tokens')}, "

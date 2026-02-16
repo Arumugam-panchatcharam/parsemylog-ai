@@ -207,21 +207,13 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
       let accumulated = "";
       let fullContent = "";
-      let chunkCount = 0;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        chunkCount++;
         const chunkText = decoder.decode(value, { stream: true });
         accumulated += chunkText;
-
-        // #region agent log — H1,H2,H3: log raw chunks from fetch stream
-        if (chunkCount <= 5) {
-          fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:206',message:'raw_chunk',data:{chunkCount,chunkLen:chunkText.length,first200:chunkText.slice(0,200),totalAccumulated:accumulated.length},timestamp:Date.now(),hypothesisId:'H1_H3'})}).catch(()=>{});
-        }
-        // #endregion
 
         const lines = accumulated.split("\n");
         accumulated = lines.pop() || "";
@@ -256,10 +248,6 @@ export default function ChatPage() {
         }
       }
 
-      // #region agent log — H2: log final state after stream
-      fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:250',message:'stream_end',data:{chunkCount,fullContentLen:fullContent.length,fullContentFirst200:fullContent.slice(0,200),remainingAccumulated:accumulated},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
-
       // Add the assistant message
       if (fullContent) {
         const assistantMsg: Message = {
@@ -270,14 +258,6 @@ export default function ChatPage() {
           created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMsg]);
-
-        // #region agent log — H6: confirm assistant message was added to state
-        fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:268',message:'assistant_msg_added',data:{contentLen:fullContent.length,contentFirst100:fullContent.slice(0,100)},timestamp:Date.now(),hypothesisId:'H6'})}).catch(()=>{});
-        // #endregion
-      } else {
-        // #region agent log — H5: confirm 0-token case
-        fetch('http://127.0.0.1:7244/ingest/e62b2066-3f10-46f9-8e77-30dd63e41958',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ChatPage.tsx:275',message:'zero_content',data:{chunkCount,fullContentLen:0},timestamp:Date.now(),hypothesisId:'H5'})}).catch(()=>{});
-        // #endregion
       }
     } catch (err) {
       const errMsg: Message = {
