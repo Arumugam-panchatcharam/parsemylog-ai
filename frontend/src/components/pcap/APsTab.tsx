@@ -22,8 +22,8 @@ export default function APsTab({ aps, filename }: Props) {
       if (sortKey === "status") cmp = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
       else if (sortKey === "bssid") cmp = a.bssid.localeCompare(b.bssid);
       else {
-        const av = (a as Record<string, unknown>)[sortKey] as number ?? 0;
-        const bv = (b as Record<string, unknown>)[sortKey] as number ?? 0;
+        const av = (a as unknown as Record<string, unknown>)[sortKey] as number ?? 0;
+        const bv = (b as unknown as Record<string, unknown>)[sortKey] as number ?? 0;
         cmp = av - bv;
       }
       return sortAsc ? cmp : -cmp;
