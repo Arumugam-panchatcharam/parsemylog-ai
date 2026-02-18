@@ -4,7 +4,7 @@ import { useDropzone } from "react-dropzone";
 import { filesApi, patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
-import { cn } from "@/lib/utils";
+import { cn, convertLogTimestamp, TZ_OPTIONS } from "@/lib/utils";
 import { highlightLogLine } from "@/lib/logHighlighter";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DescriptionIcon from "@mui/icons-material/Description";
@@ -23,6 +23,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import FormatColorTextIcon from "@mui/icons-material/FormatColorText";
+import LanguageIcon from "@mui/icons-material/Language";
 import CircularProgress from "@mui/material/CircularProgress";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 
@@ -59,6 +60,7 @@ export default function LogViewerPage() {
   const [showNotes, setShowNotes] = useState(false);
   const [showSearch, setShowSearch] = useState(true);
   const [scrollToLine, setScrollToLine] = useState<number | null>(null);
+  const [logTimezone, setLogTimezone] = useState("Original");
   const logContainerRef = useRef<HTMLDivElement>(null);
   const prevCpeId = useRef(cpeId);
 
@@ -178,11 +180,12 @@ export default function LogViewerPage() {
 
   const searchResults = searchMutation.data?.data;
 
-  /** Render a log line with syntax + optional search highlighting */
+  /** Render a log line with optional TZ conversion + syntax + optional search highlighting */
   const renderLine = (text: string) => {
-    if (syntaxHL) return highlightLogLine(text, activeHighlight || undefined);
-    if (activeHighlight) return highlightLogLine(text, activeHighlight);
-    return text;
+    const converted = convertLogTimestamp(text, logTimezone);
+    if (syntaxHL) return highlightLogLine(converted, activeHighlight || undefined);
+    if (activeHighlight) return highlightLogLine(converted, activeHighlight);
+    return converted;
   };
 
   return (
@@ -231,6 +234,13 @@ export default function LogViewerPage() {
         <select value={linesPerPage} onChange={(e) => { setLinesPerPage(Number(e.target.value)); setCurrentPage(1); }} className="text-[10px] border border-input rounded bg-background px-1 py-0.5">
           {LINES_OPTIONS.map((n) => <option key={n} value={n}>{n} lines</option>)}
         </select>
+        <div className="w-px h-5 bg-border mx-1" />
+        <div className="flex items-center gap-1">
+          <LanguageIcon style={{ fontSize: 13 }} className="text-muted-foreground" />
+          <select value={logTimezone} onChange={(e) => setLogTimezone(e.target.value)} className="text-[10px] border border-input rounded bg-background px-1 py-0.5" title="Convert log timestamps">
+            {TZ_OPTIONS.map((tz) => <option key={tz.id} value={tz.id}>{tz.id === "Original" ? "TZ: Original" : `TZ: ${tz.label}`}</option>)}
+          </select>
+        </div>
         <div className="w-px h-5 bg-border mx-1" />
         <button onClick={() => setShowNotes(!showNotes)} title="Toggle notes" className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded font-medium ${showNotes ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}><NoteAltIcon style={{ fontSize: 13 }} /> Notes</button>
         {!hasFiles && (

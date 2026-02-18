@@ -5,8 +5,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install ripgrep (required for rg+Drain3 two-stage pipeline)
-RUN apt-get update && apt-get install -y ripgrep && rm -rf /var/lib/apt/lists/*
+# Install ripgrep (required for rg+Drain3 two-stage pipeline) and tshark (required for PCAP analysis)
+RUN apt-get update && \
+    echo "wireshark-common wireshark-common/install-setuid boolean false" | debconf-set-selections && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep tshark && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

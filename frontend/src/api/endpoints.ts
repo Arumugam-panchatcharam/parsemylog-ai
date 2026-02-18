@@ -372,3 +372,255 @@ export const adminApi = {
   rejectSubmission: (id: number, comment?: string) =>
     api.post(`/admin/submissions/${id}/reject`, { comment }),
 };
+
+// ---------- PCAP Analyzer ----------
+export interface PcapFileInfo {
+  filename: string;
+  size_bytes: number;
+  size_mb: number;
+  uploaded_at: string;
+  protocol: string;
+  tags: string[];
+}
+
+/* ── Fast Analysis types ─────────────────────────────────────────────── */
+
+export interface PcapIssue {
+  severity: "critical" | "warning";
+  description: string;
+  affected_mac: string | null;
+  metric_value: number;
+}
+
+export interface PcapRecommendation {
+  action: string;
+  reason: string;
+}
+
+export interface PcapHealth {
+  status: "CRITICAL" | "WARNING" | "HEALTHY";
+  score: number;
+  critical_count: number;
+  warning_count: number;
+  issues: PcapIssue[];
+  recommendations: PcapRecommendation[];
+}
+
+export interface PcapCaptureInfo {
+  total_frames: number;
+  duration: number;
+  frame_rate: number;
+  start_time: number;
+  end_time: number;
+  mgmt_frames: number;
+  ctrl_frames: number;
+  data_frames: number;
+  deauth_frames: number;
+  disassoc_frames: number;
+  retry_frames: number;
+  retry_pct: number;
+}
+
+export interface PcapNetworkSummary {
+  ap_count: number;
+  client_count: number;
+  ssids: string[];
+  channels: number[];
+}
+
+export interface PcapActivityBucket {
+  epoch: number;
+  mgmt_count: number;
+  ctrl_count: number;
+  data_count: number;
+}
+
+export interface PcapChannelDist {
+  channel: number;
+  frame_count: number;
+  retry_pct: number;
+  client_count: number;
+}
+
+export interface PcapEapolPair {
+  client: string;
+  ap: string;
+  steps_seen: number[];
+  complete: boolean;
+}
+
+export interface PcapOverview {
+  capture_info: PcapCaptureInfo;
+  network_summary: PcapNetworkSummary;
+  health: PcapHealth;
+  eapol_handshakes: PcapEapolPair[];
+  activity_timeline: PcapActivityBucket[];
+  channel_distribution: PcapChannelDist[];
+  protocol_detected: string;
+  cache_used: boolean;
+}
+
+export interface PcapClientSummary {
+  mac: string;
+  is_ap: boolean;
+  status: "critical" | "warning" | "healthy";
+  primary_bssid: string;
+  ssid: string;
+  avg_rssi: number | null;
+  retry_pct: number;
+  frame_count: number;
+  deauth_count: number;
+  channels: number[];
+  power_save_pct: number;
+  seq_gaps_count: number;
+  eapol_status: "" | "complete" | "incomplete";
+}
+
+export interface PcapApSummary {
+  bssid: string;
+  ssid: string;
+  channel: number | null;
+  client_count: number;
+  avg_retry_pct: number;
+  avg_rssi: number | null;
+  beacon_count: number;
+  status: "critical" | "warning" | "healthy";
+}
+
+export interface Pcap1905Device {
+  al_mac: string;
+  eth_src: string;
+  message_count: number;
+  last_seen: number | null;
+}
+
+export interface Pcap1905Overview {
+  has_1905: boolean;
+  devices: Pcap1905Device[];
+  message_distribution: Record<string, number>;
+  category_distribution: Record<string, number>;
+  per_device_categories: Record<string, Record<string, number>>;
+  unanswered_queries: Array<{ query_type: string; expected_response?: string; query_id: string; sender: string; epoch: number | null }>;
+  timeline: Array<{ epoch: number; message_type: string; src: string; dst: string; message_id: string }>;
+}
+
+export interface PcapAnalysisResult {
+  overview: PcapOverview;
+  clients: PcapClientSummary[];
+  aps: PcapApSummary[];
+  mesh_1905: Pcap1905Overview;
+}
+
+/* ── Client Detail types ─────────────────────────────────────────────── */
+
+export interface PcapClientEvent {
+  epoch: number | null;
+  event_type: string;
+  peer: string;
+  direction: "in" | "out";
+  detail: string;
+}
+
+export interface PcapApConversation {
+  bssid: string;
+  ssid: string;
+  first_seen: number;
+  last_seen: number;
+  frame_count: number;
+  avg_rssi: number | null;
+}
+
+export interface PcapEapolHandshake {
+  peer: string;
+  steps_seen: number[];
+  complete: boolean;
+  start_epoch: number | null;
+}
+
+export interface PcapSeqGap {
+  epoch: number;
+  expected_seq: number;
+  actual_seq: number;
+  gap_size: number;
+}
+
+export interface PcapClientDetail {
+  mac: string;
+  rssi_timeline: Array<{ epoch: number; rssi: number }>;
+  retry_timeline: Array<{ epoch: number; retry_pct: number }>;
+  frame_type_dist: { mgmt: number; ctrl: number; data: number };
+  events: PcapClientEvent[];
+  ap_conversations: PcapApConversation[];
+  roaming: Array<{ epoch: number; from_bssid: string; to_bssid: string }>;
+  eapol_handshakes: PcapEapolHandshake[];
+  power_mgmt_timeline: Array<{ epoch: number; state: number }>;
+  sequence_analysis: {
+    seq_timeline: Array<{ epoch: number; seq: number; retry: number }>;
+    seq_gaps: PcapSeqGap[];
+    duplicate_frames: number;
+  };
+  retry_vs_power: Array<{ epoch: number; retry: number; pwrmgt: number }>;
+  error?: string;
+}
+
+/* ── AP Detail types ─────────────────────────────────────────────────── */
+
+export interface PcapApClientMetric {
+  mac: string;
+  avg_rssi: number | null;
+  retry_pct: number;
+  frame_count: number;
+  first_seen: number | null;
+  last_seen: number | null;
+}
+
+export interface PcapApRssiDist {
+  mac: string;
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+}
+
+export interface PcapApDetail {
+  bssid: string;
+  client_metrics: PcapApClientMetric[];
+  rssi_distribution: PcapApRssiDist[];
+  client_timeline: Array<{ epoch: number; connected_clients: number }>;
+  channel_info: { channel: number | null; frequency: number | null; phy_modes: Record<string, number> };
+  error?: string;
+}
+
+export const pcapApi = {
+  upload: (files: File[]) => {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f));
+    return api.post<{ uploaded: PcapFileInfo[]; errors: string[] }>("/pcap/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 600_000,
+    });
+  },
+  listFiles: () =>
+    api.get<{ files: PcapFileInfo[] }>("/pcap/files"),
+  deleteFile: (filename: string) =>
+    api.delete(`/pcap/files/${encodeURIComponent(filename)}`),
+  updateTags: (filename: string, tags: string[]) =>
+    api.put<{ filename: string; tags: string[] }>(`/pcap/files/${encodeURIComponent(filename)}/tags`, { tags }),
+  redetectProtocol: (filename: string) =>
+    api.post<{ filename: string; protocol: string }>(`/pcap/files/${encodeURIComponent(filename)}/detect`),
+  analyze: (filename: string, force?: boolean) =>
+    api.post<PcapAnalysisResult>("/pcap/analyze", { filename, force: force || false }, { timeout: 600_000 }),
+  clientDetail: (filename: string, mac: string) =>
+    api.get<PcapClientDetail>(`/pcap/analyze/client/${encodeURIComponent(mac)}`, { params: { filename }, timeout: 120_000 }),
+  apDetail: (filename: string, bssid: string) =>
+    api.get<PcapApDetail>(`/pcap/analyze/ap/${encodeURIComponent(bssid)}`, { params: { filename }, timeout: 120_000 }),
+  mesh1905Detail: (filename: string, filters?: { al_mac?: string; src?: string; dst?: string; exclude_periodic?: boolean }) => {
+    const params: Record<string, string> = { filename };
+    if (filters?.al_mac) params.al_mac = filters.al_mac;
+    if (filters?.src) params.src = filters.src;
+    if (filters?.dst) params.dst = filters.dst;
+    if (filters?.exclude_periodic) params.exclude_periodic = "1";
+    return api.get<Pcap1905Overview>("/pcap/analyze/1905", { params, timeout: 120_000 });
+  },
+};

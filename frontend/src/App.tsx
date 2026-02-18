@@ -15,6 +15,7 @@ import CPEOverviewPage from "@/pages/CPEOverviewPage";
 import AdminPage from "@/pages/AdminPage";
 import ProfilePage from "@/pages/ProfilePage";
 import ChatPage from "@/pages/ChatPage";
+import PcapAnalyzerPage from "@/pages/PcapAnalyzerPage";
 import type { ReactNode } from "react";
 
 const queryClient = new QueryClient({
@@ -69,6 +70,7 @@ function AppRoutes() {
         }
       >
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/pcap" element={<PcapAnalyzerPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
         <Route path="/workspace/viewer" element={<LogViewerPage />} />
