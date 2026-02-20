@@ -15,8 +15,31 @@ import SelectAllIcon from "@mui/icons-material/SelectAll";
 import DeselectIcon from "@mui/icons-material/Deselect";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
+import DevicesIcon from "@mui/icons-material/Devices";
+import PersonIcon from "@mui/icons-material/Person";
+import CloseIcon from "@mui/icons-material/Close";
+import DownloadIcon from "@mui/icons-material/Download";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
+
+interface AggregatedPattern {
+  template: string;
+  occurrence_count: number;
+  cpe_count: number;
+  cpe_details: Record<string, number>;
+}
+
+interface AggregatedResponse {
+  domain: string;
+  total_cpes: number;
+  total_unique_patterns: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  source_files: string[];
+  patterns: AggregatedPattern[];
+}
 
 export default function PatternPage() {
   const { projectId } = useProject();
@@ -25,13 +48,20 @@ export default function PatternPage() {
   const [selectedDomain, setSelectedDomain] = useState<string>("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [timeInterval, setTimeInterval] = useState(0);
+  const [viewMode, setViewMode] = useState<"single" | "aggregated">("single");
+  const [aggregatedPage, setAggregatedPage] = useState(1);
+  const [selectedPatternDetails, setSelectedPatternDetails] = useState<AggregatedPattern | null>(null);
 
-  // File filter: user picks files, then clicks "Apply" to trigger re-analysis
+  // File filter for single CPE view
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [appliedFiles, setAppliedFiles] = useState<string[]>([]);
   const [showFileFilter, setShowFileFilter] = useState(false);
-  // Keep a stable copy of domain source files from the INITIAL (unfiltered) analysis
   const [allSourceFiles, setAllSourceFiles] = useState<string[]>([]);
+
+  // File filter for aggregated view
+  const [aggregatedSelectedFiles, setAggregatedSelectedFiles] = useState<string[]>([]);
+  const [aggregatedAppliedFiles, setAggregatedAppliedFiles] = useState<string[]>([]);
+  const [hiddenPatterns, setHiddenPatterns] = useState<Set<string>>(new Set());
 
   const { data: domains } = useQuery({ queryKey: ["domains", projectId, cpeId], queryFn: async () => (await patternsApi.listDomains(projectId!, cpeId)).data, enabled: !!projectId });
   const { data: indexStatus } = useQuery({ queryKey: ["indexingStatus", projectId, cpeId], queryFn: async () => (await patternsApi.indexingStatus(projectId!, cpeId)).data, enabled: !!projectId, refetchInterval: (query) => (query.state.data?.all_done ? false : 5000) });
@@ -70,12 +100,146 @@ export default function PatternPage() {
   const { data: params } = useQuery({ queryKey: ["parameters", projectId, selectedDomain, selectedTemplate, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getParameters(projectId!, selectedDomain, selectedTemplate, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
   const { data: loglines } = useQuery({ queryKey: ["loglines", projectId, selectedDomain, selectedTemplate, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getLoglines(projectId!, selectedDomain, selectedTemplate, 1, 20, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
 
+  // Aggregated patterns query
+  const { data: aggregatedData, isLoading: aggregatedLoading } = useQuery<AggregatedResponse>({
+    queryKey: ["aggregatedPatterns", projectId, selectedDomain, aggregatedPage, aggregatedAppliedFiles],
+    queryFn: async () => {
+      const response = await patternsApi.getAggregated(
+        projectId!, 
+        selectedDomain, 
+        aggregatedPage, 
+        50, 
+        "frequency",
+        aggregatedAppliedFiles.length > 0 ? aggregatedAppliedFiles : undefined
+      );
+      return response.data;
+    },
+    enabled: !!projectId && !!selectedDomain && viewMode === "aggregated",
+  });
+
+  // Update aggregated source files when data loads (without filter)
+  useEffect(() => {
+    if (aggregatedData?.source_files && aggregatedAppliedFiles.length === 0) {
+      // Only update if files changed to avoid infinite loops
+      const newFiles = aggregatedData.source_files.sort().join(',');
+      const currentFiles = aggregatedSelectedFiles.sort().join(',');
+      if (newFiles !== currentFiles && aggregatedSelectedFiles.length === 0) {
+        setAggregatedSelectedFiles(aggregatedData.source_files);
+      }
+    }
+  }, [aggregatedData?.source_files, aggregatedAppliedFiles.length]);
+
   const intervalMarks = ["1s", "1min", "1h", "1d"];
   const toggleFile = (f: string) => setSelectedFiles((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]);
   const filtersChanged = JSON.stringify(selectedFiles.sort()) !== JSON.stringify(appliedFiles.sort());
+  
+  const toggleAggregatedFile = (f: string) => setAggregatedSelectedFiles((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]);
+  const aggregatedFiltersChanged = JSON.stringify(aggregatedSelectedFiles.sort()) !== JSON.stringify(aggregatedAppliedFiles.sort());
+
+  // Toggle hide pattern
+  const toggleHidePattern = (template: string) => {
+    setHiddenPatterns(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(template)) {
+        newSet.delete(template);
+      } else {
+        newSet.add(template);
+      }
+      return newSet;
+    });
+  };
+
+  // Export ALL patterns to CSV (fetch all pages)
+  const exportPatterns = async () => {
+    if (!aggregatedData || !projectId || !selectedDomain) return;
+    
+    try {
+      // Fetch all patterns (use a large page size to get everything)
+      const response = await patternsApi.getAggregated(
+        projectId, 
+        selectedDomain, 
+        1, 
+        10000, // Large page size to get all patterns
+        "frequency",
+        aggregatedAppliedFiles.length > 0 ? aggregatedAppliedFiles : undefined
+      );
+      
+      const allPatterns = response.data.patterns.filter((p: AggregatedPattern) => !hiddenPatterns.has(p.template));
+      
+      // Create CSV content (without CPE serials)
+      const csvRows = [
+        ['#', 'Pattern Template', 'Frequency', 'CPE Count', 'Total CPEs'].join(','),
+        ...allPatterns.map((pattern: AggregatedPattern, idx: number) => {
+          return [
+            idx + 1,
+            `"${pattern.template.replace(/"/g, '""')}"`,
+            pattern.occurrence_count,
+            pattern.cpe_count,
+            aggregatedData.total_cpes
+          ].join(',');
+        })
+      ];
+      
+      const csvContent = csvRows.join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      
+      const fileFilter = aggregatedAppliedFiles.length > 0 ? '_filtered' : '';
+      link.setAttribute('href', url);
+      link.setAttribute('download', `aggregated_patterns_${selectedDomain}${fileFilter}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Export failed:', error);
+    }
+  };
+
+  // Reset when switching view modes or changing domain in aggregated view
+  useEffect(() => {
+    if (viewMode === "aggregated") {
+      setAggregatedPage(1);
+      setAggregatedSelectedFiles([]);
+      setAggregatedAppliedFiles([]);
+    }
+  }, [selectedDomain, viewMode]);
 
   return (
-    <div className="p-4 space-y-4 max-w-full">
+    <div className="p-4 space-y-3 max-w-full">
+      {/* View Mode Toggle - Modernized and Compact */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold">Pattern Analysis</h2>
+        <div className="inline-flex items-center bg-muted rounded-lg p-0.5 gap-0.5">
+          <button
+            onClick={() => setViewMode("single")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+              viewMode === "single"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <PersonIcon style={{ fontSize: 16 }} />
+            Single CPE
+          </button>
+          <button
+            onClick={() => setViewMode("aggregated")}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+              viewMode === "aggregated"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <DevicesIcon style={{ fontSize: 16 }} />
+            All CPEs
+          </button>
+        </div>
+      </div>
+
+      {viewMode === "single" ? (
+        // SINGLE CPE VIEW (existing code)
+      <div className="space-y-4">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Domain + File filter */}
         <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
@@ -207,6 +371,330 @@ export default function PatternPage() {
           </div>
         )}
       </>)}
+      </div>
+      ) : (
+        // AGGREGATED VIEW (All CPEs)
+        <div className="space-y-3">
+          {/* Redesigned Header: Fixed height container for perfect alignment */}
+          <div className="flex gap-4 h-[180px]">
+            {/* Filter Group: Domain & Files combined - 60% */}
+            <div className="w-[60%] flex bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+              {/* Domain Column */}
+              <div className="w-1/2 border-r border-border p-3 flex flex-col bg-muted/10 shrink-0">
+                <h3 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <ManageSearchIcon style={{ fontSize: 14 }} /> Domain
+                </h3>
+                <div className="overflow-y-auto flex-1 custom-scrollbar space-y-1 pr-1">
+                  {domains?.map((d: { domain: string; label: string; indexed: boolean }) => (
+                    <button
+                      key={d.domain}
+                      onClick={() => !d.indexed ? null : setSelectedDomain(d.domain)}
+                      disabled={!d.indexed}
+                      className={`w-full text-left px-2.5 py-1.5 text-xs rounded-md transition-all ${
+                        selectedDomain === d.domain
+                          ? "bg-primary text-primary-foreground font-medium shadow-sm"
+                          : d.indexed
+                          ? "hover:bg-background hover:shadow-sm text-foreground"
+                          : "opacity-50 cursor-not-allowed"
+                      }`}
+                    >
+                      <div className="truncate">{d.label}</div>
+                      {!d.indexed && <div className="text-[9px] opacity-70">(not indexed)</div>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Files Column */}
+              <div className="w-1/2 p-3 flex flex-col bg-card min-w-0">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                    <FilterListIcon style={{ fontSize: 14 }} /> 
+                    Files {selectedDomain && aggregatedData?.source_files ? `(${aggregatedData.source_files.length})` : ""}
+                  </h3>
+                  {selectedDomain && aggregatedData?.source_files && aggregatedData.source_files.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <button 
+                        onClick={() => setAggregatedSelectedFiles([...aggregatedData.source_files])} 
+                        className="text-[9px] px-1.5 py-0.5 rounded hover:bg-muted text-primary transition-colors"
+                      >
+                        All
+                      </button>
+                      <button 
+                        onClick={() => setAggregatedSelectedFiles([])} 
+                        className="text-[9px] px-1.5 py-0.5 rounded hover:bg-muted text-primary transition-colors"
+                      >
+                        None
+                      </button>
+                      {aggregatedFiltersChanged && (
+                        <button
+                          onClick={() => {
+                            setAggregatedAppliedFiles([...aggregatedSelectedFiles]);
+                            setAggregatedPage(1);
+                          }}
+                          className="ml-1 px-2 py-0.5 text-[9px] bg-primary text-primary-foreground rounded-full font-bold shadow-sm hover:opacity-90 animate-in fade-in zoom-in duration-200"
+                        >
+                          Apply
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                
+                <div className="overflow-y-auto flex-1 custom-scrollbar border border-border/50 rounded-lg bg-muted/20 p-1">
+                  {selectedDomain && aggregatedData?.source_files && aggregatedData.source_files.length > 0 ? (
+                    <div className="space-y-0.5">
+                      {aggregatedData.source_files.map((fname) => (
+                        <label key={fname} className="flex items-center gap-2 text-[11px] cursor-pointer hover:bg-background hover:shadow-sm rounded px-2 py-1 transition-all">
+                          <input 
+                            type="checkbox" 
+                            checked={aggregatedSelectedFiles.includes(fname)} 
+                            onChange={() => toggleAggregatedFile(fname)} 
+                            className="accent-primary rounded shrink-0 w-3.5 h-3.5" 
+                          />
+                          <span className="truncate opacity-90">{fname}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-center p-2">
+                      <p className="text-xs">
+                        {!selectedDomain ? "Select a domain first" : "No source files found"}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                {aggregatedAppliedFiles.length > 0 && (
+                  <div className="mt-1.5 text-[10px] text-muted-foreground font-medium text-right">
+                    Showing results for <span className="text-foreground">{aggregatedAppliedFiles.length}</span> file(s)
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Stats Section - 40% */}
+            <div className="w-[40%] bg-card border border-border rounded-xl shadow-sm p-4 flex flex-col justify-center relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-3 opacity-5">
+                <BarChartIcon style={{ fontSize: 120 }} />
+              </div>
+              
+              {aggregatedData ? (
+                <div className="flex items-center justify-around h-full relative z-10">
+                  <div className="text-center group cursor-default">
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                       <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-full text-blue-600 dark:text-blue-400">
+                         <DevicesIcon style={{ fontSize: 24 }} />
+                       </div>
+                       <div className="text-sm font-medium text-muted-foreground">Total CPEs</div>
+                    </div>
+                    <div className="text-4xl font-extrabold tracking-tight text-foreground group-hover:scale-110 transition-transform duration-200">
+                      {aggregatedData.total_cpes}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">Contributing to this domain</div>
+                  </div>
+                  
+                  <div className="w-px h-24 bg-border/60" />
+                  
+                  <div className="text-center group cursor-default">
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                       <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-full text-purple-600 dark:text-purple-400">
+                         <BarChartIcon style={{ fontSize: 24 }} />
+                       </div>
+                       <div className="text-sm font-medium text-muted-foreground">Unique Patterns</div>
+                    </div>
+                    <div className="text-4xl font-extrabold tracking-tight text-foreground group-hover:scale-110 transition-transform duration-200">
+                      {aggregatedData.total_unique_patterns.toLocaleString()}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">Found across all devices</div>
+                  </div>
+                </div>
+              ) : (
+                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    <ManageSearchIcon style={{ fontSize: 32 }} className="mb-2 opacity-20" />
+                    <p>Select a domain to view statistics</p>
+                 </div>
+              )}
+            </div>
+          </div>
+
+          {!selectedDomain ? (
+            <div className="bg-card border border-border rounded-2xl p-12 text-center text-muted-foreground">
+              <DevicesIcon style={{ fontSize: 48 }} className="mx-auto mb-4 opacity-50" />
+              <p className="text-lg">Select a domain to view aggregated patterns across all CPEs</p>
+            </div>
+          ) : aggregatedLoading ? (
+            <div className="bg-card border border-border rounded-2xl p-12 text-center">
+              <CircularProgress />
+              <p className="text-muted-foreground mt-4">Loading aggregated patterns...</p>
+            </div>
+          ) : aggregatedData ? (
+            <>
+              {/* Patterns Table */}
+              <div className="bg-card border border-border rounded-xl overflow-hidden">
+                <div className="p-3 border-b border-border flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <h3 className="text-sm font-semibold">
+                      Patterns (Page {aggregatedData.page} of {aggregatedData.total_pages})
+                    </h3>
+                    {hiddenPatterns.size > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          {hiddenPatterns.size} hidden
+                        </span>
+                        <button
+                          onClick={() => setHiddenPatterns(new Set())}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          Show all
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={exportPatterns}
+                      className="flex items-center gap-1 px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:opacity-90"
+                    >
+                      <DownloadIcon style={{ fontSize: 14 }} />
+                      Export CSV
+                    </button>
+                    <button
+                      onClick={() => setAggregatedPage(p => Math.max(1, p - 1))}
+                      disabled={aggregatedData.page <= 1}
+                      className="px-3 py-1 text-xs border border-border rounded disabled:opacity-30 hover:bg-muted"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setAggregatedPage(p => Math.min(aggregatedData.total_pages, p + 1))}
+                      disabled={aggregatedData.page >= aggregatedData.total_pages}
+                      className="px-3 py-1 text-xs border border-border rounded disabled:opacity-30 hover:bg-muted"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="text-left px-3 py-2 text-xs font-medium w-12">#</th>
+                        <th className="text-left px-3 py-2 text-xs font-medium">Pattern Template</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium">Frequency</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium">CPEs</th>
+                        <th className="text-center px-3 py-2 text-xs font-medium w-16">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {aggregatedData.patterns?.filter(p => !hiddenPatterns.has(p.template)).map((pattern: AggregatedPattern, idx: number) => {
+                        const globalIdx = (aggregatedData.page - 1) * aggregatedData.page_size + idx + 1;
+                        return (
+                          <tr
+                            key={pattern.template}
+                            className="border-t border-border hover:bg-muted/30"
+                          >
+                            <td className="px-3 py-2 text-xs text-muted-foreground">{globalIdx}</td>
+                            <td 
+                              className="px-3 py-2 font-mono text-[11px] cursor-pointer"
+                              onClick={() => setSelectedPatternDetails(pattern)}
+                            >
+                              {pattern.template}
+                            </td>
+                            <td className="px-3 py-2 text-right text-xs font-semibold">
+                              {pattern.occurrence_count.toLocaleString()}
+                            </td>
+                            <td className="px-3 py-2 text-right text-xs">
+                              {pattern.cpe_count} / {aggregatedData.total_cpes}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleHidePattern(pattern.template);
+                                }}
+                                className="p-1 hover:bg-muted rounded"
+                                title="Hide pattern"
+                              >
+                                <VisibilityOffIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* CPE Details Modal */}
+              {selectedPatternDetails && (
+                <div 
+                  className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                  onClick={() => setSelectedPatternDetails(null)}
+                >
+                  <div 
+                    className="bg-card border border-border rounded-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="p-4 border-b border-border flex items-start justify-between">
+                      <div className="flex-1 mr-4">
+                        <h3 className="text-sm font-semibold mb-2">Pattern Details</h3>
+                        <p className="font-mono text-[11px] bg-muted p-2 rounded break-all">
+                          {selectedPatternDetails.template}
+                        </p>
+                        <div className="flex gap-4 mt-3 text-xs">
+                          <div>
+                            <span className="text-muted-foreground">Total Occurrences:</span>{" "}
+                            <strong>{selectedPatternDetails.occurrence_count.toLocaleString()}</strong>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">CPEs with pattern:</span>{" "}
+                            <strong>{selectedPatternDetails.cpe_count} / {aggregatedData.total_cpes}</strong>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setSelectedPatternDetails(null)}
+                        className="text-muted-foreground hover:text-foreground p-1"
+                      >
+                        <CloseIcon style={{ fontSize: 20 }} />
+                      </button>
+                    </div>
+                    
+                    <div className="flex-1 overflow-auto p-4">
+                      <h4 className="text-xs font-semibold mb-3 text-muted-foreground uppercase">
+                        CPEs with this Pattern
+                      </h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-muted/50">
+                            <tr>
+                              <th className="text-left px-3 py-2 text-xs font-medium">CPE Serial</th>
+                              <th className="text-right px-3 py-2 text-xs font-medium">Occurrences</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(selectedPatternDetails.cpe_details)
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([serial, count]) => (
+                                <tr key={serial} className="border-t border-border hover:bg-muted/30">
+                                  <td className="px-3 py-2 font-mono text-xs">{serial}</td>
+                                  <td className="px-3 py-2 text-right text-xs font-semibold">
+                                    {count.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

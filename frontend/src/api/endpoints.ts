@@ -140,6 +140,15 @@ export const patternsApi = {
       file_filter: fileFilter,
       cpe_id: cpeId || undefined,
     }),
+  getAggregated: (projectId: string, domain: string, page = 1, pageSize = 50, sort = "frequency", fileFilter?: string[]) =>
+    api.get(`/projects/${projectId}/domains/${domain}/aggregated`, {
+      params: { 
+        page, 
+        page_size: pageSize, 
+        sort,
+        file_filter: fileFilter && fileFilter.length > 0 ? fileFilter.join(",") : undefined
+      },
+    }),
   getTimeseries: (projectId: string, domain: string, template: string, interval: number, fileFilter?: string, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/domains/${domain}/timeseries`, {
       params: { template, interval, file_filter: fileFilter, cpe_id: cpeId || undefined },

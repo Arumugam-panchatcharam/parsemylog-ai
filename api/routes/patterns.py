@@ -394,3 +394,133 @@ def indexing_status(project_id):
         "all_done": all_done,
         "is_indexing": is_indexing_flag,
     }), 200
+
+
+# ---------- Multi-CPE Aggregated Patterns ----------
+
+@patterns_bp.route("/<project_id>/domains/<domain>/aggregated", methods=["GET"])
+@jwt_required()
+def get_aggregated_patterns(project_id, domain):
+    """
+    Get unique patterns aggregated across ALL CPEs in a project for a specific domain.
+    
+    Query params: 
+        - page: Page number (default 1)
+        - page_size: Items per page (default 50)
+        - sort: 'frequency' or 'alphabetical' (default 'frequency')
+        - file_filter: Comma-separated list of filenames to filter
+    
+    Returns: {
+        "domain": str,
+        "total_cpes": int,
+        "total_unique_patterns": int,
+        "page": int,
+        "page_size": int,
+        "total_pages": int,
+        "source_files": [str],  # Available files in this domain
+        "patterns": [
+            {
+                "template": str,
+                "occurrence_count": int,  # Total occurrences across all CPEs
+                "cpe_count": int,         # Number of CPEs with this pattern
+                "cpe_details": {          # Per-CPE occurrence counts
+                    "CPE_SERIAL": count
+                }
+            }
+        ]
+    }
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    
+    page = request.args.get("page", 1, type=int)
+    page_size = request.args.get("page_size", 50, type=int)
+    sort_by = request.args.get("sort", "frequency")
+    file_filter_str = request.args.get("file_filter", "")
+    file_filter = [f.strip() for f in file_filter_str.split(",") if f.strip()] if file_filter_str else None
+    
+    # Get all CPEs for this project
+    cpes = dbm.list_project_cpes(project_id)
+    
+    if not cpes:
+        return jsonify({
+            "domain": domain,
+            "total_cpes": 0,
+            "total_unique_patterns": 0,
+            "page": 1,
+            "page_size": page_size,
+            "total_pages": 0,
+            "source_files": [],
+            "patterns": []
+        }), 200
+    
+    # Aggregate patterns from all CPEs
+    pattern_data = {}  # template -> {occurrence_count, cpe_details: {serial: count}}
+    all_source_files = set()
+    
+    for cpe in cpes:
+        cpe_dir = _project_dir(user_id, project_id, cpe.serial)
+        df = _load_domain_parquet(cpe_dir, domain)
+        
+        if df.empty or "template" not in df.columns:
+            continue
+        
+        # Collect source files from the first CPE
+        if "source_file" in df.columns:
+            all_source_files.update(df["source_file"].dropna().unique().tolist())
+        
+        # Apply file filter
+        if file_filter and "source_file" in df.columns:
+            df = df[df["source_file"].isin(file_filter)]
+            if df.empty:
+                continue
+        
+        # Count occurrences per template for this CPE
+        template_counts = df["template"].value_counts()
+        
+        for template, count in template_counts.items():
+            template_str = str(template)
+            if template_str not in pattern_data:
+                pattern_data[template_str] = {
+                    "occurrence_count": 0,
+                    "cpe_details": {}
+                }
+            
+            pattern_data[template_str]["occurrence_count"] += int(count)
+            pattern_data[template_str]["cpe_details"][cpe.serial] = int(count)
+    
+    # Convert to list format
+    patterns_list = []
+    for template, data in pattern_data.items():
+        patterns_list.append({
+            "template": template,
+            "occurrence_count": data["occurrence_count"],
+            "cpe_count": len(data["cpe_details"]),
+            "cpe_details": data["cpe_details"]
+        })
+    
+    # Sort
+    if sort_by == "frequency":
+        patterns_list.sort(key=lambda x: x["occurrence_count"], reverse=True)
+    else:  # alphabetical
+        patterns_list.sort(key=lambda x: x["template"])
+    
+    # Pagination
+    total_patterns = len(patterns_list)
+    total_pages = (total_patterns + page_size - 1) // page_size if total_patterns > 0 else 0
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_patterns = patterns_list[start_idx:end_idx]
+    
+    return jsonify({
+        "domain": domain,
+        "total_cpes": len(cpes),
+        "total_unique_patterns": total_patterns,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "source_files": sorted(list(all_source_files)),
+        "patterns": paginated_patterns
+    }), 200
