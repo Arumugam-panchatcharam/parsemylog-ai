@@ -248,13 +248,20 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             patterns_indexed = 0
             try:
                 from api.indexer import run_indexer_async
+                import pandas as pd
                 
                 # Run indexing synchronously
                 logger.info(f"[CPE {serial}] Starting pattern indexing on {cpe_dir}")
                 run_indexer_async(cpe_dir, project_id, cpe_id=serial)
                 
-                # Count indexed patterns (estimate from parquet files)
-                patterns_indexed = sum(1 for f in cpe_dir.glob("*_rg.parquet"))
+                # Count actual patterns from all parquet files
+                patterns_indexed = 0
+                for parquet_file in cpe_dir.glob("*_rg.parquet"):
+                    try:
+                        df = pd.read_parquet(parquet_file)
+                        patterns_indexed += len(df)
+                    except Exception as e:
+                        logger.warning(f"[CPE {serial}] Could not read {parquet_file.name}: {e}")
                 
             except Exception as e:
                 logger.warning(f"[CPE {serial}] Indexing error: {e}")

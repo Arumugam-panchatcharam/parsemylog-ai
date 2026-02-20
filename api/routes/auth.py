@@ -20,6 +20,15 @@ from api.auth import get_user_id
 auth_bp = Blueprint("auth", __name__)
 
 
+@auth_bp.route("/health", methods=["GET"])
+def health():
+    """
+    Simple health check endpoint (no auth required).
+    Returns: { "status": "ok" }
+    """
+    return jsonify({"status": "ok"}), 200
+
+
 @auth_bp.route("/login", methods=["POST"])
 def login():
     """

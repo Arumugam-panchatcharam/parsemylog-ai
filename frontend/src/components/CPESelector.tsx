@@ -56,7 +56,7 @@ export default function CPESelector() {
     );
   }
 
-  // Multiple CPEs — show dropdown
+  // Multiple CPEs — show dropdown with max height
   return (
     <div className="px-3 py-2 border-b border-sidebar-border">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
@@ -70,6 +70,8 @@ export default function CPESelector() {
           if (selected) setCPE(selected);
         }}
         className="w-full text-xs bg-sidebar border border-sidebar-border rounded px-2 py-1.5 text-sidebar-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+        size={1}
+        style={{ maxHeight: "200px" }}
       >
         {cpes.map((c) => (
           <option key={c.serial} value={c.serial}>

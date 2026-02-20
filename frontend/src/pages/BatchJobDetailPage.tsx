@@ -210,6 +210,22 @@ export default function BatchJobDetailPage() {
               All ({cpes.length})
             </button>
             <button
+              onClick={() => setStatusFilter("pending")}
+              className={`px-3 py-1 rounded text-sm ${
+                statusFilter === "pending" ? "bg-yellow-600 text-white" : "bg-muted"
+              }`}
+            >
+              Pending/Queued
+            </button>
+            <button
+              onClick={() => setStatusFilter("processing")}
+              className={`px-3 py-1 rounded text-sm ${
+                statusFilter === "processing" ? "bg-blue-600 text-white" : "bg-muted"
+              }`}
+            >
+              Processing
+            </button>
+            <button
               onClick={() => setStatusFilter("completed")}
               className={`px-3 py-1 rounded text-sm ${
                 statusFilter === "completed" ? "bg-green-600 text-white" : "bg-muted"
@@ -224,14 +240,6 @@ export default function BatchJobDetailPage() {
               }`}
             >
               Failed
-            </button>
-            <button
-              onClick={() => setStatusFilter("processing")}
-              className={`px-3 py-1 rounded text-sm ${
-                statusFilter === "processing" ? "bg-blue-600 text-white" : "bg-muted"
-              }`}
-            >
-              Processing
             </button>
           </div>
         </div>
