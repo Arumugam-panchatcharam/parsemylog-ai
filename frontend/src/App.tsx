@@ -16,6 +16,8 @@ import AdminPage from "@/pages/AdminPage";
 import ProfilePage from "@/pages/ProfilePage";
 import ChatPage from "@/pages/ChatPage";
 import PcapAnalyzerPage from "@/pages/PcapAnalyzerPage";
+import BatchJobsPage from "@/pages/BatchJobsPage";
+import BatchJobDetailPage from "@/pages/BatchJobDetailPage";
 import type { ReactNode } from "react";
 
 const queryClient = new QueryClient({
@@ -73,6 +75,8 @@ function AppRoutes() {
         <Route path="/pcap" element={<PcapAnalyzerPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+        <Route path="/projects/:projectId/batch-jobs" element={<BatchJobsPage />} />
+        <Route path="/projects/:projectId/batch-jobs/:jobId" element={<BatchJobDetailPage />} />
         <Route path="/workspace/viewer" element={<LogViewerPage />} />
         <Route path="/workspace/pattern" element={<PatternPage />} />
         <Route path="/workspace/telemetry" element={<TelemetryPage />} />

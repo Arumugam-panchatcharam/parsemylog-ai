@@ -27,7 +27,6 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from dash import html
 from urllib.parse import quote as urlquote
 
 from logai.utils.constants import (
@@ -168,10 +167,10 @@ class FileManager:
             filename: Name of the file to link to.
 
         Returns:
-            Dash html.A component with download URL.
+            Dictionary with download URL information.
         """
         location = "/download/{}".format(urlquote(filename))
-        return html.A(filename, href=location)
+        return {"filename": filename, "url": location}
     
     def process_uploaded_files(self, project_path, project_name):
         """

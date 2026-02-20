@@ -25,18 +25,30 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 interface CPESummary {
   serial: string;
   mac: string;
-  date_from: string | null;
-  date_to: string | null;
+  model: string;
+  date_from?: string | null;
+  date_to?: string | null;
   device_info: Record<string, string>;
   key_metrics: Record<string, unknown>;
   summary: { total_reports?: number; parsed_reports?: number; time_range?: Record<string, string> };
   reboot_summary: { total: number; reasons: Record<string, number>; events?: Array<{ timestamp: string; reason: string }> };
   pattern_summary: Record<string, { label: string; indexed: boolean; total_loglines: number; unique_patterns: number }>;
   log_stats: { file_count: number; total_size_mb: number };
+  status: "parsed" | "not_parsed" | "failed";
+  reboot_count: number;
+  log_size_mb: number;
 }
 
-interface OverviewData {
+interface OverviewResponse {
   cpes: CPESummary[];
+  pagination?: {
+    page: number;
+    per_page: number;
+    total_items: number;
+    total_pages: number;
+    has_next: boolean;
+    has_prev: boolean;
+  };
 }
 
 /* ================================================================ Helpers */
@@ -88,7 +100,12 @@ function fmtUptime(sec: unknown): string {
 
 /* ================================================================ Components */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import FilterListIcon from "@mui/icons-material/FilterList";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 
 /** Reusable collapsible card wrapper */
 function CollapsibleCard({
@@ -707,12 +724,33 @@ function PatternAnalyzerComparison({ projectId }: { projectId: string }) {
 
 export default function CPEOverviewPage() {
   const { projectId } = useProject();
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
+  const [sortBy, setSortBy] = useState<"serial" | "model" | "date_from" | "reboot_count" | "log_size">("serial");
+  const [order, setOrder] = useState<"asc" | "desc">("asc");
+  const [modelFilter, setModelFilter] = useState("");
+  const [serialFilter, setSerialFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"parsed" | "not_parsed" | "failed" | "">("");
+  const [showFilters, setShowFilters] = useState(false);
 
-  const { data, isLoading, error } = useQuery<OverviewData>({
-    queryKey: ["cpe-overview", projectId],
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [modelFilter, serialFilter, statusFilter]);
+
+  const { data, isLoading, error } = useQuery<OverviewResponse>({
+    queryKey: ["cpe-overview", projectId, page, perPage, sortBy, order, modelFilter, serialFilter, statusFilter],
     queryFn: async () => {
       if (!projectId) throw new Error("No project selected");
-      const res = await cpeOverviewApi.getSummary(projectId);
+      const res = await cpeOverviewApi.getSummary(projectId, {
+        page,
+        per_page: perPage,
+        sort_by: sortBy,
+        order,
+        model: modelFilter || undefined,
+        serial: serialFilter || undefined,
+        status: statusFilter || undefined,
+      });
       return res.data;
     },
     enabled: !!projectId,
@@ -746,8 +784,18 @@ export default function CPEOverviewPage() {
   }
 
   const cpes = data?.cpes || [];
+  const pagination = data?.pagination;
 
-  if (cpes.length === 0) {
+  const toggleSort = (field: typeof sortBy) => {
+    if (sortBy === field) {
+      setOrder(order === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(field);
+      setOrder("asc");
+    }
+  };
+
+  if (cpes.length === 0 && !isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
         <WarningIcon style={{ fontSize: 32 }} />
@@ -759,14 +807,147 @@ export default function CPEOverviewPage() {
 
   return (
     <div className="p-4 space-y-4 overflow-auto h-full">
-      {/* Page header */}
-      <div className="flex items-center gap-2 mb-2">
-        <CompareArrowsIcon style={{ fontSize: 24, color: "#1a73e8" }} />
-        <h2 className="text-lg font-bold">CPE Overview</h2>
-        <span className="text-sm text-muted-foreground ml-2">
-          {cpes.length} CPE{cpes.length !== 1 ? "s" : ""} in this project
-        </span>
+      {/* Page header with filters */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <CompareArrowsIcon style={{ fontSize: 24, color: "#1a73e8" }} />
+          <h2 className="text-lg font-bold">CPE Overview</h2>
+          {pagination && (
+            <span className="text-sm text-muted-foreground ml-2">
+              {pagination.total_items} CPE{pagination.total_items !== 1 ? "s" : ""} total
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors ${
+            showFilters ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"
+          }`}
+        >
+          <FilterListIcon style={{ fontSize: 18 }} />
+          Filters
+        </button>
       </div>
+
+      {/* Filters Panel */}
+      {showFilters && (
+        <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs font-medium mb-1.5 text-muted-foreground">Serial</label>
+              <input
+                type="text"
+                value={serialFilter}
+                onChange={(e) => setSerialFilter(e.target.value)}
+                placeholder="CP..."
+                className="w-full px-3 py-1.5 text-sm border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1.5 text-muted-foreground">Model</label>
+              <input
+                type="text"
+                value={modelFilter}
+                onChange={(e) => setModelFilter(e.target.value)}
+                placeholder="DT-HGW01A..."
+                className="w-full px-3 py-1.5 text-sm border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1.5 text-muted-foreground">Status</label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="w-full px-3 py-1.5 text-sm border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              >
+                <option value="">All</option>
+                <option value="parsed">Parsed</option>
+                <option value="not_parsed">Not Parsed</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1.5 text-muted-foreground">Per Page</label>
+              <select
+                value={perPage}
+                onChange={(e) => {
+                  setPerPage(Number(e.target.value));
+                  setPage(1);
+                }}
+                className="w-full px-3 py-1.5 text-sm border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              >
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Sort by:</span>
+            {[
+              { key: "serial" as const, label: "Serial" },
+              { key: "model" as const, label: "Model" },
+              { key: "date_from" as const, label: "Date" },
+              { key: "reboot_count" as const, label: "Reboots" },
+              { key: "log_size" as const, label: "Size" },
+            ].map((s) => (
+              <button
+                key={s.key}
+                onClick={() => toggleSort(s.key)}
+                className={`flex items-center gap-1 px-2 py-1 rounded ${
+                  sortBy === s.key ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"
+                }`}
+              >
+                {s.label}
+                {sortBy === s.key && (
+                  order === "asc" ? <ArrowUpwardIcon style={{ fontSize: 14 }} /> : <ArrowDownwardIcon style={{ fontSize: 14 }} />
+                )}
+              </button>
+            ))}
+          </div>
+          {(serialFilter || modelFilter || statusFilter) && (
+            <button
+              onClick={() => {
+                setSerialFilter("");
+                setModelFilter("");
+                setStatusFilter("");
+              }}
+              className="text-xs text-primary hover:underline"
+            >
+              Clear all filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Pagination Controls - Top */}
+      {pagination && pagination.total_pages > 1 && (
+        <div className="flex items-center justify-between bg-card border border-border rounded-xl px-4 py-2">
+          <div className="text-sm text-muted-foreground">
+            Showing {((pagination.page - 1) * pagination.per_page) + 1} - {Math.min(pagination.page * pagination.per_page, pagination.total_items)} of {pagination.total_items}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(Math.max(1, page - 1))}
+              disabled={!pagination.has_prev}
+              className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeftIcon style={{ fontSize: 20 }} />
+            </button>
+            <span className="text-sm">
+              Page {pagination.page} of {pagination.total_pages}
+            </span>
+            <button
+              onClick={() => setPage(Math.min(pagination.total_pages, page + 1))}
+              disabled={!pagination.has_next}
+              className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRightIcon style={{ fontSize: 20 }} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Section 1: Device Info */}
       <DeviceInfoTable cpes={cpes} />
@@ -779,6 +960,34 @@ export default function CPEOverviewPage() {
 
       {/* Section 4: Pattern Analyzer Comparison */}
       <PatternAnalyzerComparison projectId={projectId} />
+
+      {/* Pagination Controls - Bottom */}
+      {pagination && pagination.total_pages > 1 && (
+        <div className="flex items-center justify-between bg-card border border-border rounded-xl px-4 py-2">
+          <div className="text-sm text-muted-foreground">
+            Showing {((pagination.page - 1) * pagination.per_page) + 1} - {Math.min(pagination.page * pagination.per_page, pagination.total_items)} of {pagination.total_items}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(Math.max(1, page - 1))}
+              disabled={!pagination.has_prev}
+              className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeftIcon style={{ fontSize: 20 }} />
+            </button>
+            <span className="text-sm">
+              Page {pagination.page} of {pagination.total_pages}
+            </span>
+            <button
+              onClick={() => setPage(Math.min(pagination.total_pages, page + 1))}
+              disabled={!pagination.has_next}
+              className="p-1 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRightIcon style={{ fontSize: 20 }} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

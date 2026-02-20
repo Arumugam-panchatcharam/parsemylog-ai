@@ -66,7 +66,7 @@ def _collect_text_files(project_dir: Path) -> list:
         logger.warning(f"[CollectFiles] Directory does not exist: {project_dir}")
         return text_files
 
-    for f in project_dir.iterdir():
+    for f in project_dir.rglob('*'):
         if not f.is_file():
             continue
         if any(f.name.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
@@ -142,17 +142,19 @@ def run_indexer_async(project_dir: Path, project_id: str, domains=None, cpe_id: 
 
         from logai.indexer import RagIndexer
 
-        # Per-CPE or per-project Qdrant collection
-        if cpe_id:
-            collection_name = f"project_{project_id}_cpe_{cpe_id}"
-        else:
-            collection_name = f"project_{project_id}"
+        # STRATEGY: Single collection per project with CPE metadata
+        # This allows cross-CPE search while maintaining isolation
+        collection_name = f"project_{project_id}"
+        
+        # Build metadata to tag vectors with CPE serial
+        cpe_metadata = {"cpe_serial": cpe_id} if cpe_id else {}
 
         indexer = RagIndexer(
             project_dir=project_dir,
             qdrant_url=QDRANT_URL,
             collection_name=collection_name,
             shared_model=shared_model,
+            extra_metadata=cpe_metadata,  # Tag all vectors with CPE serial
         )
         counts = indexer.index_all_domains(
             log_dir=project_dir,

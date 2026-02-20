@@ -16,232 +16,263 @@ logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
+# ---------------- Models defined at module level ----------------
+
+class User(db.Model, UserMixin):
+    __tablename__ = "users"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    email = db.Column(db.String(120), unique=False, nullable=True)
+    is_admin = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    last_login = db.Column(db.DateTime)
+
+    # relationships
+    projects = db.relationship(
+        "Project",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True
+    )
+
+    def __iter__(self):
+        yield self.username
+        yield self.email
+        yield self.created_at
+        yield self.is_admin
+
+    # utility methods
+    def set_password(self, password: str):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
+
+class Natco(db.Model):
+    __tablename__ = "natcos"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    code = db.Column(db.String(16), unique=True, nullable=False)  # e.g. "DE", "PL"
+    name = db.Column(db.String(120), nullable=False)              # e.g. "Germany"
+    description = db.Column(db.String(512), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    global_patterns = db.relationship(
+        "GlobalPattern", back_populates="natco",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+class GlobalPattern(db.Model):
+    __tablename__ = "global_patterns"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    natco_id = db.Column(db.Integer, db.ForeignKey("natcos.id", ondelete="CASCADE"), nullable=False)
+    domain = db.Column(db.String(120), nullable=False)
+    name = db.Column(db.String(256), nullable=False)
+    regex = db.Column(db.Text, nullable=False)
+    enabled = db.Column(db.Boolean, default=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    natco = db.relationship("Natco", back_populates="global_patterns")
+
+class PatternSubmission(db.Model):
+    __tablename__ = "pattern_submissions"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    natco_id = db.Column(db.Integer, db.ForeignKey("natcos.id", ondelete="CASCADE"), nullable=False)
+    domain = db.Column(db.String(120), nullable=False)
+    patterns_json = db.Column(db.Text, nullable=False)   # JSON: [{name, regex, enabled}]
+    comment = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), default="pending") # pending / approved / rejected
+    reviewed_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    admin_comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    user = db.relationship("User", foreign_keys=[user_id])
+    reviewer = db.relationship("User", foreign_keys=[reviewed_by])
+    natco = db.relationship("Natco")
+
+class Project(db.Model):
+    __tablename__ = "projects"
+
+    id = db.Column(db.String(256), primary_key=True)   # matches TEXT PRIMARY KEY
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    natco_id = db.Column(db.Integer, db.ForeignKey("natcos.id"), nullable=True)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.String(512), nullable=True)
+    project_type = db.Column(db.String(20), default="normal")  # "normal" or "batch"
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    last_accessed = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    # relationships
+    user = db.relationship("User", back_populates="projects")
+    natco = db.relationship("Natco")
+    files = db.relationship(
+        "ProjectFile",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True
+    )
+    cpes = db.relationship(
+        "ProjectCPE",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True
+    )
+
+    def __iter__(self):
+        yield self.id
+        yield self.name
+        yield self.description
+        yield self.created_at
+        yield self.last_accessed
+
+class ProjectCPE(db.Model):
+    __tablename__ = "project_cpes"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.String(256), db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    serial = db.Column(db.String(256), nullable=False)
+    mac = db.Column(db.String(64), nullable=True)
+    date_from = db.Column(db.String(32), nullable=True)
+    date_to = db.Column(db.String(32), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    project = db.relationship("Project", back_populates="cpes")
+
+class ProjectFile(db.Model):
+    __tablename__ = "project_files"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.String(256), db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    cpe_id = db.Column(db.String(256), nullable=True)  # serial of CPE, or None for legacy
+    filename = db.Column(db.String(256), nullable=False)
+    original_name = db.Column(db.String(256), nullable=False)
+    file_path = db.Column(db.String(512), nullable=False)
+    file_size = db.Column(db.Integer, nullable=True)
+    uploaded_at = db.Column(db.DateTime, default=db.func.now())
+
+    # relationships
+    project = db.relationship("Project", back_populates="files")
+
+    def __iter__(self):
+        yield self.filename
+        yield self.file_path
+        yield self.original_name
+        yield self.file_size
+        yield self.uploaded_at
+
+class SystemSetting(db.Model):
+    __tablename__ = "system_settings"
+
+    key = db.Column(db.String(120), primary_key=True)
+    value = db.Column(db.Text, nullable=False, default="")
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+class ChatConversation(db.Model):
+    __tablename__ = "chat_conversations"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.String(256), db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    cpe_id = db.Column(db.String(256), nullable=True)
+    title = db.Column(db.String(256), nullable=False, default="New conversation")
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    messages = db.relationship(
+        "ChatMessage", back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+class ChatMessage(db.Model):
+    __tablename__ = "chat_messages"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    conversation_id = db.Column(db.Integer, db.ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False)
+    role = db.Column(db.String(20), nullable=False)  # system, user, assistant
+    content = db.Column(db.Text, nullable=False)
+    context_used = db.Column(db.Text, nullable=True)  # JSON metadata
+    created_at = db.Column(db.DateTime, default=db.func.now())
+
+    conversation = db.relationship("ChatConversation", back_populates="messages")
+
+class BatchJob(db.Model):
+    __tablename__ = "batch_jobs"
+
+    id = db.Column(db.String(64), primary_key=True)  # UUID
+    project_id = db.Column(db.String(256), db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    job_type = db.Column(db.String(32), default="cpe_processing")  # cpe_processing, pattern_indexing
+    total_cpes = db.Column(db.Integer, default=0)
+    processed_cpes = db.Column(db.Integer, default=0)
+    failed_cpes = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(20), default="queued")  # queued, processing, completed, failed, cancelled
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    # relationships
+    cpe_records = db.relationship(
+        "CPEProcessRecord",
+        back_populates="batch_job",
+        cascade="all, delete-orphan",
+        passive_deletes=True
+    )
+
+class CPEProcessRecord(db.Model):
+    __tablename__ = "cpe_process_records"
+
+    id = db.Column(db.String(64), primary_key=True)  # UUID
+    job_id = db.Column(db.String(64), db.ForeignKey("batch_jobs.id", ondelete="CASCADE"), nullable=False)
+    serial = db.Column(db.String(256), nullable=False)
+    status = db.Column(db.String(20), default="pending")  # pending, processing, completed, failed, skipped
+    celery_task_id = db.Column(db.String(64), nullable=True)  # Celery task UUID
+    error_message = db.Column(db.Text, nullable=True)
+    processing_time_sec = db.Column(db.Float, nullable=True)
+    logs_extracted = db.Column(db.Integer, default=0)
+    patterns_indexed = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    # relationships
+    batch_job = db.relationship("BatchJob", back_populates="cpe_records")
+
+
 class DBManager:
     def __init__(self, upload_root: str = BASE_DIR):
         self.db = db
         self.upload_root = upload_root
         os.makedirs(upload_root, exist_ok=True)
 
-        # ---------------- User Model ----------------
-        class User(self.db.Model, UserMixin):
-            __tablename__ = "users"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            username = self.db.Column(self.db.String(80), unique=True, nullable=False)
-            password_hash = self.db.Column(self.db.String(128), nullable=False)
-            email = self.db.Column(self.db.String(120), unique=False, nullable=True)
-            is_admin = self.db.Column(self.db.Boolean, default=False)
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-            last_login = self.db.Column(self.db.DateTime)
-
-            # relationships
-            projects = self.db.relationship(
-                "Project",
-                back_populates="user",
-                cascade="all, delete-orphan",
-                passive_deletes=True
-            )
-
-            def __iter__(self):
-                yield self.username
-                yield self.email
-                yield self.created_at
-                yield self.is_admin
-
-            # utility methods
-            def set_password(self, password: str):
-                self.password_hash = generate_password_hash(password)
-
-            def check_password(self, password: str) -> bool:
-                return check_password_hash(self.password_hash, password)
-        
+        # Expose models as instance attributes for backward compatibility
         self.User = User
-
-        # ---------------- NATCO Model ----------------
-        class Natco(self.db.Model):
-            __tablename__ = "natcos"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            code = self.db.Column(self.db.String(16), unique=True, nullable=False)  # e.g. "DE", "PL"
-            name = self.db.Column(self.db.String(120), nullable=False)              # e.g. "Germany"
-            description = self.db.Column(self.db.String(512), nullable=True)
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-
-            global_patterns = self.db.relationship(
-                "GlobalPattern", back_populates="natco",
-                cascade="all, delete-orphan", passive_deletes=True,
-            )
-
         self.Natco = Natco
-
-        # ---------------- Global Pattern Model ----------------
-        class GlobalPattern(self.db.Model):
-            __tablename__ = "global_patterns"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            natco_id = self.db.Column(self.db.Integer, self.db.ForeignKey("natcos.id", ondelete="CASCADE"), nullable=False)
-            domain = self.db.Column(self.db.String(120), nullable=False)
-            name = self.db.Column(self.db.String(256), nullable=False)
-            regex = self.db.Column(self.db.Text, nullable=False)
-            enabled = self.db.Column(self.db.Boolean, default=True)
-            created_by = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id"), nullable=True)
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-            updated_at = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
-
-            natco = self.db.relationship("Natco", back_populates="global_patterns")
-
         self.GlobalPattern = GlobalPattern
-
-        # ---------------- Pattern Submission Model ----------------
-        class PatternSubmission(self.db.Model):
-            __tablename__ = "pattern_submissions"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            user_id = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id"), nullable=False)
-            natco_id = self.db.Column(self.db.Integer, self.db.ForeignKey("natcos.id", ondelete="CASCADE"), nullable=False)
-            domain = self.db.Column(self.db.String(120), nullable=False)
-            patterns_json = self.db.Column(self.db.Text, nullable=False)   # JSON: [{name, regex, enabled}]
-            comment = self.db.Column(self.db.Text, nullable=True)
-            status = self.db.Column(self.db.String(20), default="pending") # pending / approved / rejected
-            reviewed_by = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id"), nullable=True)
-            reviewed_at = self.db.Column(self.db.DateTime, nullable=True)
-            admin_comment = self.db.Column(self.db.Text, nullable=True)
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-
-            user = self.db.relationship("User", foreign_keys=[user_id])
-            reviewer = self.db.relationship("User", foreign_keys=[reviewed_by])
-            natco = self.db.relationship("Natco")
-
         self.PatternSubmission = PatternSubmission
-
-        # ---------------- Project Model ----------------
-        class Project(self.db.Model):
-            __tablename__ = "projects"
-
-            id = self.db.Column(self.db.String(256), primary_key=True)   # matches TEXT PRIMARY KEY
-            user_id = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-            natco_id = self.db.Column(self.db.Integer, self.db.ForeignKey("natcos.id"), nullable=True)
-            name = self.db.Column(self.db.String(120), nullable=False)
-            description = self.db.Column(self.db.String(512), nullable=True)
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-            last_accessed = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
-
-            # relationships
-            user = self.db.relationship("User", back_populates="projects")
-            natco = self.db.relationship("Natco")
-            files = self.db.relationship(
-                "ProjectFile",
-                back_populates="project",
-                cascade="all, delete-orphan",
-                passive_deletes=True
-            )
-            cpes = self.db.relationship(
-                "ProjectCPE",
-                back_populates="project",
-                cascade="all, delete-orphan",
-                passive_deletes=True
-            )
-
-            def __iter__(self):
-                yield self.id
-                yield self.name
-                yield self.description
-                yield self.created_at
-                yield self.last_accessed
-
         self.Project = Project
-
-        # ---------------- Project CPE Model ----------------
-        class ProjectCPE(self.db.Model):
-            __tablename__ = "project_cpes"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            project_id = self.db.Column(self.db.String(256), self.db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-            serial = self.db.Column(self.db.String(256), nullable=False)
-            mac = self.db.Column(self.db.String(64), nullable=True)
-            date_from = self.db.Column(self.db.String(32), nullable=True)
-            date_to = self.db.Column(self.db.String(32), nullable=True)
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-
-            project = self.db.relationship("Project", back_populates="cpes")
-
         self.ProjectCPE = ProjectCPE
-
-        # ---------------- Project File Model ----------------
-        class ProjectFile(self.db.Model):
-            __tablename__ = "project_files"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            project_id = self.db.Column(self.db.String(256), self.db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-            cpe_id = self.db.Column(self.db.String(256), nullable=True)  # serial of CPE, or None for legacy
-            filename = self.db.Column(self.db.String(256), nullable=False)
-            original_name = self.db.Column(self.db.String(256), nullable=False)
-            file_path = self.db.Column(self.db.String(512), nullable=False)
-            file_size = self.db.Column(self.db.Integer, nullable=True)
-            uploaded_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-
-            # relationships
-            project = self.db.relationship("Project", back_populates="files")
-
-            def __iter__(self):
-                yield self.filename
-                yield self.file_path
-                yield self.original_name
-                yield self.file_size
-                yield self.uploaded_at
-
         self.ProjectFile = ProjectFile
-
-        # ---------------- System Setting Model ----------------
-        class SystemSetting(self.db.Model):
-            __tablename__ = "system_settings"
-
-            key = self.db.Column(self.db.String(120), primary_key=True)
-            value = self.db.Column(self.db.Text, nullable=False, default="")
-            updated_at = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
-
         self.SystemSetting = SystemSetting
-
-        # ---------------- Chat Conversation Model ----------------
-        class ChatConversation(self.db.Model):
-            __tablename__ = "chat_conversations"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            project_id = self.db.Column(self.db.String(256), self.db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-            user_id = self.db.Column(self.db.Integer, self.db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-            cpe_id = self.db.Column(self.db.String(256), nullable=True)
-            title = self.db.Column(self.db.String(256), nullable=False, default="New conversation")
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-            updated_at = self.db.Column(self.db.DateTime, default=self.db.func.now(), onupdate=self.db.func.now())
-
-            messages = self.db.relationship(
-                "ChatMessage", back_populates="conversation",
-                cascade="all, delete-orphan",
-                order_by="ChatMessage.created_at",
-            )
-
         self.ChatConversation = ChatConversation
-
-        # ---------------- Chat Message Model ----------------
-        class ChatMessage(self.db.Model):
-            __tablename__ = "chat_messages"
-
-            id = self.db.Column(self.db.Integer, primary_key=True, autoincrement=True)
-            conversation_id = self.db.Column(self.db.Integer, self.db.ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False)
-            role = self.db.Column(self.db.String(20), nullable=False)  # system, user, assistant
-            content = self.db.Column(self.db.Text, nullable=False)
-            context_used = self.db.Column(self.db.Text, nullable=True)  # JSON metadata
-            created_at = self.db.Column(self.db.DateTime, default=self.db.func.now())
-
-            conversation = self.db.relationship("ChatConversation", back_populates="messages")
-
         self.ChatMessage = ChatMessage
+        self.BatchJob = BatchJob
+        self.CPEProcessRecord = CPEProcessRecord
 
     # ---------------- Initialization ----------------
     def init_app(self, app):
         self.db.init_app(app)
 
-        # Enable SQLite foreign key enforcement (required for ON DELETE CASCADE)
+        # Enable SQLite foreign key enforcement (required for argument ON DELETE CASCADE)
         from sqlalchemy import event as sa_event
         with app.app_context():
             @sa_event.listens_for(self.db.engine, "connect")
@@ -514,11 +545,13 @@ class DBManager:
         return self.db.session.query(self.ProjectFile).filter_by(user_id=user_id).all()
 
     # ---------------- Project operations ----------------
-    def create_project(self, user_id: int, name: str, description: str) -> Tuple[bool, int, Optional[str]]:
+    def create_project(self, user_id: int, name: str, description: str, project_type: str = "normal") -> Tuple[bool, int, Optional[str]]:
         if not name:
             return False, "Project name required."
+        if project_type not in ["normal", "batch"]:
+            project_type = "normal"
         project_id = str(uuid.uuid4())
-        project = self.Project(id=project_id,user_id=user_id, name=name, description=description)
+        project = self.Project(id=project_id, user_id=user_id, name=name, description=description, project_type=project_type)
         self.db.session.add(project)
         try:
             self.db.session.commit()
@@ -621,7 +654,7 @@ class DBManager:
     def get_user_projects_admin(self, user_id: int):
         Project = self.Project
         ProjectFile = self.ProjectFile
-
+        
         # Subquery: count files per project
         file_count = (
             self.db.session.query(func.count(ProjectFile.id))
@@ -802,6 +835,128 @@ class DBManager:
                 shutil.rmtree(user_dir)
 
             return True, "User and associated projects deleted successfully"
+        except Exception as e:
+            self.db.session.rollback()
+            return False, str(e)
+
+    # ---------------- Batch Job operations ----------------
+    def create_batch_job(self, project_id: str, user_id: int, total_cpes: int, 
+                        job_type: str = "cpe_processing") -> str:
+        """Create a new batch processing job and return its ID."""
+        job_id = str(uuid.uuid4())
+        job = self.BatchJob(
+            id=job_id,
+            project_id=project_id,
+            user_id=user_id,
+            total_cpes=total_cpes,
+            job_type=job_type,
+            status="queued",
+        )
+        self.db.session.add(job)
+        self.db.session.commit()
+        logger.info(f"Created batch job {job_id} for project {project_id} with {total_cpes} CPEs")
+        return job_id
+
+    def get_batch_job(self, job_id: str) -> Optional[Any]:
+        """Get batch job by ID."""
+        return self.db.session.get(self.BatchJob, job_id)
+
+    def get_project_batch_jobs(self, project_id: str, limit: int = 50):
+        """Get all batch jobs for a project, ordered by most recent first."""
+        return (
+            self.db.session.query(self.BatchJob)
+            .filter_by(project_id=project_id)
+            .order_by(self.BatchJob.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def create_cpe_record(self, job_id: str, serial: str, celery_task_id: str = None) -> str:
+        """Create a CPE processing record and return its ID."""
+        record_id = str(uuid.uuid4())
+        record = self.CPEProcessRecord(
+            id=record_id,
+            job_id=job_id,
+            serial=serial,
+            status="pending",
+            celery_task_id=celery_task_id,
+        )
+        self.db.session.add(record)
+        self.db.session.commit()
+        return record_id
+
+    def update_batch_job_status(self, job_id: str, status: str, error_message: str = None):
+        """Update batch job status."""
+        job = self.db.session.get(self.BatchJob, job_id)
+        if not job:
+            return False
+        job.status = status
+        if error_message:
+            job.error_message = error_message
+        if status == "processing" and not job.started_at:
+            job.started_at = datetime.now()
+        if status in ("completed", "failed", "cancelled"):
+            job.completed_at = datetime.now()
+        self.db.session.commit()
+        return True
+
+    def increment_batch_job_progress(self, job_id: str, success: bool = True):
+        """Increment processed or failed CPE count."""
+        job = self.db.session.get(self.BatchJob, job_id)
+        if not job:
+            return False
+        if success:
+            job.processed_cpes += 1
+        else:
+            job.failed_cpes += 1
+        self.db.session.commit()
+        return True
+
+    def get_cpe_record(self, record_id: str) -> Optional[Any]:
+        """Get CPE process record by ID."""
+        return self.db.session.get(self.CPEProcessRecord, record_id)
+
+    def get_job_cpe_records(self, job_id: str, status: str = None):
+        """Get all CPE records for a job, optionally filtered by status."""
+        q = self.db.session.query(self.CPEProcessRecord).filter_by(job_id=job_id)
+        if status:
+            q = q.filter_by(status=status)
+        return q.order_by(self.CPEProcessRecord.created_at.asc()).all()
+
+    def update_cpe_record_status(self, record_id: str, status: str, 
+                                 error_message: str = None, 
+                                 logs_extracted: int = None,
+                                 patterns_indexed: int = None):
+        """Update CPE processing record status and metrics."""
+        record = self.db.session.get(self.CPEProcessRecord, record_id)
+        if not record:
+            return False
+        record.status = status
+        if error_message:
+            record.error_message = error_message
+        if logs_extracted is not None:
+            record.logs_extracted = logs_extracted
+        if patterns_indexed is not None:
+            record.patterns_indexed = patterns_indexed
+        if status == "processing" and not record.started_at:
+            record.started_at = datetime.now()
+        if status in ("completed", "failed", "skipped"):
+            record.completed_at = datetime.now()
+            if record.started_at:
+                delta = (record.completed_at - record.started_at).total_seconds()
+                record.processing_time_sec = delta
+        self.db.session.commit()
+        return True
+
+    def delete_batch_job(self, job_id: str) -> Tuple[bool, Optional[str]]:
+        """Delete a batch job and all its CPE records."""
+        job = self.db.session.get(self.BatchJob, job_id)
+        if not job:
+            return False, "Job not found"
+        try:
+            self.db.session.delete(job)
+            self.db.session.commit()
+            return True, "Job deleted successfully"
         except Exception as e:
             self.db.session.rollback()
             return False, str(e)

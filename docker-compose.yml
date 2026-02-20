@@ -19,6 +19,7 @@ services:
       # Bind-mount source code — no image rebuild needed for code changes
       - ./api:/app/api:ro
       - ./logai:/app/logai:ro
+      - ./services:/app/services:ro
       - ./configs:/app/configs:ro
       - ./logai_api_wsgi.py:/app/logai_api_wsgi.py:ro
       - ./run_api.py:/app/run_api.py:ro
@@ -27,17 +28,22 @@ services:
       - user_uploads:/app/user_uploads
       - bge_model:/app/bge-small-en-v1.5-local
       - logai_data:/app/data
+      # Batch CPE logs - shared with host
+      - batch_cpe_logs:/app/batch_cpe_logs
     restart: always
     env_file:
       - .env
     environment:
       - DB_PATH=/app/data/logai_users.db
       - LLM_URL=http://llm:8000/v1
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       qdrant:
         condition: service_started
       llm:
         condition: service_started
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/auth/profile')"]
       interval: 30s
@@ -56,6 +62,65 @@ services:
     restart: always
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
+
+  # Redis - message broker for Celery task queue
+  redis:
+    image: redis:7-alpine
+    container_name: logai-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Celery worker - async task processing for batch CPE jobs
+  celery-worker:
+    build: .
+    image: parsemylog-ai:latest
+    container_name: celery-worker
+    command: [
+      "celery",
+      "-A", "services.celery_worker.celery_app",
+      "worker",
+      "--loglevel=info",
+      "--concurrency=1",
+      "--max-tasks-per-child=50",
+      "--prefetch-multiplier=1"
+    ]
+    volumes:
+      # Same source code as API
+      - ./api:/app/api:ro
+      - ./logai:/app/logai:ro
+      - ./services:/app/services:ro
+      - ./configs:/app/configs:ro
+      - ./drain3.ini:/app/drain3.ini:ro
+      # Shared data with API
+      - user_uploads:/app/user_uploads
+      - bge_model:/app/bge-small-en-v1.5-local
+      - logai_data:/app/data
+      # Batch CPE logs - shared with host and API
+      - batch_cpe_logs:/app/batch_cpe_logs
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/data/logai_users.db
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - PYTHONPATH=/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      logai-api:
+        condition: service_started
 
   # ---- One-shot model downloader (runs only if model is missing) ----
   #   docker-compose --profile setup run --rm llm-init
@@ -145,6 +210,15 @@ volumes:
   logai_data:
   bge_model:
   qdrant_storage:
+  redis_data:
   llm_models:
   frontend_node_modules:
   frontend_dist:
+  # Batch CPE logs - bind mount to host directory for easy access
+  # Users can place CPE zip files here for batch processing
+  batch_cpe_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BATCH_CPE_LOGS_PATH:-./batch_cpe_logs}

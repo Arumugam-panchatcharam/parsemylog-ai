@@ -272,8 +272,8 @@ export default function LogViewerPage() {
                 <input {...getInputProps()} /><CloudUploadIcon style={{ fontSize: 20 }} className="mx-auto mb-1 opacity-50" /><p>Drop files here</p>
               </div>
             )}
-            {files?.map((f: { filename: string; file_size: number; is_viewable: boolean; file_size_mb: number }) => (
-              <div key={f.filename} className={cn("flex items-center gap-1 px-1.5 py-1 rounded text-[11px] cursor-pointer group", selectedFile === f.filename ? "bg-accent text-accent-foreground" : "hover:bg-muted")}
+            {files?.map((f: { filename: string; file_path: string; file_size: number; is_viewable: boolean; file_size_mb: number }) => (
+              <div key={f.file_path} className={cn("flex items-center gap-1 px-1.5 py-1 rounded text-[11px] cursor-pointer group", selectedFile === f.filename ? "bg-accent text-accent-foreground" : "hover:bg-muted")}
                 onClick={() => { if (f.is_viewable) { setSelectedFile(f.filename); setCurrentPage(1); } }}>
                 <DescriptionIcon style={{ fontSize: 13 }} className="text-muted-foreground shrink-0" />
                 <span className="truncate flex-1" title={f.filename}>{f.filename}</span>

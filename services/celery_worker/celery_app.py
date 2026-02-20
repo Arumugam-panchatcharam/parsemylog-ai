@@ -6,6 +6,13 @@ celery = Celery(
     "tasks",
     broker=REDIS_URL,
     backend=REDIS_URL,
+    include=["services.celery_worker.tasks"]
 )
 
-#celery.conf.task_routes = {"logai.tasks.*": {"queue": "llama"}}
+celery.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+)

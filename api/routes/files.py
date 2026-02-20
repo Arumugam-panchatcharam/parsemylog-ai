@@ -350,6 +350,7 @@ def list_files(project_id):
         is_viewable = not any(filename.lower().endswith(ext) for ext in NON_TEXT_EXTENSIONS)
         result.append({
             "filename": filename,
+            "file_path": file_path,  # Add unique path for React keys
             "original_name": original_name,
             "file_size": file_size,
             "file_size_mb": round(file_size / (1024 * 1024), 2) if file_size else 0,

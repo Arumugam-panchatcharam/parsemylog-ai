@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from flask import Blueprint, jsonify, send_file
+from flask import Blueprint, jsonify, send_file, request
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
@@ -301,29 +301,45 @@ def _collect_log_stats(project_dir: Path) -> Dict[str, Any]:
 @jwt_required()
 def get_cpe_overview(project_id):
     """
-    Aggregate summary data for ALL CPEs in a project.
+    Aggregate summary data for CPEs in a project with pagination and filtering.
+    
+    Query Parameters:
+        - page: Page number (default: 1)
+        - per_page: Items per page (default: 50, max: 100)
+        - sort_by: Field to sort by (serial, model, date_from, reboot_count, log_size)
+        - order: Sort order (asc, desc, default: asc)
+        - model: Filter by device model (exact match)
+        - serial: Filter by serial (partial match)
+        - status: Filter by processing status (parsed, not_parsed, failed)
 
     Returns:
         {
-            "cpes": [
-                {
-                    "serial": str,
-                    "mac": str,
-                    "date_from": str,
-                    "date_to": str,
-                    "device_info": {...},
-                    "key_metrics": {...},
-                    "reboot_summary": {"total": int, "reasons": {...}},
-                    "pattern_summary": {"wireless": {...}, ...},
-                    "log_stats": {"file_count": int, "total_size_mb": float}
-                }
-            ]
+            "cpes": [...],
+            "pagination": {
+                "page": 1,
+                "per_page": 50,
+                "total_items": 471,
+                "total_pages": 10,
+                "has_next": true,
+                "has_prev": false
+            }
         }
     """
     user_id = get_user_id()
     _, err = _verify_project(project_id, user_id)
     if err:
         return err
+
+    # Parse query parameters
+    page = request.args.get("page", 1, type=int)
+    per_page = min(request.args.get("per_page", 50, type=int), 100)
+    sort_by = request.args.get("sort_by", "serial")
+    order = request.args.get("order", "asc")
+    
+    # Filters
+    filter_model = request.args.get("model")
+    filter_serial = request.args.get("serial")
+    filter_status = request.args.get("status")
 
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
 
@@ -350,9 +366,17 @@ def get_cpe_overview(project_id):
                 "pattern_summary": pattern_summary,
                 "log_stats": log_stats,
             }],
+            "pagination": {
+                "page": 1,
+                "per_page": 1,
+                "total_items": 1,
+                "total_pages": 1,
+                "has_next": False,
+                "has_prev": False,
+            }
         }), 200
 
-    # Multi-CPE project
+    # Multi-CPE project: collect data for all CPEs
     result_cpes = []
     for cpe in cpes:
         cpe_dir = base_dir / cpe.serial
@@ -363,9 +387,13 @@ def get_cpe_overview(project_id):
         pattern_summary = _collect_pattern_summary(cpe_dir)
         log_stats = _collect_log_stats(cpe_dir)
 
-        result_cpes.append({
+        # Determine processing status
+        status = "parsed" if info.get("summary", {}).get("parsed_reports", 0) > 0 else "not_parsed"
+        
+        cpe_data = {
             "serial": cpe.serial,
             "mac": cpe.mac or info.get("device_info", {}).get("mac", "N/A"),
+            "model": info.get("device_info", {}).get("model", "N/A"),
             "date_from": cpe.date_from,
             "date_to": cpe.date_to,
             "device_info": info.get("device_info", {}),
@@ -374,9 +402,58 @@ def get_cpe_overview(project_id):
             "reboot_summary": reboot_summary,
             "pattern_summary": pattern_summary,
             "log_stats": log_stats,
-        })
+            "status": status,
+            "reboot_count": reboot_summary.get("total", 0),
+            "log_size_mb": log_stats.get("total_size_mb", 0),
+        }
+        
+        result_cpes.append(cpe_data)
 
-    return jsonify({"cpes": result_cpes}), 200
+    # Apply filters
+    filtered_cpes = result_cpes
+    
+    if filter_model:
+        filtered_cpes = [c for c in filtered_cpes if c.get("model", "").lower() == filter_model.lower()]
+    
+    if filter_serial:
+        filtered_cpes = [c for c in filtered_cpes if filter_serial.lower() in c.get("serial", "").lower()]
+    
+    if filter_status:
+        filtered_cpes = [c for c in filtered_cpes if c.get("status") == filter_status]
+
+    # Apply sorting
+    reverse = (order == "desc")
+    sort_key_map = {
+        "serial": lambda x: x.get("serial", ""),
+        "model": lambda x: x.get("model", ""),
+        "date_from": lambda x: x.get("date_from") or "",
+        "reboot_count": lambda x: x.get("reboot_count", 0),
+        "log_size": lambda x: x.get("log_size_mb", 0),
+    }
+    
+    if sort_by in sort_key_map:
+        filtered_cpes.sort(key=sort_key_map[sort_by], reverse=reverse)
+
+    # Calculate pagination
+    total_items = len(filtered_cpes)
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    page = max(1, min(page, total_pages))  # Clamp page to valid range
+    
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_cpes = filtered_cpes[start_idx:end_idx]
+
+    return jsonify({
+        "cpes": paginated_cpes,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+        },
+    }), 200
 
 
 # ---------------------------------------------------------------------------

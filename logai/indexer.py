@@ -113,6 +113,7 @@ class RagIndexer:
         rg_patterns_dir: Optional[Path] = None,
         model_path: Optional[str] = None,
         shared_model: Optional[Any] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the RAG indexer.
@@ -131,12 +132,15 @@ class RagIndexer:
             model_path: Optional local path for the embedding model.
             shared_model: Optional pre-loaded SentenceTransformer instance.
                         Strongly recommended for multi-user deployments.
+            extra_metadata: Optional metadata dict to attach to all indexed vectors
+                          (e.g., {"cpe_serial": "CP2318ADA7F"} for multi-CPE projects).
 
         Raises:
             RuntimeError: If ripgrep binary is not available.
         """
         self.project_dir = project_dir
         self.project_dir.mkdir(parents=True, exist_ok=True)
+        self.extra_metadata = extra_metadata or {}
 
         # Derive collection name from project directory if not specified
         if collection_name is None:
@@ -298,7 +302,7 @@ class RagIndexer:
                         })
 
                     if templates:
-                        self.embed_store.upsert_templates(templates)
+                        self.embed_store.upsert_templates(templates, extra_metadata=self.extra_metadata)
 
                     update_file_status(self.project_dir, original_name, "indexed")
                     results[original_name] = "indexed"
@@ -456,7 +460,7 @@ class RagIndexer:
             f"[RagIndexer] Upserting {len(templates)} templates "
             f"for domain '{domain}' (rg+Drain3)"
         )
-        self.embed_store.upsert_templates(templates)
+        self.embed_store.upsert_templates(templates, extra_metadata=self.extra_metadata)
         return len(templates)
 
     def _extract_templates_with_rg_context(

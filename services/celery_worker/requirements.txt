@@ -1,4 +1,9 @@
-dash
-celery
-redis
-requests
+# Celery and dependencies for async task processing
+celery==5.4.0
+redis==5.2.1
+
+# Celery dependencies (automatically installed but pinned for consistency)
+kombu==5.4.2
+vine==5.1.0
+amqp==5.3.1
+billiard==4.2.1

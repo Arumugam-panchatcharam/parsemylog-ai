@@ -20,8 +20,8 @@ export const authApi = {
 // ---------- Projects ----------
 export const projectsApi = {
   list: () => api.get("/projects/"),
-  create: (name: string, description?: string, natcoId?: number | null) =>
-    api.post("/projects/", { name, description, natco_id: natcoId || undefined }),
+  create: (name: string, description?: string, natcoId?: number | null, projectType?: "normal" | "batch") =>
+    api.post("/projects/", { name, description, natco_id: natcoId || undefined, project_type: projectType || "normal" }),
   get: (id: string) => api.get(`/projects/${id}`),
   update: (id: string, data: { name?: string; description?: string; natco_id?: number | null }) =>
     api.put(`/projects/${id}`, data),
@@ -31,6 +31,63 @@ export const projectsApi = {
 // ---------- CPEs ----------
 export const cpesApi = {
   list: (projectId: string) => api.get(`/projects/${projectId}/cpes`),
+};
+
+// ---------- Batch Jobs ----------
+export interface BatchJob {
+  job_id: string;
+  status: "queued" | "processing" | "completed" | "failed" | "cancelled";
+  job_type: string;
+  total_cpes: number;
+  processed_cpes: number;
+  failed_cpes: number;
+  progress_percent: number;
+  error_message?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  elapsed_sec?: number;
+  eta_sec?: number;
+}
+
+export interface CPEProcessRecord {
+  record_id: string;
+  serial: string;
+  status: "pending" | "processing" | "completed" | "failed" | "skipped";
+  celery_task_id?: string;
+  logs_extracted: number;
+  patterns_indexed: number;
+  processing_time_sec?: number;
+  error_message?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export const batchJobsApi = {
+  create: (projectId: string, cpeFolderPath: string, jobType = "cpe_processing") =>
+    api.post<{ job_id: string; status: string; total_cpes: number; message: string; celery_task_id: string }>(
+      `/projects/${projectId}/batch-jobs/create`,
+      { cpe_folder_path: cpeFolderPath, job_type: jobType }
+    ),
+  get: (projectId: string, jobId: string) =>
+    api.get<BatchJob>(`/projects/${projectId}/batch-jobs/${jobId}`),
+  list: (projectId: string, limit = 50) =>
+    api.get<{ jobs: BatchJob[] }>(`/projects/${projectId}/batch-jobs`, { params: { limit } }),
+  listCPEs: (projectId: string, jobId: string, status?: string) =>
+    api.get<{ cpes: CPEProcessRecord[] }>(`/projects/${projectId}/batch-jobs/${jobId}/cpes`, {
+      params: status ? { status } : undefined,
+    }),
+  retry: (projectId: string, jobId: string) =>
+    api.post<{ message: string; retried_count: number }>(
+      `/projects/${projectId}/batch-jobs/${jobId}/retry`
+    ),
+  cancel: (projectId: string, jobId: string) =>
+    api.post<{ message: string; status: string; revoked_tasks: number }>(
+      `/projects/${projectId}/batch-jobs/${jobId}/cancel`
+    ),
+  delete: (projectId: string, jobId: string) =>
+    api.delete<{ message: string }>(`/projects/${projectId}/batch-jobs/${jobId}`),
 };
 
 // ---------- Files ----------
@@ -226,9 +283,50 @@ export interface PatternScanResult {
   elapsed_ms?: number;
   domains?: Record<string, PatternScanDomain>;
 }
+
+// ---------- CPE Overview ----------
+export interface CPEOverviewData {
+  serial: string;
+  mac: string;
+  model: string;
+  date_from?: string;
+  date_to?: string;
+  device_info: Record<string, any>;
+  key_metrics: Record<string, any>;
+  summary: Record<string, any>;
+  reboot_summary: { total: number; reasons: Record<string, number> };
+  pattern_summary: Record<string, any>;
+  log_stats: { file_count: number; total_size_mb: number };
+  status: "parsed" | "not_parsed" | "failed";
+  reboot_count: number;
+  log_size_mb: number;
+}
+
+export interface CPEOverviewResponse {
+  cpes: CPEOverviewData[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total_items: number;
+    total_pages: number;
+    has_next: boolean;
+    has_prev: boolean;
+  };
+}
+
 export const cpeOverviewApi = {
-  getSummary: (projectId: string) =>
-    api.get(`/projects/${projectId}/cpe-overview`),
+  getSummary: (
+    projectId: string,
+    params?: {
+      page?: number;
+      per_page?: number;
+      sort_by?: "serial" | "model" | "date_from" | "reboot_count" | "log_size";
+      order?: "asc" | "desc";
+      model?: string;
+      serial?: string;
+      status?: "parsed" | "not_parsed" | "failed";
+    }
+  ) => api.get<CPEOverviewResponse>(`/projects/${projectId}/cpe-overview`, { params }),
   getPatternScan: (projectId: string) =>
     api.get<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
   runPatternScan: (projectId: string) =>

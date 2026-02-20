@@ -328,7 +328,7 @@ class QdrantEmbeddingStore:
         digest = hashlib.md5(key.encode("utf-8")).hexdigest()
         return str(uuid.UUID(digest))
 
-    def upsert_templates(self, templates: List[Dict[str, Any]]) -> int:
+    def upsert_templates(self, templates: List[Dict[str, Any]], extra_metadata: Optional[Dict[str, Any]] = None) -> int:
         """
         Upsert log pattern templates with their embeddings to Qdrant.
 
@@ -348,6 +348,8 @@ class QdrantEmbeddingStore:
                 - domain (str): Log domain (e.g., "wireless") (required).
                 - count (int): Occurrence count (optional, default: 0).
                 - parquet_path (str): Path to cached parquet file (optional).
+            extra_metadata: Optional additional metadata to attach to all vectors
+                          (e.g., {"cpe_serial": "CP2318ADA7F"} for multi-CPE projects).
 
         Returns:
             Number of points upserted.
@@ -355,6 +357,8 @@ class QdrantEmbeddingStore:
         if not templates:
             logger.debug("[QdrantEmbeddingStore] No templates to upsert")
             return 0
+
+        extra_metadata = extra_metadata or {}
 
         # Extract template texts for batch embedding
         logger.debug(f"[QdrantEmbeddingStore] Encoding {len(templates)} templates")
@@ -372,7 +376,7 @@ class QdrantEmbeddingStore:
                 template.get("domain", ""),
             )
 
-            # Prepare metadata payload
+            # Prepare metadata payload (merge extra_metadata)
             payload = {
                 "template": template["template"],
                 "count": template.get("count", 0),
@@ -381,6 +385,7 @@ class QdrantEmbeddingStore:
                 "parquet_path": template.get("parquet_path", ""),
                 "source": template.get("source", ""),
                 "rg_context": template.get("rg_context", {}),
+                **extra_metadata,  # Merge extra metadata (e.g., cpe_serial)
             }
 
             points.append(

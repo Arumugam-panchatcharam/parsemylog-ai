@@ -1,0 +1,287 @@
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useParams, useNavigate } from "react-router-dom";
+import { batchJobsApi, type CPEProcessRecord } from "@/api/endpoints";
+import CircularProgress from "@mui/material/CircularProgress";
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import CancelIcon from "@mui/icons-material/Cancel";
+import ReplayIcon from "@mui/icons-material/Replay";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import ErrorIcon from "@mui/icons-material/Error";
+import PendingIcon from "@mui/icons-material/Pending";
+import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
+
+export default function BatchJobDetailPage() {
+  const { projectId, jobId } = useParams<{ projectId: string; jobId: string }>();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<string | undefined>();
+
+  // Fetch job details
+  const { data: jobData, isLoading: jobLoading } = useQuery({
+    queryKey: ["batchJob", projectId, jobId],
+    queryFn: () => batchJobsApi.get(projectId!, jobId!),
+    enabled: !!projectId && !!jobId,
+    refetchInterval: 3000, // Poll every 3 seconds
+  });
+
+  // Fetch CPE records
+  const { data: cpesData, isLoading: cpesLoading } = useQuery({
+    queryKey: ["batchJobCPEs", projectId, jobId, statusFilter],
+    queryFn: () => batchJobsApi.listCPEs(projectId!, jobId!, statusFilter),
+    enabled: !!projectId && !!jobId,
+    refetchInterval: 3000,
+  });
+
+  const job = jobData?.data;
+  const cpes = cpesData?.data?.cpes || [];
+
+  // Retry failed CPEs mutation
+  const retryMutation = useMutation({
+    mutationFn: () => batchJobsApi.retry(projectId!, jobId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchJob", projectId, jobId] });
+      queryClient.invalidateQueries({ queryKey: ["batchJobCPEs", projectId, jobId] });
+    },
+  });
+
+  // Cancel job mutation
+  const cancelMutation = useMutation({
+    mutationFn: () => batchJobsApi.cancel(projectId!, jobId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["batchJob", projectId, jobId] });
+    },
+  });
+
+  const formatDuration = (seconds?: number) => {
+    if (!seconds) return "N/A";
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+    if (minutes > 0) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "completed":
+        return <CheckCircleIcon className="text-green-600" style={{ fontSize: 20 }} />;
+      case "failed":
+        return <ErrorIcon className="text-red-600" style={{ fontSize: 20 }} />;
+      case "processing":
+        return <CircularProgress size={16} className="text-blue-600" />;
+      case "pending":
+        return <HourglassEmptyIcon className="text-yellow-600" style={{ fontSize: 20 }} />;
+      case "skipped":
+        return <PendingIcon className="text-gray-600" style={{ fontSize: 20 }} />;
+      default:
+        return null;
+    }
+  };
+
+  if (jobLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <CircularProgress />
+      </div>
+    );
+  }
+
+  if (!job) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <p className="text-red-600">Job not found</p>
+      </div>
+    );
+  }
+
+  const failedCPEs = cpes.filter((c) => c.status === "failed");
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <button
+          onClick={() => navigate(`/projects/${projectId}/batch-jobs`)}
+          className="p-2 hover:bg-muted rounded-lg transition-colors"
+        >
+          <ArrowBackIcon />
+        </button>
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold text-foreground">Batch Job Details</h1>
+          <p className="text-sm text-muted-foreground mt-1">Job ID: {jobId}</p>
+        </div>
+        {job.status === "processing" && (
+          <button
+            onClick={() => {
+              if (confirm("Cancel this batch job?")) {
+                cancelMutation.mutate();
+              }
+            }}
+            disabled={cancelMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 border border-red-600 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+          >
+            <CancelIcon style={{ fontSize: 20 }} />
+            Cancel Job
+          </button>
+        )}
+        {failedCPEs.length > 0 && (
+          <button
+            onClick={() => retryMutation.mutate()}
+            disabled={retryMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            <ReplayIcon style={{ fontSize: 20 }} />
+            Retry Failed ({failedCPEs.length})
+          </button>
+        )}
+      </div>
+
+      {/* Job Status Card */}
+      <div className="bg-card border border-border rounded-xl p-6 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Status</div>
+            <div className="text-2xl font-semibold capitalize">{job.status}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Progress</div>
+            <div className="text-2xl font-semibold">
+              {job.processed_cpes + job.failed_cpes} / {job.total_cpes}
+            </div>
+            <div className="w-full bg-muted rounded-full h-2 mt-2">
+              <div
+                className="bg-primary h-2 rounded-full transition-all duration-300"
+                style={{ width: `${job.progress_percent}%` }}
+              />
+            </div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">Success Rate</div>
+            <div className="text-2xl font-semibold">
+              {job.total_cpes > 0
+                ? ((job.processed_cpes / (job.processed_cpes + job.failed_cpes || 1)) * 100).toFixed(1)
+                : 0}
+              %
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-border">
+          <div>
+            <div className="text-sm text-muted-foreground">Completed</div>
+            <div className="text-xl font-semibold text-green-600">{job.processed_cpes}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">Failed</div>
+            <div className="text-xl font-semibold text-red-600">{job.failed_cpes}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">Elapsed Time</div>
+            <div className="text-xl font-semibold">{formatDuration(job.elapsed_sec)}</div>
+          </div>
+          {job.eta_sec && job.status === "processing" && (
+            <div>
+              <div className="text-sm text-muted-foreground">ETA</div>
+              <div className="text-xl font-semibold">{formatDuration(job.eta_sec)}</div>
+            </div>
+          )}
+        </div>
+
+        {job.error_message && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
+            <strong>Error:</strong> {job.error_message}
+          </div>
+        )}
+      </div>
+
+      {/* CPE Records */}
+      <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <div className="p-4 border-b border-border flex items-center justify-between">
+          <h2 className="text-lg font-semibold">CPE Processing Records</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setStatusFilter(undefined)}
+              className={`px-3 py-1 rounded text-sm ${
+                !statusFilter ? "bg-primary text-primary-foreground" : "bg-muted"
+              }`}
+            >
+              All ({cpes.length})
+            </button>
+            <button
+              onClick={() => setStatusFilter("completed")}
+              className={`px-3 py-1 rounded text-sm ${
+                statusFilter === "completed" ? "bg-green-600 text-white" : "bg-muted"
+              }`}
+            >
+              Completed
+            </button>
+            <button
+              onClick={() => setStatusFilter("failed")}
+              className={`px-3 py-1 rounded text-sm ${
+                statusFilter === "failed" ? "bg-red-600 text-white" : "bg-muted"
+              }`}
+            >
+              Failed
+            </button>
+            <button
+              onClick={() => setStatusFilter("processing")}
+              className={`px-3 py-1 rounded text-sm ${
+                statusFilter === "processing" ? "bg-blue-600 text-white" : "bg-muted"
+              }`}
+            >
+              Processing
+            </button>
+          </div>
+        </div>
+
+        {cpesLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <CircularProgress />
+          </div>
+        ) : cpes.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            No CPE records found
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left px-4 py-3 text-sm font-medium">Serial</th>
+                  <th className="text-left px-4 py-3 text-sm font-medium">Status</th>
+                  <th className="text-right px-4 py-3 text-sm font-medium">Logs</th>
+                  <th className="text-right px-4 py-3 text-sm font-medium">Patterns</th>
+                  <th className="text-right px-4 py-3 text-sm font-medium">Duration</th>
+                  <th className="text-left px-4 py-3 text-sm font-medium">Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cpes.map((cpe: CPEProcessRecord) => (
+                  <tr key={cpe.record_id} className="border-t border-border hover:bg-muted/30">
+                    <td className="px-4 py-3 font-mono text-sm">{cpe.serial}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {getStatusIcon(cpe.status)}
+                        <span className="text-sm capitalize">{cpe.status}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right text-sm">{cpe.logs_extracted || 0}</td>
+                    <td className="px-4 py-3 text-right text-sm">{cpe.patterns_indexed || 0}</td>
+                    <td className="px-4 py-3 text-right text-sm">
+                      {cpe.processing_time_sec ? `${cpe.processing_time_sec.toFixed(1)}s` : "-"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-red-600 max-w-xs truncate">
+                      {cpe.error_message || "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

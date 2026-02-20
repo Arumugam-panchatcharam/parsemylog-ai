@@ -151,6 +151,7 @@ def create_api_app():
     from api.routes.natco import natco_bp
     from api.routes.chat import chat_bp
     from api.routes.pcap import pcap_bp
+    from api.routes.batch_jobs import batch_jobs_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
@@ -166,6 +167,7 @@ def create_api_app():
     app.register_blueprint(natco_bp, url_prefix="/api/natcos")
     app.register_blueprint(chat_bp, url_prefix="/api/projects")
     app.register_blueprint(pcap_bp, url_prefix="/api/pcap")
+    app.register_blueprint(batch_jobs_bp, url_prefix="/api/projects")
 
     # Health check
     @app.route("/api/health")

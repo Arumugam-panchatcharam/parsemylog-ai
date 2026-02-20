@@ -12,6 +12,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import CalendarTodayIcon from "@mui/icons-material/CalendarToday";
 import PublicIcon from "@mui/icons-material/Public";
+import WorkIcon from "@mui/icons-material/Work";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -23,6 +24,7 @@ export default function DashboardPage() {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newNatcoId, setNewNatcoId] = useState<number | null>(null);
+  const [newProjectType, setNewProjectType] = useState<"normal" | "batch">("normal");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const { data: projects, isLoading, refetch } = useQuery({
@@ -36,13 +38,14 @@ export default function DashboardPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => projectsApi.create(newName, newDesc, newNatcoId),
+    mutationFn: () => projectsApi.create(newName, newDesc, newNatcoId, newProjectType),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
       setNewNatcoId(null);
+      setNewProjectType("normal");
     },
   });
 
@@ -104,7 +107,7 @@ export default function DashboardPage() {
 
       {/* Project Grid */}
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-        {projects?.map((p: { id: string; name: string; description: string; created_at: string; natco?: { code: string; name: string } | null }) => (
+        {projects?.map((p: { id: string; name: string; description: string; created_at: string; project_type?: string; natco?: { code: string; name: string } | null }) => (
           <div key={p.id} className="bg-card border border-border rounded-2xl mat-card">
             <div className="p-4">
               <div className="flex items-start justify-between mb-2">
@@ -113,6 +116,11 @@ export default function DashboardPage() {
                   {p.name}
                 </h3>
                 <div className="flex items-center gap-1">
+                  {p.project_type === "batch" && (
+                    <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded text-[10px] font-bold" title="Batch Processing Project">
+                      BATCH
+                    </span>
+                  )}
                   {p.natco && (
                     <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold" title={p.natco.name}>
                       {p.natco.code}
@@ -130,17 +138,32 @@ export default function DashboardPage() {
               <p className="text-xs text-muted-foreground mb-3 line-clamp-2 min-h-[2rem]">
                 {p.description || "No description"}
               </p>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarTodayIcon style={{ fontSize: 13 }} />
                   {formatDate(p.created_at)}
                 </span>
-                <button
-                  onClick={() => openProject(p.id, p.name)}
-                  className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-opacity"
-                >
-                  Open
-                </button>
+                <div className="flex gap-2">
+                  {p.project_type === "batch" && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}/batch-jobs`);
+                      }}
+                      className="px-3 py-1.5 text-xs bg-muted text-foreground rounded-lg font-medium hover:bg-muted/80 transition-colors flex items-center gap-1"
+                      title="Batch Jobs"
+                    >
+                      <WorkIcon style={{ fontSize: 14 }} />
+                      Jobs
+                    </button>
+                  )}
+                  <button
+                    onClick={() => openProject(p.id, p.name)}
+                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-opacity"
+                  >
+                    Open
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -190,6 +213,39 @@ export default function DashboardPage() {
                   <p className="text-xs text-muted-foreground mt-1">Assign a NATCO to use global pattern configurations for this country.</p>
                 </div>
               )}
+              <div>
+                <label className="block text-sm font-medium mb-1">Project Type</label>
+                <div className="space-y-2">
+                  <label className="flex items-start gap-2 cursor-pointer p-2 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                    <input
+                      type="radio"
+                      name="projectType"
+                      value="normal"
+                      checked={newProjectType === "normal"}
+                      onChange={(e) => setNewProjectType(e.target.value as "normal" | "batch")}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Normal Processing</div>
+                      <div className="text-xs text-muted-foreground">Upload log files via UI for analysis</div>
+                    </div>
+                  </label>
+                  <label className="flex items-start gap-2 cursor-pointer p-2 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                    <input
+                      type="radio"
+                      name="projectType"
+                      value="batch"
+                      checked={newProjectType === "batch"}
+                      onChange={(e) => setNewProjectType(e.target.value as "normal" | "batch")}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">Batch Processing</div>
+                      <div className="text-xs text-muted-foreground">Process large batches of CPE logs from server</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
               <div className="flex gap-2 pt-2">
                 <button type="submit" disabled={createMutation.isPending} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">
                   {createMutation.isPending ? "Creating..." : "Create Project"}

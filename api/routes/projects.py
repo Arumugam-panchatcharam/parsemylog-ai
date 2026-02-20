@@ -36,6 +36,7 @@ def list_projects():
             "id": p.id,
             "name": p.name,
             "description": p.description or "",
+            "project_type": p.project_type or "normal",
             "created_at": str(p.created_at) if p.created_at else None,
             "last_accessed": str(p.last_accessed) if p.last_accessed else None,
             "natco_id": p.natco_id,
@@ -51,7 +52,7 @@ def create_project():
     """
     Create a new project.
 
-    Body: { "name": str, "description"?: str, "natco_id"?: int }
+    Body: { "name": str, "description"?: str, "natco_id"?: int, "project_type"?: str }
     Returns: { "id", "name", "message" }
     """
     user_id = get_user_id()
@@ -60,9 +61,13 @@ def create_project():
     name = data.get("name", "").strip()
     description = data.get("description", "").strip()
     natco_id = data.get("natco_id")
+    project_type = data.get("project_type", "normal")  # "normal" or "batch"
 
     if not name:
         return jsonify({"error": "Project name is required"}), 400
+    
+    if project_type not in ["normal", "batch"]:
+        return jsonify({"error": "Invalid project type. Must be 'normal' or 'batch'"}), 400
 
     # Validate natco_id if provided
     if natco_id is not None:
@@ -71,7 +76,7 @@ def create_project():
         if not natco:
             return jsonify({"error": "NATCO not found"}), 400
 
-    success, project_id, message = dbm.create_project(user_id, name, description)
+    success, project_id, message = dbm.create_project(user_id, name, description, project_type)
 
     if not success:
         return jsonify({"error": message}), 400
@@ -86,6 +91,7 @@ def create_project():
     return jsonify({
         "id": project_id,
         "name": name,
+        "project_type": project_type,
         "message": "Project created successfully",
     }), 201
 
@@ -118,6 +124,7 @@ def get_project(project_id):
         "id": project.id,
         "name": project.name,
         "description": project.description or "",
+        "project_type": project.project_type or "normal",
         "created_at": str(project.created_at) if project.created_at else None,
         "last_accessed": str(project.last_accessed) if project.last_accessed else None,
         "user_id": project.user_id,
