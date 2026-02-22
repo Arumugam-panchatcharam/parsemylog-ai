@@ -331,7 +331,7 @@ export default function PatternPage() {
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-sm font-semibold">Selected Template</h3>
             <button
-              onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedTemplate)}`)}
+              onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedTemplate)}&domain=${encodeURIComponent(selectedDomain)}`)}
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
             >
               <ManageSearchIcon style={{ fontSize: 14 }} /> Add to Pattern Analyzer
@@ -607,16 +607,28 @@ export default function PatternPage() {
                               {pattern.cpe_count} / {aggregatedData.total_cpes}
                             </td>
                             <td className="px-3 py-2 text-center">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleHidePattern(pattern.template);
-                                }}
-                                className="p-1 hover:bg-muted rounded"
-                                title="Hide pattern"
-                              >
-                                <VisibilityOffIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
-                              </button>
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(pattern.template)}&domain=${encodeURIComponent(selectedDomain)}`);
+                                  }}
+                                  className="p-1 hover:bg-muted rounded"
+                                  title="Add to Pattern Analyzer"
+                                >
+                                  <ManageSearchIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleHidePattern(pattern.template);
+                                  }}
+                                  className="p-1 hover:bg-muted rounded"
+                                  title="Hide pattern"
+                                >
+                                  <VisibilityOffIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -642,15 +654,23 @@ export default function PatternPage() {
                         <p className="font-mono text-[11px] bg-muted p-2 rounded break-all">
                           {selectedPatternDetails.template}
                         </p>
-                        <div className="flex gap-4 mt-3 text-xs">
-                          <div>
-                            <span className="text-muted-foreground">Total Occurrences:</span>{" "}
-                            <strong>{selectedPatternDetails.occurrence_count.toLocaleString()}</strong>
+                        <div className="flex flex-wrap items-center gap-3 mt-3">
+                          <div className="flex gap-4 text-xs">
+                            <div>
+                              <span className="text-muted-foreground">Total Occurrences:</span>{" "}
+                              <strong>{selectedPatternDetails.occurrence_count.toLocaleString()}</strong>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">CPEs with pattern:</span>{" "}
+                              <strong>{selectedPatternDetails.cpe_count} / {aggregatedData.total_cpes}</strong>
+                            </div>
                           </div>
-                          <div>
-                            <span className="text-muted-foreground">CPEs with pattern:</span>{" "}
-                            <strong>{selectedPatternDetails.cpe_count} / {aggregatedData.total_cpes}</strong>
-                          </div>
+                          <button
+                            onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedPatternDetails.template)}&domain=${encodeURIComponent(selectedDomain)}`)}
+                            className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
+                          >
+                            <ManageSearchIcon style={{ fontSize: 14 }} /> Add to Pattern Analyzer
+                          </button>
                         </div>
                       </div>
                       <button

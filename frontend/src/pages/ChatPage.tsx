@@ -310,9 +310,9 @@ export default function ChatPage() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
         <SmartToyIcon style={{ fontSize: 64, opacity: 0.3 }} />
-        <h2 className="text-xl font-semibold text-muted-foreground">LLM Server Unavailable</h2>
+        <h2 className="text-xl font-semibold text-muted-foreground">AI Chat Unavailable</h2>
         <p className="text-sm text-muted-foreground max-w-md">
-          The LLM server is not responding. Please check that the LLM service is running and try again.
+          OpenRouter is not configured or unavailable. Set OPENROUTER_API_KEY in .env and try again.
         </p>
       </div>
     );

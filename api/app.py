@@ -114,7 +114,6 @@ def create_api_app():
         seconds=int(os.environ.get("JWT_REFRESH_EXPIRES", 86400 * 30))
     )
     app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2GB max upload
-    app.config["LLM_URL"] = os.environ.get("LLM_URL", "http://localhost:8000/v1")
 
     app.secret_key = hashlib.sha256(f"logai-flask-{db_path}".encode()).hexdigest()
 

@@ -1,9 +1,10 @@
 """
-LLM Service — Client wrapper, evidence-grounded prompt builder, request queue.
+LLM Service — OpenRouter client, evidence-grounded prompt builder, request queue.
 ================================================================================
 
-Connects to a local llama-cpp-python server (OpenAI-compatible API) and
-builds evidence-grounded prompts from the parsed pipeline data.
+Uses OpenRouter's API (free-tier models) with fallback across multiple models
+on rate limit or provider failure. Builds evidence-grounded prompts from the
+parsed pipeline data.
 """
 
 import json
@@ -21,10 +22,35 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-LLM_URL = os.environ.get("LLM_URL", "http://localhost:8000/v1")
+OPENROUTER_BASE_URL = os.environ.get(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+).rstrip("/")
+OPENROUTER_API_KEY = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+
+# Default free models (ordered; first is preferred). Override with OPENROUTER_MODELS.
+_DEFAULT_OPENROUTER_MODELS = [
+    "qwen/qwen3-coder:free",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "deepseek/deepseek-r1-0528:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-3-27b-it:free",
+    "mistralai/mistral-small-3.1-24b-instruct-2507:free",
+]
+
+def _get_openrouter_models() -> List[str]:
+    """Ordered list of OpenRouter model IDs to try (with fallback)."""
+    raw = os.environ.get("OPENROUTER_MODELS", "").strip()
+    if raw:
+        return [m.strip() for m in raw.split(",") if m.strip()]
+    return _DEFAULT_OPENROUTER_MODELS.copy()
+
 MAX_CONCURRENT = int(os.environ.get("LLM_MAX_CONCURRENT", "2"))
-MAX_HISTORY_MESSAGES = 20  # Conversation history window
+MAX_HISTORY_MESSAGES = int(os.environ.get("LLM_MAX_HISTORY_MESSAGES", "20"))  # Conversation memory window for follow-ups
 MAX_CONTEXT_CHARS = 6000   # Approx chars of log evidence injected
+REQUEST_TIMEOUT = 180
+
+# Retryable HTTP status codes (try next model)
+RETRYABLE_STATUS_CODES = {429, 502, 503}
 
 _semaphore = threading.Semaphore(MAX_CONCURRENT)
 _queue_size = 0
@@ -36,26 +62,21 @@ _queue_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 def is_available() -> bool:
-    """Check if the LLM server is reachable and has a model loaded."""
-    try:
-        resp = requests.get(f"{LLM_URL}/models", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
+    """OpenRouter is available if API key is set (no network check to avoid rate limits)."""
+    return bool(OPENROUTER_API_KEY)
 
 
 def get_model_info() -> Optional[Dict[str, Any]]:
-    """Return model metadata from the LLM server."""
-    try:
-        resp = requests.get(f"{LLM_URL}/models", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            models = data.get("data", [])
-            if models:
-                return models[0]
+    """Return provider/model info for the UI (no external call)."""
+    if not OPENROUTER_API_KEY:
         return None
-    except Exception:
-        return None
+    models = _get_openrouter_models()
+    first = models[0] if models else "openrouter"
+    return {
+        "id": first,
+        "object": "provider",
+        "provider": "OpenRouter (free)",
+    }
 
 
 def is_enabled(dbm) -> bool:
@@ -105,6 +126,7 @@ Do NOT speculate or invent information not present in the logs. If you are uncer
 {evidence}
 
 === INSTRUCTIONS ===
+- Use the conversation history (previous user and assistant messages) to understand follow-up questions. Answer in context; e.g. "that", "it", "the reboots" refer to earlier topics in this conversation.
 - Provide thorough and complete answers. Cover ALL relevant evidence sections (device info, reboots, telemetry, error patterns) when summarizing.
 - When referencing events, include timestamps and filenames.
 - If asked about something not covered by the evidence, say "I don't have enough log data to answer that."
@@ -318,71 +340,121 @@ def build_messages(system_prompt: str, history: list,
 
 
 # ---------------------------------------------------------------------------
-# Chat completion (non-streaming to LLM, chunked yield for SSE)
+# OpenRouter chat completion with fallback (non-streaming request, chunked yield for SSE)
 # ---------------------------------------------------------------------------
+
+def _is_retryable_error(resp: Optional[requests.Response], exc: Optional[Exception]) -> bool:
+    """True if we should try the next model (rate limit, gateway error, timeout, connection)."""
+    if resp is not None and resp.status_code in RETRYABLE_STATUS_CODES:
+        return True
+    if exc is not None:
+        if isinstance(exc, requests.exceptions.Timeout):
+            return True
+        if isinstance(exc, requests.exceptions.RequestException):
+            return True
+    return False
+
 
 def chat_completion_stream(messages: List[Dict[str, str]],
                            temperature: float = 0.4,
                            max_tokens: int = 2048) -> Generator[str, None, None]:
     """
-    Call the LLM server and yield the response in chunks for SSE delivery.
-
-    Uses a non-streaming request to the LLM to avoid connection drops
-    caused by Werkzeug/WSGI closing the chained streaming pipeline.
-    The complete response is fetched first, then yielded in line-based
-    chunks to provide a progressive display experience.
+    Call OpenRouter and yield the response in chunks for SSE delivery.
+    Tries each model in OPENROUTER_MODELS in order; on 429/502/503/timeout/connection
+    error, tries the next model. Non-retryable errors (e.g. 401) are returned
+    immediately. If all models fail, yields a single error message.
 
     Blocks until an inference slot is available (request queue).
     """
+    if not OPENROUTER_API_KEY:
+        yield "\n\n**Error**: OpenRouter API key is not configured. Please set OPENROUTER_API_KEY."
+        return
+
+    models = _get_openrouter_models()
+    if not models:
+        yield "\n\n**Error**: No OpenRouter models configured. Set OPENROUTER_MODELS."
+        return
+
     _acquire_slot()
     try:
-        logger.info(f"[LLM] Sending non-streaming request ({len(messages)} messages, "
-                     f"max_tokens={max_tokens}, temp={temperature})")
-
-        resp = requests.post(
-            f"{LLM_URL}/chat/completions",
-            json={
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-            timeout=180,
+        logger.info(
+            f"[LLM] OpenRouter request ({len(messages)} messages, "
+            f"max_tokens={max_tokens}, temp={temperature}), models={models}"
         )
-        resp.raise_for_status()
-        data = resp.json()
+        url = f"{OPENROUTER_BASE_URL}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload_base = {
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
 
-        choices = data.get("choices", [])
-        if not choices:
-            logger.warning("[LLM] No choices in response")
-            yield "\n\n*The AI model did not produce a response. Please try rephrasing your question.*"
-            return
+        last_status: Optional[int] = None
+        last_error: Optional[Exception] = None
 
-        content = choices[0].get("message", {}).get("content", "")
-        finish_reason = choices[0].get("finish_reason", "unknown")
-        usage = data.get("usage", {})
+        for model_id in models:
+            try:
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    json={**payload_base, "model": model_id},
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    choices = data.get("choices", [])
+                    if not choices:
+                        logger.warning(f"[LLM] OpenRouter model {model_id}: no choices in response")
+                        continue
+                    content = choices[0].get("message", {}).get("content", "")
+                    finish_reason = choices[0].get("finish_reason", "unknown")
+                    usage = data.get("usage", {})
+                    logger.info(
+                        f"[LLM] OpenRouter model {model_id} responded: {len(content)} chars, "
+                        f"finish_reason={finish_reason}, "
+                        f"prompt_tokens={usage.get('prompt_tokens')}, "
+                        f"completion_tokens={usage.get('completion_tokens')}"
+                    )
+                    if not content:
+                        yield "\n\n*The AI model did not produce a response. Please try rephrasing your question.*"
+                        return
+                    # Yield response in line-based chunks for progressive SSE display
+                    lines = content.split("\n")
+                    for i, line in enumerate(lines):
+                        if i < len(lines) - 1:
+                            yield line + "\n"
+                        else:
+                            yield line
+                    return
+                # Non-retryable: do not try other models
+                if resp.status_code not in RETRYABLE_STATUS_CODES:
+                    logger.error(f"[LLM] OpenRouter model {model_id}: {resp.status_code} (non-retryable)")
+                    try:
+                        err_body = resp.json()
+                        err_msg = err_body.get("error", {}).get("message", resp.text[:200])
+                    except Exception:
+                        err_msg = resp.text[:200] if resp.text else str(resp.status_code)
+                    yield f"\n\n**Error**: OpenRouter returned {resp.status_code}. {err_msg}"
+                    return
+                last_status = resp.status_code
+                logger.warning(f"[LLM] OpenRouter model {model_id}: {resp.status_code}, trying next model")
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                logger.warning(f"[LLM] OpenRouter model {model_id}: timeout, trying next model")
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                logger.warning(f"[LLM] OpenRouter model {model_id}: {e}, trying next model")
 
-        logger.info(f"[LLM] Response: {len(content)} chars, "
-                     f"finish_reason={finish_reason}, "
-                     f"prompt_tokens={usage.get('prompt_tokens')}, "
-                     f"completion_tokens={usage.get('completion_tokens')}")
+        # All models failed
+        if last_status is not None:
+            yield "\n\n**Error**: All AI models are temporarily unavailable (e.g. rate limited). Please try again later."
+        elif last_error is not None:
+            yield "\n\n**Error**: Could not reach OpenRouter. Please try again later."
+        else:
+            yield "\n\n**Error**: All AI models did not produce a response. Please try again later."
 
-        if not content:
-            yield "\n\n*The AI model did not produce a response. Please try rephrasing your question.*"
-            return
-
-        # Yield response in line-based chunks for progressive SSE display
-        lines = content.split('\n')
-        for i, line in enumerate(lines):
-            if i < len(lines) - 1:
-                yield line + '\n'
-            else:
-                yield line
-
-    except requests.exceptions.Timeout:
-        logger.error("[LLM] Request timed out (180s)")
-        yield "\n\n**Error**: The AI model took too long to respond. Please try a simpler question."
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[LLM] Request error: {e}")
-        yield f"\n\n**Error**: Could not reach the LLM server. Please try again later."
     finally:
         _release_slot()

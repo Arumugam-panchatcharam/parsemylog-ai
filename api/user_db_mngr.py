@@ -801,14 +801,26 @@ class DBManager:
         self.db.session.commit()
         return msg
 
-    def get_messages(self, conversation_id: int, limit: int = 50):
-        return (
+    def get_messages(self, conversation_id: int, limit: int = 50, recent: bool = False):
+        """
+        Get messages for a conversation.
+
+        Args:
+            conversation_id: Conversation ID.
+            limit: Max number of messages to return.
+            recent: If True, return the last `limit` messages in chronological order
+                    (for LLM context / follow-up queries). If False, return the
+                    first `limit` messages (for UI listing).
+        """
+        q = (
             self.db.session.query(self.ChatMessage)
             .filter_by(conversation_id=conversation_id)
-            .order_by(self.ChatMessage.created_at.asc())
-            .limit(limit)
-            .all()
         )
+        if recent:
+            # Last N messages: order desc, take limit, then reverse for chronological order
+            rows = q.order_by(self.ChatMessage.created_at.desc()).limit(limit).all()
+            return list(reversed(rows))
+        return q.order_by(self.ChatMessage.created_at.asc()).limit(limit).all()
 
     def delete_user_and_projects(self, user_id: int) -> Tuple[bool, Optional[str]]:
         user = self.db.session.get(self.User, int(user_id))

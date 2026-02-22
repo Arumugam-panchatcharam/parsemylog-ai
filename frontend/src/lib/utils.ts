@@ -19,9 +19,9 @@ export function formatDate(iso: string): string {
   }
 }
 
-/** Timezone IANA mapping for log conversion */
+/** Timezone IANA mapping for log conversion. Logs are in UTC; "Original" shows UTC. */
 export const TZ_OPTIONS = [
-  { id: "Original", label: "Original", iana: "" },
+  { id: "Original", label: "UTC (original)", iana: "UTC" },
   { id: "UTC", label: "UTC", iana: "UTC" },
   { id: "CET", label: "CET", iana: "Europe/Berlin" },
   { id: "IST", label: "IST", iana: "Asia/Kolkata" },
@@ -48,10 +48,17 @@ const MONTH_MAP: Record<string, number> = {
   Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
 };
 
+/** Normalize ISO-like string to be parsed as UTC (logs are in UTC). */
+function ensureUtcIso(iso: string): string {
+  const s = iso.replace(" ", "T").trim();
+  if (/[Z+-]\d{2}:?\d{2}$/.test(s) || s.endsWith("Z")) return s;
+  return s + "Z";
+}
+
 function parseTimestamp(raw: string): Date | null {
-  // ISO-like
+  // ISO-like: treat as UTC (logs are in UTC)
   if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-    const d = new Date(raw.replace(" ", "T"));
+    const d = new Date(ensureUtcIso(raw));
     return isNaN(d.getTime()) ? null : d;
   }
   // RDK: YYMMDD-HH:MM:SS
@@ -92,11 +99,12 @@ function formatInTargetTZ(date: Date, iana: string): string {
 
 /**
  * Convert the first recognized timestamp in a log line to the target timezone.
- * Returns the original line unchanged if targetTZ is "Original" or no timestamp is found.
+ * Log timestamps are assumed to be in UTC. "Original" displays them as UTC;
+ * other options (e.g. CET, IST) convert from UTC to the selected timezone.
  */
 export function convertLogTimestamp(line: string, targetTZ: string): string {
-  if (!targetTZ || targetTZ === "Original") return line;
-  const iana = TZ_OPTIONS.find((t) => t.id === targetTZ)?.iana;
+  if (!targetTZ) return line;
+  const iana = targetTZ === "Original" ? "UTC" : (TZ_OPTIONS.find((t) => t.id === targetTZ)?.iana ?? "");
   if (!iana) return line;
 
   for (const pattern of TS_PATTERNS) {

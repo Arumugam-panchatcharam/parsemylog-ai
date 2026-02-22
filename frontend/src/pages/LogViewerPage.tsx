@@ -1,9 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDropzone } from "react-dropzone";
-import { filesApi, patternsApi } from "@/api/endpoints";
+import { authApi, filesApi, patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
+import { useAuth } from "@/hooks/useAuth";
 import { cn, convertLogTimestamp, TZ_OPTIONS } from "@/lib/utils";
 import { highlightLogLine } from "@/lib/logHighlighter";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
@@ -26,8 +28,30 @@ import FormatColorTextIcon from "@mui/icons-material/FormatColorText";
 import LanguageIcon from "@mui/icons-material/Language";
 import CircularProgress from "@mui/material/CircularProgress";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import AddIcon from "@mui/icons-material/Add";
+import SettingsIcon from "@mui/icons-material/Settings";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 
 const LINES_OPTIONS = [100, 500, 1000, 2000, 5000];
+
+export interface QuickSearchButton {
+  id: string;
+  name: string;
+  pattern: string;
+}
+
+// UUID polyfill for browsers that don't support crypto.randomUUID (Safari < 15.4)
+function generateUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Fallback: generate UUID v4 manually
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 async function downloadFile(projectId: string, filename: string, cpeId?: string | null) {
   try {
@@ -41,8 +65,29 @@ async function downloadFile(projectId: string, filename: string, cpeId?: string 
   } catch (err) { console.error("Download failed:", err); }
 }
 
+async function downloadMergedLogs(projectId: string, cpeId?: string | null) {
+  try {
+    const res = await filesApi.downloadMergedLogs(projectId, cpeId);
+    const blob = new Blob([res.data]);
+    const disposition = (res.headers as Record<string, string>)?.["content-disposition"];
+    const match = disposition?.match(/filename="?([^"]+)"?/);
+    const downloadName = match ? match[1].trim() : "merged_logs.zip";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = downloadName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error("Download merged logs failed:", err);
+  }
+}
+
 export default function LogViewerPage() {
   const { projectId } = useProject();
+  const { user } = useAuth();
   const { cpeId, setCPE } = useCPE();
   const qc = useQueryClient();
 
@@ -61,8 +106,60 @@ export default function LogViewerPage() {
   const [showSearch, setShowSearch] = useState(true);
   const [scrollToLine, setScrollToLine] = useState<number | null>(null);
   const [logTimezone, setLogTimezone] = useState("Original");
+  const [fileSearchQuery, setFileSearchQuery] = useState("");
+  const [searchAllFiles, setSearchAllFiles] = useState(false);
+  const [quickSearchConfigOpen, setQuickSearchConfigOpen] = useState(false);
+  const [quickSearchPanelPosition, setQuickSearchPanelPosition] = useState<{ top: number; left: number } | null>(null);
+  const [quickSearchSaveError, setQuickSearchSaveError] = useState<string | null>(null);
+  const [quickSearchEdit, setQuickSearchEdit] = useState<QuickSearchButton | null>(null);
+  const [quickSearchName, setQuickSearchName] = useState("");
+  const [quickSearchPattern, setQuickSearchPattern] = useState("");
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const quickSearchConfigRef = useRef<HTMLDivElement>(null);
   const prevCpeId = useRef(cpeId);
+
+  const { data: filesRaw, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
+  const files = Array.isArray(filesRaw) ? filesRaw : [];
+  const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage, cpeId)).data, enabled: !!projectId && !!selectedFile });
+  const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern, cpeId) });
+  const searchAllMutation = useMutation({ mutationFn: (pattern: string) => filesApi.searchAllFiles(projectId!, pattern, cpeId) });
+  const { data: notesData } = useQuery({ queryKey: ["notes", projectId], queryFn: async () => (await filesApi.getNotes(projectId!)).data, enabled: !!projectId });
+  const { data: quickSearchData } = useQuery({
+    queryKey: ["logViewerQuickSearches"],
+    queryFn: async () => (await authApi.getLogViewerQuickSearches()).data,
+    enabled: !!user,
+  });
+  const quickSearchButtons: QuickSearchButton[] = quickSearchData?.buttons ?? [];
+
+  // One-time migration: if server has no buttons but localStorage has (old key), upload and clear
+  const quickSearchMigrated = useRef(false);
+  useEffect(() => {
+    if (!user?.id || quickSearchMigrated.current || quickSearchButtons.length > 0) return;
+    if (quickSearchData === undefined) return; // still loading
+    quickSearchMigrated.current = true;
+    const key = "parsemylog_log_viewer_quick_searches_user_" + String(user.id);
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      const list = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === "object" && "buttons" in parsed ? (parsed as { buttons: unknown }).buttons : null);
+      if (!Array.isArray(list) || list.length === 0) return;
+      const buttons = list.filter(
+        (b): b is QuickSearchButton =>
+          typeof b === "object" && b !== null && "id" in b && "name" in b && "pattern" in b
+      ) as QuickSearchButton[];
+      if (buttons.length > 0) {
+        authApi.saveLogViewerQuickSearches(buttons).then(() => {
+          localStorage.removeItem(key);
+          qc.invalidateQueries({ queryKey: ["logViewerQuickSearches"] });
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }, [user?.id, quickSearchData, quickSearchButtons.length, qc]);
+
+  const hasFiles = files.length > 0;
 
   // Reset selected file when CPE changes
   useEffect(() => {
@@ -71,16 +168,10 @@ export default function LogViewerPage() {
       setCurrentPage(1);
       setActiveHighlight("");
       searchMutation.reset();
+      searchAllMutation.reset();
       prevCpeId.current = cpeId;
     }
-  }, [cpeId]);
-
-  const { data: files, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
-  const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage, cpeId)).data, enabled: !!projectId && !!selectedFile });
-  const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern, cpeId) });
-  const { data: notesData } = useQuery({ queryKey: ["notes", projectId], queryFn: async () => (await filesApi.getNotes(projectId!)).data, enabled: !!projectId });
-
-  const hasFiles = files && files.length > 0;
+  }, [cpeId, searchMutation, searchAllMutation]);
 
   // Indexing status — poll while indexing is active
   const { data: indexStatus } = useQuery({
@@ -119,18 +210,19 @@ export default function LogViewerPage() {
           total > 0 ? `${message}  (${progress}/${total})` : message
         );
         if (status === "completed") {
-          if (cpes && cpes.length > 0) {
-            setCPE({ serial: cpes[0], mac: null, date_from: null, date_to: null });
+          const cpeList = cpes ?? [];
+          if (cpeList.length > 0) {
+            setCPE({ serial: cpeList[0], mac: null, date_from: null, date_to: null });
             qc.invalidateQueries({ queryKey: ["cpes", pid] });
           }
           qc.invalidateQueries({ queryKey: ["files", pid] });
           qc.invalidateQueries({ queryKey: ["indexingStatus", pid] });
-          setProcessingStatus(`Done! ${cpes.length} CPE(s) processed, indexing in background...`);
+          setProcessingStatus(`Done! ${cpeList.length} CPE(s) processed, indexing in background...`);
           setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 3000);
           return;
         }
         if (status === "error") {
-          setProcessingStatus(`Processing failed: ${res.data.error}`);
+          setProcessingStatus(`Processing failed: ${res.data?.error ?? "Unknown error"}`);
           setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 5000);
           return;
         }
@@ -173,12 +265,103 @@ export default function LogViewerPage() {
   }, [projectId, qc, setCPE, cpeId, pollProcessingStatus]);
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
-  const doSearch = (p?: string) => { const pat = p || searchPattern; if (pat && selectedFile) { setActiveHighlight(pat); searchMutation.mutate(pat); } };
-  const quickPats: Record<string, string> = { ERROR: "(ERROR|FATAL|CRITICAL|FAIL)", WARN: "(WARNING|WARN|ALERT)", IP: "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}", Time: "\\d{2}:\\d{2}:\\d{2}" };
-  const saveNotes = async () => { if (!projectId) return; await filesApi.saveNotes(projectId, notes); setSaveStatus(`Saved ${new Date().toLocaleTimeString()}`); };
-  if (notesData?.content && notes === "" && notesData.content !== notes) setNotes(notesData.content);
+  const doSearch = (p?: string) => {
+    const pat = p || searchPattern;
+    if (!pat) return;
+    setActiveHighlight(pat);
+    if (searchAllFiles) {
+      searchMutation.reset();
+      searchAllMutation.mutate(pat);
+    } else {
+      if (!selectedFile) return;
+      searchAllMutation.reset();
+      searchMutation.mutate(pat);
+    }
+  };
+  const saveNotes = async () => { if (!projectId) return; await filesApi.saveNotes(projectId, notes); setSaveStatus(`Saved ${new Date().toLocaleTimeString()}`); qc.invalidateQueries({ queryKey: ["notes", projectId] }); };
 
-  const searchResults = searchMutation.data?.data;
+  const openQuickSearchForm = (edit?: QuickSearchButton) => {
+    setQuickSearchSaveError(null);
+    setQuickSearchEdit(edit ?? null);
+    setQuickSearchName(edit?.name ?? "");
+    setQuickSearchPattern(edit?.pattern ?? "");
+    setQuickSearchConfigOpen(true);
+  };
+  const closeQuickSearchForm = () => {
+    setQuickSearchConfigOpen(false);
+    setQuickSearchPanelPosition(null);
+    setQuickSearchSaveError(null);
+    setQuickSearchEdit(null);
+    setQuickSearchName("");
+    setQuickSearchPattern("");
+  };
+  const saveQuickSearchButton = async () => {
+    const name = quickSearchName.trim();
+    const pattern = quickSearchPattern.trim();
+    if (!name || !pattern) return;
+    setQuickSearchSaveError(null);
+    const next = quickSearchEdit
+      ? quickSearchButtons.map((b) => (b.id === quickSearchEdit.id ? { ...b, name, pattern } : b))
+      : [...quickSearchButtons, { id: generateUUID(), name, pattern }];
+    try {
+      await authApi.saveLogViewerQuickSearches(next);
+      qc.invalidateQueries({ queryKey: ["logViewerQuickSearches"] });
+      closeQuickSearchForm();
+    } catch (e: unknown) {
+      let msg = "Save failed. Check network and try again.";
+      if (e && typeof e === "object" && "response" in e) {
+        const res = (e as { response?: { data?: unknown } }).response;
+        if (res?.data && typeof res.data === "object" && "error" in res.data) msg = String((res.data as { error?: string }).error);
+        else if (res?.data) msg = String(res.data);
+      }
+      setQuickSearchSaveError(msg);
+      console.warn("Failed to save quick search buttons", e);
+    }
+  };
+  const removeQuickSearchButton = async (id: string) => {
+    const next = quickSearchButtons.filter((b) => b.id !== id);
+    try {
+      await authApi.saveLogViewerQuickSearches(next);
+      qc.invalidateQueries({ queryKey: ["logViewerQuickSearches"] });
+    } catch (e) {
+      console.warn("Failed to save quick search buttons", e);
+    }
+  };
+
+  useEffect(() => {
+    if (!quickSearchConfigOpen) return;
+    const el = quickSearchConfigRef.current;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      setQuickSearchPanelPosition({ left: rect.left, top: rect.bottom + 4 });
+    }
+  }, [quickSearchConfigOpen]);
+
+  useEffect(() => {
+    if (!quickSearchConfigOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeQuickSearchForm(); };
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (quickSearchConfigRef.current?.contains(t)) return;
+      if (t && "closest" in (t as Element) && (t as Element).closest?.("[data-quick-search-panel]")) return;
+      closeQuickSearchForm();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onMouseDown);
+    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onMouseDown); };
+  }, [quickSearchConfigOpen]);
+
+  // Sync notes from API when loaded (avoid setState during render)
+  useEffect(() => {
+    if (notesData?.content != null && notes === "") setNotes(notesData.content);
+  }, [notesData?.content]);
+
+  const hasNotes = ((notesData?.content ?? "") as string).trim().length > 0;
+  const hasUnsavedChanges = notesData && notes !== (notesData.content ?? "");
+
+  const searchResults = searchAllFiles ? searchAllMutation.data?.data : searchMutation.data?.data;
+  const searchAllResult = searchAllMutation.data?.data;
+  const isAllFilesSearch = searchAllFiles && searchAllResult && searchAllResult.matches?.length !== undefined;
 
   /** Render a log line with optional TZ conversion + syntax + optional search highlighting */
   const renderLine = (text: string) => {
@@ -215,10 +398,85 @@ export default function LogViewerPage() {
         <div className="flex items-center gap-1 border border-input rounded-lg bg-background px-2 py-1 flex-1 min-w-[200px] max-w-md focus-within:ring-1 focus-within:ring-ring">
           <SearchIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
           <input value={searchPattern} onChange={(e) => setSearchPattern(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} placeholder="Search (regex)..." className="flex-1 bg-transparent outline-none text-xs min-w-0" />
-          <button onClick={() => doSearch()} className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0">Go</button>
+          <button onClick={() => doSearch()} disabled={!searchPattern.trim() || (!searchAllFiles && !selectedFile)} className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0 disabled:opacity-50">Go</button>
         </div>
-        <div className="flex items-center gap-1">
-          {Object.entries(quickPats).map(([l, p]) => <button key={l} onClick={() => { setSearchPattern(p); doSearch(p); }} className="px-1.5 py-0.5 text-[10px] border border-border rounded hover:bg-muted">{l}</button>)}
+        <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer whitespace-nowrap">
+          <input type="checkbox" checked={searchAllFiles} onChange={(e) => setSearchAllFiles(e.target.checked)} className="rounded border-border" />
+          All files
+        </label>
+        <div className="flex items-center gap-1 flex-wrap">
+          {quickSearchButtons.map((b) => (
+            <button
+              key={b.id}
+              onClick={() => { setSearchPattern(b.pattern); doSearch(b.pattern); }}
+              className="px-1.5 py-0.5 text-[10px] border border-border rounded hover:bg-muted"
+              title={b.pattern}
+            >
+              {b.name}
+            </button>
+          ))}
+          <div className="relative inline-block" ref={quickSearchConfigRef}>
+            <button
+              type="button"
+              onClick={() => openQuickSearchForm()}
+              className="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] border border-dashed border-border rounded hover:bg-muted text-muted-foreground"
+              title="Add or manage regex search buttons"
+            >
+              <AddIcon style={{ fontSize: 12 }} /> Add
+            </button>
+            {quickSearchConfigOpen &&
+              quickSearchPanelPosition &&
+              createPortal(
+                <div
+                  data-quick-search-panel
+                  className="min-w-[280px] p-3 bg-card border border-border rounded-lg shadow-lg"
+                  style={{ position: "fixed", left: quickSearchPanelPosition.left, top: quickSearchPanelPosition.top, zIndex: 9999 }}
+                >
+                  <div className="text-[11px] font-medium text-muted-foreground mb-2">
+                    {quickSearchEdit ? "Edit search button" : "Add search button (name → regex)"}
+                  </div>
+                  {quickSearchSaveError && (
+                    <p className="text-[10px] text-destructive mb-2" role="alert">{quickSearchSaveError}</p>
+                  )}
+                  <input
+                    value={quickSearchName}
+                    onChange={(e) => setQuickSearchName(e.target.value)}
+                    placeholder="Button name"
+                    className="w-full mb-2 px-2 py-1 text-xs border border-input rounded bg-background"
+                  />
+                  <input
+                    value={quickSearchPattern}
+                    onChange={(e) => setQuickSearchPattern(e.target.value)}
+                    placeholder="Regex pattern"
+                    className="w-full mb-2 px-2 py-1 text-xs border border-input rounded bg-background font-mono"
+                  />
+                  <div className="flex items-center gap-1 mb-2">
+                    <button type="button" onClick={saveQuickSearchButton} disabled={!quickSearchName.trim() || !quickSearchPattern.trim()} className="px-2 py-0.5 text-[10px] bg-primary text-primary-foreground rounded font-medium disabled:opacity-50">
+                      {quickSearchEdit ? "Save" : "Add"}
+                    </button>
+                    {quickSearchEdit && (
+                      <button type="button" onClick={closeQuickSearchForm} className="px-2 py-0.5 text-[10px] border border-border rounded font-medium">Cancel</button>
+                    )}
+                  </div>
+                  {quickSearchButtons.length > 0 && (
+                    <div className="border-t border-border pt-2 mt-2">
+                      <div className="text-[10px] text-muted-foreground mb-1">Configured buttons</div>
+                      <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+                        {quickSearchButtons.map((b) => (
+                          <li key={b.id} className="flex items-center gap-1 text-[10px]">
+                            <span className="truncate flex-1" title={b.pattern}>{b.name}</span>
+                            <button type="button" onClick={() => openQuickSearchForm(b)} className="p-0.5 rounded hover:bg-muted" title="Edit"><SettingsIcon style={{ fontSize: 12 }} /></button>
+                            <button type="button" onClick={() => removeQuickSearchButton(b.id)} className="p-0.5 rounded hover:bg-destructive/20 text-destructive" title="Remove"><DeleteOutlineIcon style={{ fontSize: 12 }} /></button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <button type="button" onClick={closeQuickSearchForm} className="absolute top-1 right-1 p-0.5 rounded hover:bg-muted"><CloseIcon style={{ fontSize: 14 }} /></button>
+                </div>,
+                document.body
+              )}
+          </div>
         </div>
         <div className="w-px h-5 bg-border mx-1" />
         {/* Syntax highlight toggle */}
@@ -242,7 +500,20 @@ export default function LogViewerPage() {
           </select>
         </div>
         <div className="w-px h-5 bg-border mx-1" />
-        <button onClick={() => setShowNotes(!showNotes)} title="Toggle notes" className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded font-medium ${showNotes ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}><NoteAltIcon style={{ fontSize: 13 }} /> Notes</button>
+        <button
+          onClick={() => setShowNotes(!showNotes)}
+          title={hasNotes ? "Notes saved for this project — click to open" : "Notes — no saved notes yet"}
+          className={`flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] rounded font-medium ${showNotes ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+        >
+          <NoteAltIcon style={{ fontSize: 13 }} />
+          <span>Notes</span>
+          {hasNotes && <span className="rounded-full w-1.5 h-1.5 bg-green-500 shrink-0" title="Project has saved notes" aria-hidden />}
+        </button>
+        {hasFiles && (
+          <button onClick={() => projectId && downloadMergedLogs(projectId, cpeId)} title="Download all log files shown in the viewer as a ZIP (merged_logs-cpe-mac.zip)" className="flex items-center gap-1 px-2 py-0.5 text-[10px] rounded font-medium bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600 shadow-sm">
+            <DownloadIcon style={{ fontSize: 13 }} /> Download merged logs
+          </button>
+        )}
         {!hasFiles && (
           <div {...getRootProps()} className="cursor-pointer"><input {...getInputProps()} />
             <button className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-muted-foreground hover:bg-muted font-medium"><CloudUploadIcon style={{ fontSize: 13 }} /> {isUploading ? "Uploading..." : "Upload"}</button>
@@ -265,6 +536,20 @@ export default function LogViewerPage() {
               <button onClick={() => qc.invalidateQueries({ queryKey: ["files", projectId] })} className="p-0.5 rounded hover:bg-muted"><RefreshIcon style={{ fontSize: 14 }} className="text-muted-foreground" /></button>
             </div>
           </div>
+          {hasFiles && (
+            <div className="px-1.5 py-1 border-b border-border">
+              <div className="flex items-center gap-1 bg-muted/50 rounded px-2 py-1">
+                <SearchIcon style={{ fontSize: 12 }} className="text-muted-foreground shrink-0" />
+                <input
+                  type="text"
+                  value={fileSearchQuery}
+                  onChange={(e) => setFileSearchQuery(e.target.value)}
+                  placeholder="Search files..."
+                  className="flex-1 min-w-0 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0.5">
             {filesLoading && <p className="text-[10px] text-muted-foreground p-2">Loading...</p>}
             {!hasFiles && !filesLoading && (
@@ -272,7 +557,10 @@ export default function LogViewerPage() {
                 <input {...getInputProps()} /><CloudUploadIcon style={{ fontSize: 20 }} className="mx-auto mb-1 opacity-50" /><p>Drop files here</p>
               </div>
             )}
-            {files?.map((f: { filename: string; file_path: string; file_size: number; is_viewable: boolean; file_size_mb: number }) => (
+            {(fileSearchQuery.trim()
+              ? files.filter((f: { filename: string }) => f.filename.toLowerCase().includes(fileSearchQuery.trim().toLowerCase()))
+              : files
+            ).map((f: { filename: string; file_path: string; file_size: number; is_viewable: boolean; file_size_mb: number }) => (
               <div key={f.file_path} className={cn("flex items-center gap-1 px-1.5 py-1 rounded text-[11px] cursor-pointer group", selectedFile === f.filename ? "bg-accent text-accent-foreground" : "hover:bg-muted")}
                 onClick={() => { if (f.is_viewable) { setSelectedFile(f.filename); setCurrentPage(1); } }}>
                 <DescriptionIcon style={{ fontSize: 13 }} className="text-muted-foreground shrink-0" />
@@ -323,20 +611,42 @@ export default function LogViewerPage() {
           {searchResults && (
             <div className="border-t border-border bg-card shrink-0">
               <button onClick={() => setShowSearch(!showSearch)} className="w-full flex items-center justify-between px-3 py-1 text-xs font-medium hover:bg-muted">
-                <span>Search Results — {searchResults.total} match(es)</span>
+                <span>
+                  Search Results — {searchResults.total} match(es)
+                  {searchAllResult?.truncated && " (first 500)"}
+                </span>
                 {showSearch ? <KeyboardArrowDownIcon style={{ fontSize: 16 }} /> : <KeyboardArrowUpIcon style={{ fontSize: 16 }} />}
               </button>
               {showSearch && (
                 <div className="overflow-auto max-h-52 bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px` }}>
-                  {searchResults.matches.map((m: { line_number: number; text: string; page: number }, idx: number) => (
-                    <div key={idx}
-                      onDoubleClick={() => { setCurrentPage(m.page); setScrollToLine(m.line_number); }}
-                      title="Double-click to jump to this line"
-                      className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none">
-                      <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{m.line_number}</span>
-                      {renderLine(m.text)}
-                    </div>
-                  ))}
+                  {isAllFilesSearch
+                    ? (searchResults.matches as Array<{ filename: string; line_number: number; text: string }>).map((m, idx) => (
+                        <div
+                          key={idx}
+                          onDoubleClick={() => {
+                            setSelectedFile(m.filename);
+                            setCurrentPage(Math.max(1, Math.ceil(m.line_number / linesPerPage)));
+                            setScrollToLine(m.line_number);
+                          }}
+                          title="Double-click to open file and jump to line"
+                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none"
+                        >
+                          <span className="text-slate-500 select-none mr-2 text-[10px] truncate max-w-[120px] inline-block align-top" title={m.filename}>{m.filename}</span>
+                          <span className="text-slate-600 select-none mr-2 inline-block w-10 text-right tabular-nums text-[10px]">{m.line_number}</span>
+                          {renderLine(m.text)}
+                        </div>
+                      ))
+                    : searchResults.matches.map((m: { line_number: number; text: string; page: number }, idx: number) => (
+                        <div
+                          key={idx}
+                          onDoubleClick={() => { setCurrentPage(m.page); setScrollToLine(m.line_number); }}
+                          title="Double-click to jump to this line"
+                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none"
+                        >
+                          <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{m.line_number}</span>
+                          {renderLine(m.text)}
+                        </div>
+                      ))}
                 </div>
               )}
             </div>
@@ -347,13 +657,21 @@ export default function LogViewerPage() {
         {showNotes && (
           <div className="w-72 shrink-0 border-l border-border bg-card flex flex-col">
             <div className="flex items-center justify-between px-2 py-1.5 border-b border-border">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1"><NoteAltIcon style={{ fontSize: 14 }} /> Notes</h3>
-              <button onClick={() => setShowNotes(false)} className="p-0.5 rounded hover:bg-muted"><CloseIcon style={{ fontSize: 14 }} /></button>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1 shrink-0"><NoteAltIcon style={{ fontSize: 14 }} /> Notes</h3>
+                {hasNotes && <span className="text-[9px] text-green-600 dark:text-green-400 font-medium shrink-0" title="Notes are saved for this project">Saved</span>}
+              </div>
+              <button onClick={() => setShowNotes(false)} className="p-0.5 rounded hover:bg-muted shrink-0"><CloseIcon style={{ fontSize: 14 }} /></button>
             </div>
+            {hasUnsavedChanges && (
+              <div className="px-2 py-1 text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">
+                Unsaved changes — click Save to update project notes
+              </div>
+            )}
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="flex-1 p-2 text-xs bg-transparent resize-none outline-none" placeholder="Write analysis notes..." />
             <div className="flex items-center gap-2 px-2 py-1.5 border-t border-border">
               <button onClick={saveNotes} className="flex items-center gap-1 px-2 py-1 text-[10px] bg-primary text-primary-foreground rounded font-medium"><SaveIcon style={{ fontSize: 12 }} /> Save</button>
-              {saveStatus && <span className="text-[10px] text-green-600">{saveStatus}</span>}
+              {saveStatus && <span className="text-[10px] text-green-600 dark:text-green-400">{saveStatus}</span>}
             </div>
           </div>
         )}

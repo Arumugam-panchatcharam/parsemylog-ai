@@ -392,23 +392,32 @@ export default function TelemetryPage() {
           )}
 
           {/* ========== CHARTS ========== */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {data.charts.map((chart, cIdx) => (
-              <div key={cIdx} className="bg-card border border-border rounded-xl overflow-hidden">
-                <div className="px-4 py-2 border-b border-border bg-muted/30">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{chart.group}</h3>
-                </div>
-                <div className="p-2">
-                  <Plot
-                    data={chart.traces.map((t) => ({ x: t.times, y: t.values, name: `${t.label} (${t.unit})`, type: "scatter" as const, mode: "lines+markers" as const, marker: { size: 3 } }))}
-                    layout={{ height: 280, margin: { l: 45, r: 15, t: 5, b: 35 }, xaxis: { title: { text: "Time" }, tickfont: { size: 10 } }, yaxis: { title: { text: "Value" }, tickfont: { size: 10 } }, hovermode: "x unified", legend: { orientation: "h", y: 1.15, x: 0.5, xanchor: "center", font: { size: 10 } }, paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { family: "Roboto, sans-serif", size: 11 } }}
-                    config={NO_TOOLBAR}
-                    style={{ width: "100%" }}
-                  />
-                </div>
+          {data.charts.length > 0 && (
+            <div className="space-y-2">
+              {data.summary.parsed === 0 && (
+                <p className="text-[11px] text-muted-foreground mb-2">
+                  Charts from selfHeal and telemetry_marker (no telemetry2_0 data).
+                </p>
+              )}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {data.charts.map((chart, cIdx) => (
+                  <div key={cIdx} className="bg-card border border-border rounded-xl overflow-hidden">
+                    <div className="px-4 py-2 border-b border-border bg-muted/30">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{chart.group}</h3>
+                    </div>
+                    <div className="p-2">
+                      <Plot
+                        data={chart.traces.map((t) => ({ x: t.times, y: t.values, name: `${t.label} (${t.unit})`, type: "scatter" as const, mode: "lines+markers" as const, marker: { size: 3 } }))}
+                        layout={{ height: 280, margin: { l: 45, r: 15, t: 5, b: 35 }, xaxis: { title: { text: "Time" }, tickfont: { size: 10 } }, yaxis: { title: { text: "Value" }, tickfont: { size: 10 } }, hovermode: "x unified", legend: { orientation: "h", y: 1.15, x: 0.5, xanchor: "center", font: { size: 10 } }, paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { family: "Roboto, sans-serif", size: 11 } }}
+                        config={NO_TOOLBAR}
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
 
         </>
       )}

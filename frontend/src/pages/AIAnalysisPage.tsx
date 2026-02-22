@@ -79,7 +79,7 @@ export default function AIAnalysisPage() {
                 <tr key={idx} onClick={() => { setSelectedIdx(idx); setSelectedLogIdx(null); }} className={`border-b border-border cursor-pointer transition-colors ${selectedIdx === idx ? "bg-accent" : "hover:bg-muted"}`}>
                   <td className="py-2 px-3">{r.filename}</td><td className="py-2 px-3 font-mono max-w-md truncate">{r.template}</td>
                   <td className="py-2 px-3 text-center">{r.frequency}</td><td className={`py-2 px-3 text-center font-medium ${r.similarity >= 0.8 ? "text-green-600" : r.similarity < 0.5 ? "text-muted-foreground" : ""}`}>{r.similarity}</td>
-                  <td className="py-2 px-3 text-center"><button onClick={(e) => { e.stopPropagation(); navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(r.template)}`); }} title="Add to Pattern Analyzer" className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/20 text-muted-foreground hover:text-blue-600 transition-colors"><ManageSearchIcon style={{ fontSize: 16 }} /></button></td>
+                  <td className="py-2 px-3 text-center"><button onClick={(e) => { e.stopPropagation(); const domain = r.domain?.trim(); navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(r.template)}${domain ? `&domain=${encodeURIComponent(domain)}` : ""}`); }} title="Add to Pattern Analyzer" className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/20 text-muted-foreground hover:text-blue-600 transition-colors"><ManageSearchIcon style={{ fontSize: 16 }} /></button></td>
                 </tr>
               ))}</tbody>
             </table>

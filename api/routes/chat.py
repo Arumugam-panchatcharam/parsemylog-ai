@@ -257,9 +257,10 @@ def send_message(project_id):
                 user_query=user_message,
             )
 
-            # Get conversation history BEFORE saving the new user message
-            # to avoid duplicating it in build_messages()
-            history = dbm.get_messages(conv_id, limit=llm.MAX_HISTORY_MESSAGES)
+            # Get last N messages (conversation memory) for follow-up context
+            history = dbm.get_messages(
+                conv_id, limit=llm.MAX_HISTORY_MESSAGES, recent=True
+            )
 
             # Save user message to DB now (after fetching history)
             dbm.save_message(conv_id, "user", user_message)

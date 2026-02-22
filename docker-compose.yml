@@ -35,12 +35,9 @@ services:
       - .env
     environment:
       - DB_PATH=/app/data/logai_users.db
-      - LLM_URL=http://llm:8000/v1
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       qdrant:
-        condition: service_started
-      llm:
         condition: service_started
       redis:
         condition: service_healthy
@@ -122,48 +119,6 @@ services:
       logai-api:
         condition: service_started
 
-  # ---- One-shot model downloader (runs only if model is missing) ----
-  #   docker-compose --profile setup run --rm llm-init
-  llm-init:
-    profiles: ["setup"]
-    build: ./llm
-    container_name: llm-init
-    command: /app/download-model.sh
-    volumes:
-      - llm_models:/models
-    restart: "no"
-
-  # ---- LLM inference server (llama-cpp-python, OpenAI-compatible API) ----
-  llm:
-    build: ./llm
-    image: parsemylog-llm:latest
-    container_name: llm
-    command: >
-      python -m llama_cpp.server
-      --model /models/qwen2.5-coder-7b-instruct-q4_k_m.gguf
-      --host 0.0.0.0
-      --port 8000
-      --n_ctx 8192
-      --n_threads 8
-      --use_mlock false
-      --chat_format chatml
-    volumes:
-      - llm_models:/models
-    ports:
-      - "${LLM_PORT:-8000}:8000"
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-          cpus: "8"
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/models"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: unless-stopped
-
   # One-shot: build React SPA into frontend_dist volume, then exit.
   # Only runs when explicitly requested (profile: build).
   #   docker-compose --profile build up frontend-build
@@ -211,7 +166,6 @@ volumes:
   bge_model:
   qdrant_storage:
   redis_data:
-  llm_models:
   frontend_node_modules:
   frontend_dist:
   # Batch CPE logs - bind mount to host directory for easy access

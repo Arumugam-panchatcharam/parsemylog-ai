@@ -4,12 +4,13 @@ Device Info Extractor
 
 Parses key RDK log files to extract structured device metadata.
 
-Adopted from dt-smart-cpe-agent/src/cpe_rdk_rag/core/info_extractor.py.
-
 Currently supports:
     - version.txt: Firmware versions, build info, SDK version, SW upgrade detection
     - PARODUSlog.txt: Device model, serial number, MAC, reboot reason, network info
+    - parodusStart-log.txt: Fallback for device identity (modelName/serialNumber from hal, parodus command line)
     - BootTime.log: Reboot history, boot cycle details, component uptimes
+    - selfHeal.txt: IPv6 support, Telemetry 2.0 flag, CPU usage samples, MemTotal/MemFree/MemAvailable
+    - telemetry_marker.txt: WAN mode, Processor Temperature, Flash Usage, Available Memory, Process Memory by feature
 
 The extracted info is used by the Telemetry tab to enrich the Device Info card
 and by the Regex Analyzer page for reboot boundary detection.
@@ -146,8 +147,8 @@ def find_and_parse_version_txt(project_dir: Path) -> Dict[str, Any]:
         Parsed version info dict, or empty dict if not found.
     """
     search_paths = [
-        project_dir / "merged_logs" / "version.txt",
         project_dir / "version.txt",
+        project_dir / "merged_logs" / "version.txt",
     ]
 
     for path in search_paths:
@@ -210,6 +211,32 @@ _WEBPA_CONVEY_FIELDS = {
 _PARODUS_RE = re.compile(
     r"PARODUS:\s+([\w_-]+)\s+is\s+(.+)$"
 )
+
+# parodusStart-log.txt: "[mod=PARODUS, lvl=Info] modelName returned from hal:DT-HGW01A-ARC"
+_PARODUS_START_RETURNED_RE = re.compile(
+    r"\]\s*(\w+)\s+returned\s+from\s+hal\s*:\s*(.+)$"
+)
+# "Manufacturer Name is Arcadyan", "lastRebootReason is hard-reboot", "BaseMacAddress is 34:19:4D:C5:9A:5F"
+_PARODUS_START_IS_RE = re.compile(
+    r"\]\s*(?:Modified\s+)?(lastRebootReason|Manufacturer Name|BaseMacAddress)\s+is\s+(.+)$"
+)
+# parodus command line: --hw-model="DT-HGW01A-ARC" or --hw-serial-number=901A...
+_PARODUS_START_CMD_HW_MODEL_RE = re.compile(r"--hw-model=\"?([^\"\s]+)\"?")
+_PARODUS_START_CMD_SERIAL_RE = re.compile(r"--hw-serial-number=(\S+)")
+_PARODUS_START_CMD_MANUFACTURER_RE = re.compile(r"--hw-manufacturer=\"?([^\"\s]+)\"?")
+_PARODUS_START_CMD_LAST_REBOOT_RE = re.compile(r"--hw-last-reboot-reason=(\S+)")
+_PARODUS_START_CMD_FW_RE = re.compile(r"--fw-name=(\S+)")
+_PARODUS_START_CMD_BOOT_TIME_RE = re.compile(r"--boot-time=(\d+)")
+_PARODUS_START_CMD_MAC_RE = re.compile(r"--hw-mac=(\S+)")
+_PARODUS_START_CMD_WAN_RE = re.compile(r"--wan-ipv4-address=(\S+)")
+
+# parodusStart-log "X returned from hal:Y" key -> internal name
+_PARODUS_START_HAL_KEYS = {
+    "modelName": "hw_model",
+    "serialNumber": "serial_number",
+    "firmwareVersion": "fw_name",
+    "bootTime": "boot_time_epoch",
+}
 
 # Regex for X-WebPA-Convey Header JSON blob
 _WEBPA_CONVEY_RE = re.compile(
@@ -395,6 +422,80 @@ def parse_parodus_log(content: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# parodusStart-log.txt parser (fallback when PARODUSlog.txt not available)
+# ---------------------------------------------------------------------------
+
+def parse_parodus_start_log(content: str) -> Dict[str, Any]:
+    """
+    Parse parodusStart-log.txt for device identity.
+
+    Lines like:
+        [mod=PARODUS, lvl=Info] modelName returned from hal:DT-HGW01A-ARC
+        [mod=PARODUS, lvl=Info] Manufacturer Name is Arcadyan
+        parodus command formed is: /usr/bin/parodus --hw-model="DT-HGW01A-ARC" ...
+
+    Returns a dict with the same keys as parse_parodus_log (hw_model, serial_number,
+    manufacturer, last_reboot_reason, fw_name, boot_time_epoch, mac, wan_ipv4, etc.)
+    so it can be used as a drop-in fallback in find_and_build_fallback_device_info.
+    """
+    if not content or not content.strip():
+        return {}
+
+    result: Dict[str, Any] = {}
+    last_ts = ""
+
+    for line in content.splitlines():
+        # Timestamp at start of line
+        ts_m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", line)
+        if ts_m:
+            last_ts = ts_m.group(1)
+
+        # "X returned from hal:Y"
+        m = _PARODUS_START_RETURNED_RE.search(line)
+        if m:
+            key, value = m.group(1).strip(), m.group(2).strip()
+            if key in _PARODUS_START_HAL_KEYS:
+                result[_PARODUS_START_HAL_KEYS[key]] = value
+            continue
+
+        # "Manufacturer Name is X", "lastRebootReason is X", "BaseMacAddress is X"
+        m2 = _PARODUS_START_IS_RE.search(line)
+        if m2:
+            key, value = m2.group(1).strip(), m2.group(2).strip()
+            if key == "Manufacturer Name":
+                result["manufacturer"] = value
+            elif key == "lastRebootReason":
+                result["last_reboot_reason"] = value
+            elif key == "BaseMacAddress":
+                result["mac"] = value
+            continue
+
+        # parodus command line (last occurrence wins)
+        if "parodus command formed is:" in line or "parodus command formed is" in line:
+            for regex, attr in [
+                (_PARODUS_START_CMD_HW_MODEL_RE, "hw_model"),
+                (_PARODUS_START_CMD_SERIAL_RE, "serial_number"),
+                (_PARODUS_START_CMD_MANUFACTURER_RE, "manufacturer"),
+                (_PARODUS_START_CMD_LAST_REBOOT_RE, "last_reboot_reason"),
+                (_PARODUS_START_CMD_FW_RE, "fw_name"),
+                (_PARODUS_START_CMD_BOOT_TIME_RE, "boot_time_epoch"),
+                (_PARODUS_START_CMD_MAC_RE, "mac"),
+                (_PARODUS_START_CMD_WAN_RE, "wan_ipv4"),
+            ]:
+                mo = regex.search(line)
+                if mo and mo.group(1):
+                    result[attr] = mo.group(1).strip()
+
+    if result:
+        if last_ts and "parodus_reboot_history" not in result and result.get("last_reboot_reason"):
+            result["parodus_reboot_history"] = [
+                {"reason": result["last_reboot_reason"], "timestamp": last_ts}
+            ]
+        result["parodus_startup_count"] = 1
+    return result
+
+
+# ---------------------------------------------------------------------------
 # telemetry_marker.txt — WAN Operating Mode
 # ---------------------------------------------------------------------------
 
@@ -420,6 +521,203 @@ def parse_wan_mode_from_marker(content: str) -> str:
         return ""
     m = _WAN_MODE_RE.search(content)
     return m.group(1).strip() if m else ""
+
+
+# ---------------------------------------------------------------------------
+# selfHeal.txt parser — IPv6, Telemetry 2.0, CPU usage, memory
+# ---------------------------------------------------------------------------
+
+_SELFHEAL_IPV6_RE = re.compile(r"\[?RDKB_SELFHEAL\]?\s*:\s*Global IPv6 is present", re.IGNORECASE)
+_SELFHEAL_TELEMETRY2_RE = re.compile(
+    r"Telemetry 2\.0 feature is (true|false)", re.IGNORECASE
+)
+_SELFHEAL_CPU_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*?RDKB_SELFHEAL.*?CPU usage is (\d+)\s+at timestamp\s+([\d:]+)",
+    re.IGNORECASE,
+)
+_SELFHEAL_MEMTOTAL_RE = re.compile(r"MemTotal:\s*(\d+)\s*kB")
+_SELFHEAL_MEMFREE_RE = re.compile(r"MemFree:\s*(\d+)\s*kB")
+_SELFHEAL_MEMAVAIL_RE = re.compile(r"MemAvailable:\s*(\d+)\s*kB")
+
+
+def parse_selfheal_txt(content: str) -> Dict[str, Any]:
+    """
+    Parse selfHeal.txt for IPv6 support, Telemetry 2.0 flag, CPU usage samples,
+    and periodic memory (MemTotal/MemFree/MemAvailable).
+
+    Returns:
+        - ipv6_present: bool
+        - telemetry2_enabled: bool or None if not found
+        - cpu_usage_samples: list of {timestamp_iso, timestamp_raw, cpu_usage_pct}
+        - mem_snapshot: {MemTotal_kB, MemFree_kB, MemAvailable_kB} from latest block
+    """
+    if not content or not content.strip():
+        return {}
+
+    out: Dict[str, Any] = {
+        "ipv6_present": False,
+        "telemetry2_enabled": None,
+        "cpu_usage_samples": [],
+        "mem_snapshot": {},
+    }
+
+    lines = content.splitlines()
+    for i, line in enumerate(lines):
+        if _SELFHEAL_IPV6_RE.search(line):
+            out["ipv6_present"] = True
+        m = _SELFHEAL_TELEMETRY2_RE.search(line)
+        if m:
+            out["telemetry2_enabled"] = m.group(1).lower() == "true"
+        m = _SELFHEAL_CPU_RE.search(line)
+        if m:
+            out["cpu_usage_samples"].append({
+                "timestamp_iso": m.group(1),
+                "timestamp_raw": m.group(3),
+                "cpu_usage_pct": int(m.group(2)),
+            })
+        if _SELFHEAL_MEMTOTAL_RE.search(line):
+            mt = _SELFHEAL_MEMTOTAL_RE.search(line)
+            if mt:
+                out["mem_snapshot"]["MemTotal_kB"] = int(mt.group(1))
+            for j in range(i + 1, min(i + 5, len(lines))):
+                n = lines[j]
+                if not n.strip():
+                    break
+                mf = _SELFHEAL_MEMFREE_RE.search(n)
+                if mf:
+                    out["mem_snapshot"]["MemFree_kB"] = int(mf.group(1))
+                ma = _SELFHEAL_MEMAVAIL_RE.search(n)
+                if ma:
+                    out["mem_snapshot"]["MemAvailable_kB"] = int(ma.group(1))
+
+    return out
+
+
+def find_and_parse_selfheal(project_dir: Path) -> Dict[str, Any]:
+    """Locate selfHeal.txt (or selfheal.txt) in project_dir and parse it."""
+    for name in ("selfHeal.txt", "selfheal.txt", "SelfHeal.txt"):
+        path = project_dir / name
+        if path.exists() and path.is_file():
+            try:
+                raw = path.read_text(encoding="utf-8", errors="ignore")
+                return parse_selfheal_txt(raw)
+            except Exception as e:
+                logger.warning(f"[InfoExtractor] Error reading {path}: {e}")
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# telemetry_marker.txt — extended (Processor Temp, Flash, Memory, Process summary)
+# ---------------------------------------------------------------------------
+
+_MARKER_PROC_TEMP_RE = re.compile(r"Processor Temperature:\s*(\d+)")
+_MARKER_FLASH_TOTAL_RE = re.compile(r"Flash Usage:Total:([\d.]+)M")
+_MARKER_FLASH_USED_RE = re.compile(r"Flash Usage:Used:([\d.]+)M")
+_MARKER_FLASH_FREE_RE = re.compile(r"Flash Usage:Free:([\d.]+)M")
+_MARKER_FLASH_PCT_RE = re.compile(r"Flash Usage:Percentage:(\d+)")
+_MARKER_AVAIL_MEM_RE = re.compile(r"Available Memory:\s*(\d+)")
+# Feature_Memory_usage: PID=...|NAME=...|RSS=...|VSZ=...; ...
+_MARKER_PROCESS_LINE_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s+([A-Za-z0-9_]+_Memory_[uU]sage):\s*(.+)"
+)
+
+
+def parse_telemetry_marker_extended(content: str) -> Dict[str, Any]:
+    """
+    Parse telemetry_marker.txt for Processor Temperature, Flash Usage,
+    Available Memory, and Device Process Memory Summary (per-feature).
+
+    Returns:
+        - wan_mode: str (from existing parse_wan_mode_from_marker)
+        - processor_temperature: list of {timestamp, value_c}
+        - flash_usage: list of {timestamp, Total_M, Used_M, Free_M, Percentage}
+        - available_memory: list of {timestamp, value_kB}
+        - process_memory_by_feature: list of {timestamp, feature_name, entries}
+          where entries are list of {pid, name, rss_kb, vsz_kb} or raw string
+    """
+    if not content or not content.strip():
+        return {}
+
+    out: Dict[str, Any] = {
+        "wan_mode": parse_wan_mode_from_marker(content),
+        "processor_temperature": [],
+        "flash_usage": [],
+        "available_memory": [],
+        "process_memory_by_feature": [],
+    }
+
+    lines = content.splitlines()
+    current_ts = ""
+    for i, line in enumerate(lines):
+        ts_m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", line)
+        if ts_m:
+            current_ts = ts_m.group(1)
+
+        m = _MARKER_PROC_TEMP_RE.search(line)
+        if m:
+            out["processor_temperature"].append({
+                "timestamp": current_ts,
+                "value_c": int(m.group(1)),
+            })
+
+        if "Flash Usage:Total:" in line:
+            mt = _MARKER_FLASH_TOTAL_RE.search(line)
+            entry = {"timestamp": current_ts}
+            if mt:
+                entry["Total_M"] = float(mt.group(1))
+            for j in range(i + 1, min(i + 5, len(lines))):
+                n = lines[j]
+                if re.match(r"^\d{4}-\d{2}-\d{2}T", n) and "Flash Usage" not in n:
+                    break
+                mu = _MARKER_FLASH_USED_RE.search(n)
+                mf = _MARKER_FLASH_FREE_RE.search(n)
+                mp = _MARKER_FLASH_PCT_RE.search(n)
+                if mu:
+                    entry["Used_M"] = float(mu.group(1))
+                if mf:
+                    entry["Free_M"] = float(mf.group(1))
+                if mp:
+                    entry["Percentage"] = int(mp.group(1))
+            if len(entry) > 1:
+                out["flash_usage"].append(entry)
+
+        m = _MARKER_AVAIL_MEM_RE.search(line)
+        if m and "Available Memory:" in line:
+            out["available_memory"].append({
+                "timestamp": current_ts,
+                "value_kB": int(m.group(1)),
+            })
+
+        # Device Process Memory Summary: "2025-12-13T22:56:00 Mesh_Memory_usage: PID=9923|NAME=..."
+        m = _MARKER_PROCESS_LINE_RE.match(line)
+        if m:
+            ts, feature, rest = m.group(1), m.group(2), m.group(3)
+            entries = []
+            for part in rest.split(";"):
+                part = part.strip()
+                if not part or " not running" in part:
+                    continue
+                # PID=123|NAME=proc|RSS=1000 KB|VSZ=2000 KB
+                pid_m = re.search(r"PID=(\d+)", part)
+                name_m = re.search(r"NAME=([^|]+)", part)
+                rss_m = re.search(r"RSS=(\d+)\s*KB", part)
+                vsz_m = re.search(r"VSZ=(\d+)\s*KB", part)
+                if pid_m:
+                    entries.append({
+                        "pid": int(pid_m.group(1)),
+                        "name": name_m.group(1).strip() if name_m else "",
+                        "rss_kb": int(rss_m.group(1)) if rss_m else None,
+                        "vsz_kb": int(vsz_m.group(1)) if vsz_m else None,
+                    })
+                else:
+                    entries.append({"raw": part})
+            out["process_memory_by_feature"].append({
+                "timestamp": ts,
+                "feature_name": feature,
+                "entries": entries,
+            })
+
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -455,27 +753,29 @@ def find_and_build_fallback_device_info(project_dir: Path) -> Dict[str, str]:
     """
     device_info: Dict[str, str] = {}
 
-    # --- 1. PARODUSlog.txt ---
+    # --- 1. PARODUSlog.txt, then parodusStart-log.txt fallback ---
+    def _apply_parodus_result(parodus: Dict[str, Any]) -> None:
+        _map = {
+            "hw_model": "model",
+            "serial_number": "serial",
+            "manufacturer": "manufacturer",
+            "mac": "mac",
+            "fw_name": "version",
+            "last_reboot_reason": "last_reboot_reason",
+            "boot_time_epoch": "boot_time_epoch",
+        }
+        for src_key, dst_key in _map.items():
+            val = parodus.get(src_key, "")
+            if val:
+                device_info[dst_key] = str(val)
+
     parodus_path = project_dir / "PARODUSlog.txt"
     if parodus_path.exists() and parodus_path.is_file():
         try:
             raw = parodus_path.read_text(encoding="utf-8", errors="ignore")
             parodus = parse_parodus_log(raw)
             if parodus:
-                # Map PARODUS field names to the standard device_info keys
-                _map = {
-                    "hw_model": "model",
-                    "serial_number": "serial",
-                    "manufacturer": "manufacturer",
-                    "mac": "mac",
-                    "fw_name": "version",
-                    "last_reboot_reason": "last_reboot_reason",
-                    "boot_time_epoch": "boot_time_epoch",
-                }
-                for src_key, dst_key in _map.items():
-                    val = parodus.get(src_key, "")
-                    if val:
-                        device_info[dst_key] = str(val)
+                _apply_parodus_result(parodus)
                 logger.debug(
                     f"[InfoExtractor] Fallback PARODUSlog: "
                     f"model={device_info.get('model', 'N/A')}, "
@@ -486,6 +786,25 @@ def find_and_build_fallback_device_info(project_dir: Path) -> Dict[str, str]:
                 f"[InfoExtractor] Error reading fallback PARODUSlog "
                 f"{parodus_path}: {e}"
             )
+
+    # Fallback: parodusStart-log.txt when PARODUSlog missing or gave no identity
+    if not device_info.get("model") or not device_info.get("serial"):
+        start_path = project_dir / "parodusStart-log.txt"
+        if start_path.exists() and start_path.is_file():
+            try:
+                raw = start_path.read_text(encoding="utf-8", errors="ignore")
+                start_data = parse_parodus_start_log(raw)
+                if start_data:
+                    _apply_parodus_result(start_data)
+                    logger.info(
+                        f"[InfoExtractor] Fallback parodusStart-log: "
+                        f"model={device_info.get('model', 'N/A')}, "
+                        f"serial={device_info.get('serial', 'N/A')}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"[InfoExtractor] Error reading parodusStart-log {start_path}: {e}"
+                )
 
     # --- 2. telemetry_marker.txt — WAN mode ---
     marker_path = project_dir / "telemetry_marker.txt"
@@ -721,9 +1040,10 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
     cache_path = project_dir / ".reboots_cache.json"
     bt_path = project_dir / "BootTime.log"
     p_path = project_dir / "PARODUSlog.txt"
+    p_start_path = project_dir / "parodusStart-log.txt"
 
     # --- Check cache ---
-    if _reboots_cache_is_fresh(cache_path, [bt_path, p_path]):
+    if _reboots_cache_is_fresh(cache_path, [bt_path, p_path, p_start_path]):
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(cached, list):
@@ -779,6 +1099,27 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                 return reboots
         except Exception as e:
             logger.warning(f"[InfoExtractor] Error parsing {p_path}: {e}")
+
+    # --- Fallback: parodusStart-log.txt ---
+    if p_start_path.exists() and p_start_path.is_file():
+        try:
+            content = p_start_path.read_text(encoding="utf-8", errors="ignore")
+            p_info = parse_parodus_start_log(content)
+            for entry in p_info.get("parodus_reboot_history", []):
+                ts = entry.get("timestamp", "")
+                reason = entry.get("reason", "unknown")
+                if ts:
+                    reboots.append({"timestamp": ts, "reason": reason})
+            if reboots:
+                logger.info(
+                    f"[InfoExtractor] Found {len(reboots)} reboots "
+                    f"from {p_start_path}"
+                )
+                reboots.sort(key=lambda r: r["timestamp"])
+                _write_reboots_cache(cache_path, reboots)
+                return reboots
+        except Exception as e:
+            logger.warning(f"[InfoExtractor] Error parsing {p_start_path}: {e}")
 
     logger.info(f"[InfoExtractor] No reboot data found in {project_dir}")
     # Cache the empty result too so we don't re-parse on every call

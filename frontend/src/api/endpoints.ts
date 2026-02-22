@@ -15,6 +15,10 @@ export const authApi = {
       current_password: currentPassword,
       new_password: newPassword,
     }),
+  getLogViewerQuickSearches: () =>
+    api.get<{ buttons: { id: string; name: string; pattern: string }[] }>("/auth/log-viewer-quick-searches"),
+  saveLogViewerQuickSearches: (buttons: { id: string; name: string; pattern: string }[]) =>
+    api.put<{ buttons: { id: string; name: string; pattern: string }[] }>("/auth/log-viewer-quick-searches", { buttons }),
 };
 
 // ---------- Projects ----------
@@ -122,8 +126,18 @@ export const filesApi = {
       responseType: "blob",
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
+  downloadMergedLogs: (projectId: string, cpeId?: string | null) =>
+    api.get(`/projects/${projectId}/files/merged-logs/download`, {
+      responseType: "blob",
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
   search: (projectId: string, filename: string, pattern: string, cpeId?: string | null) =>
     api.post(`/projects/${projectId}/files/${filename}/search`, { pattern, cpe_id: cpeId || undefined }),
+  searchAllFiles: (projectId: string, pattern: string, cpeId?: string | null) =>
+    api.post<{ matches: Array<{ filename: string; line_number: number; text: string }>; total: number; pattern: string; truncated?: boolean }>(
+      `/projects/${projectId}/files/search-all`,
+      { pattern, cpe_id: cpeId ?? undefined }
+    ),
   getNotes: (projectId: string) => api.get(`/projects/${projectId}/notes`),
   saveNotes: (projectId: string, content: string) =>
     api.put(`/projects/${projectId}/notes`, { content }),

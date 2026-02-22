@@ -5,12 +5,15 @@ Files API Routes
 Endpoints for file upload, listing, content viewing, search, download, and notes.
 """
 
+import io
 import os
 import re
 import glob
 import shutil
 import logging
+import subprocess
 import threading
+import zipfile
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify, send_file
@@ -444,7 +447,183 @@ def download_file(project_id, filename):
     )
 
 
+# ---------- Merged logs archive download ----------
+
+def _safe_zip_name(s: str) -> str:
+    """Replace characters that are unsafe in ZIP filenames."""
+    if not s:
+        return ""
+    return re.sub(r'[^\w\-.]', "_", s).strip("_") or "unknown"
+
+
+@files_bp.route("/<project_id>/files/merged-logs/download", methods=["GET"])
+@jwt_required()
+def download_merged_logs_archive(project_id):
+    """
+    Download a ZIP of all log files shown in the log viewer for this project (and optional CPE).
+
+    Query params: cpe_id (optional)
+    Returns: ZIP attachment with filename merged_logs-<cpe>-<mac>.zip or merged_logs-<mac>.zip
+    """
+    user_id = get_user_id()
+    _, err = _verify_project_access(project_id, user_id)
+    if err:
+        return err
+
+    cpe_id = request.args.get("cpe_id")
+    files = dbm.get_project_files(project_id, cpe_id=cpe_id)
+    file_records = [f for f in files if getattr(f, "file_size", 0) and getattr(f, "file_path", None)]
+    if not file_records:
+        return jsonify({"error": "No files to include in archive"}), 404
+
+    # Resolve CPE label and MAC for download filename
+    cpe_label = _safe_zip_name(cpe_id) if cpe_id else ""
+    mac_label = ""
+    if cpe_id:
+        cpes = dbm.list_project_cpes(project_id)
+        cpe = next((c for c in cpes if getattr(c, "serial", None) == cpe_id), None)
+        if cpe and getattr(cpe, "mac", None):
+            mac_label = _safe_zip_name(cpe.mac.replace(":", ""))
+    if not mac_label and cpe_id:
+        mac_label = _safe_zip_name(cpe_id)
+
+    if cpe_label and mac_label:
+        zip_name = f"merged_logs-{cpe_label}-{mac_label}.zip"
+    elif mac_label:
+        zip_name = f"merged_logs-{mac_label}.zip"
+    elif cpe_label:
+        zip_name = f"merged_logs-{cpe_label}.zip"
+    else:
+        zip_name = "merged_logs.zip"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in file_records:
+            path = getattr(f, "file_path", None)
+            name = getattr(f, "original_name", None) or getattr(f, "filename", "file")
+            if not path or not os.path.isfile(path):
+                continue
+            try:
+                zf.write(path, arcname=name)
+            except Exception as e:
+                logger.warning(f"[Files] Skip adding to ZIP {path}: {e}")
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=zip_name,
+        mimetype="application/zip",
+    )
+
+
 # ---------- Search ----------
+
+@files_bp.route("/<project_id>/files/search-all", methods=["POST"])
+@jwt_required()
+def search_all_files(project_id):
+    """
+    Search all files for the project/CPE with regex using ripgrep.
+
+    Body: { "pattern": str, "cpe_id": str | null }
+    Returns: { "matches": [ { "filename", "line_number", "text" } ], "total": int, "pattern": str }
+    """
+    user_id = get_user_id()
+    _, err = _verify_project_access(project_id, user_id)
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    pattern = data.get("pattern", "").strip()
+    if not pattern:
+        return jsonify({"error": "Search pattern is required"}), 400
+
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
+    search_dir = _get_project_dir(user_id, project_id, cpe_id)
+    if not search_dir.exists():
+        return jsonify({"matches": [], "total": 0, "pattern": pattern}), 200
+
+    try:
+        re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        return jsonify({"error": f"Invalid regex: {str(e)}"}), 400
+
+    files = dbm.get_project_files(project_id, cpe_id=cpe_id)
+    path_to_filename = {}
+    for f in files:
+        fp = getattr(f, "file_path", None)
+        fn = getattr(f, "filename", None)
+        if fp and fn:
+            path_to_filename[Path(fp).resolve()] = fn
+
+    if not path_to_filename:
+        return jsonify({"matches": [], "total": 0, "pattern": pattern}), 200
+
+    rg_binary = shutil.which("rg")
+    if not rg_binary:
+        return jsonify({"error": "ripgrep (rg) not found on server"}), 503
+
+    cmd = [
+        rg_binary,
+        "-n",
+        "-i",
+        "--max-filesize", "50M",
+        "-e", pattern,
+        str(search_dir),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(search_dir),
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Search timed out"}), 504
+    except Exception as e:
+        logger.warning(f"[Files] search-all rg error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    matches = []
+    search_dir_resolved = search_dir.resolve()
+    for line in (result.stdout or "").strip().splitlines():
+        if not line:
+            continue
+        idx = line.find(":")
+        if idx == -1:
+            continue
+        path_part = line[:idx]
+        rest = line[idx + 1:]
+        colon2 = rest.find(":")
+        if colon2 == -1:
+            continue
+        try:
+            line_no = int(rest[:colon2])
+        except ValueError:
+            continue
+        text = rest[colon2 + 1:]
+        abs_path = (search_dir_resolved / path_part).resolve()
+        filename = path_to_filename.get(abs_path)
+        if filename is None:
+            filename = path_to_filename.get(Path(path_part).resolve())
+        if filename is None:
+            filename = Path(path_part).name
+        matches.append({
+            "filename": filename,
+            "line_number": line_no,
+            "text": text.rstrip("\r\n"),
+        })
+        if len(matches) >= 500:
+            break
+
+    return jsonify({
+        "matches": matches,
+        "total": len(matches),
+        "pattern": pattern,
+        "truncated": len(matches) >= 500,
+    }), 200
+
 
 @files_bp.route("/<project_id>/files/<filename>/search", methods=["POST"])
 @jwt_required()

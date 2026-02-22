@@ -154,15 +154,18 @@ def get_batch_job(project_id, job_id):
     processed = job.processed_cpes + job.failed_cpes
     progress_percent = (processed / total * 100) if total > 0 else 0
     
-    # Calculate elapsed time and ETA
+    # Calculate elapsed time and ETA (stop elapsed when job is done)
     elapsed_sec = None
     eta_sec = None
     if job.started_at:
         from datetime import datetime
-        now = datetime.now()
-        elapsed = (now - job.started_at).total_seconds()
+        if job.completed_at and job.status in ("completed", "failed", "cancelled"):
+            elapsed = (job.completed_at - job.started_at).total_seconds()
+        else:
+            now = datetime.now()
+            elapsed = (now - job.started_at).total_seconds()
         elapsed_sec = elapsed
-        
+
         if processed > 0 and job.status == "processing":
             avg_time_per_cpe = elapsed / processed
             remaining_cpes = total - processed
@@ -216,12 +219,24 @@ def list_batch_jobs(project_id):
     
     limit = request.args.get("limit", 50, type=int)
     jobs = dbm.get_project_batch_jobs(project_id, limit=limit)
-    
+
+    from datetime import datetime
+    now = datetime.now()
     result = []
     for job in jobs:
         processed = job.processed_cpes + job.failed_cpes
         progress_percent = (processed / job.total_cpes * 100) if job.total_cpes > 0 else 0
-        
+
+        elapsed_sec = None
+        eta_sec = None
+        if job.started_at:
+            if job.completed_at and job.status in ("completed", "failed", "cancelled"):
+                elapsed_sec = (job.completed_at - job.started_at).total_seconds()
+            else:
+                elapsed_sec = (now - job.started_at).total_seconds()
+            if processed > 0 and job.status == "processing":
+                eta_sec = (elapsed_sec / processed) * (job.total_cpes - processed)
+
         result.append({
             "job_id": job.id,
             "status": job.status,
@@ -231,9 +246,13 @@ def list_batch_jobs(project_id):
             "failed_cpes": job.failed_cpes,
             "progress_percent": round(progress_percent, 1),
             "created_at": job.created_at.isoformat() if job.created_at else None,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "elapsed_sec": round(elapsed_sec, 1) if elapsed_sec is not None else None,
+            "eta_sec": round(eta_sec, 1) if eta_sec is not None else None,
+            "error_message": job.error_message,
         })
-    
+
     return jsonify({"jobs": result}), 200
 
 

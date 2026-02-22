@@ -399,20 +399,20 @@ export default function PatternAnalyzerPage() {
     },
   });
 
-  // -- Handle DRAIN3 template import via URL params --
+  // -- Handle DRAIN3 template import via URL params (template= and optional domain=) --
   useEffect(() => {
     const templateParam = searchParams.get("template");
+    const domainParam = searchParams.get("domain");
     if (templateParam && patternsLoaded) {
       const regex = drain3ToRegex(templateParam);
       const name = templateParam.length > 60 ? templateParam.slice(0, 57) + "..." : templateParam;
-      // Add to "Imported" domain
-      const importDomain = "Imported";
-      const existing = domains[importDomain] || [];
+      const targetDomain = domainParam?.trim() || "Imported";
+      const existing = domains[targetDomain] || [];
       const exists = existing.some((p) => p.regex === regex);
       if (!exists) {
         setDomains((prev) => ({
           ...prev,
-          [importDomain]: [...(prev[importDomain] || []), { name, regex, enabled: true }],
+          [targetDomain]: [...(prev[targetDomain] || []), { name, regex, enabled: true }],
         }));
       }
       setSearchParams({}, { replace: true });

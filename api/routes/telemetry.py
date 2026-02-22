@@ -101,6 +101,100 @@ def _auto_scale_unit(values, unit):
     return values, unit
 
 
+def _build_fallback_charts(marker_data):
+    """
+    Build chart data from marker_data (selfHeal + telemetry_marker) when
+    telemetry2_0 is not present. Returns list of chart dicts in the same
+    format as _build_charts_data: [{ "group": str, "traces": [...] }].
+    """
+    charts = []
+    selfheal = marker_data.get("selfheal") or {}
+    marker = marker_data.get("telemetry_marker") or {}
+
+    # 1) CPU usage from selfHeal (timestamp_iso, cpu_usage_pct)
+    cpu_samples = selfheal.get("cpu_usage_samples") or []
+    if len(cpu_samples) >= 1:
+        times = [s.get("timestamp_iso") or s.get("timestamp_raw") or "" for s in cpu_samples]
+        values = [s.get("cpu_usage_pct", 0) for s in cpu_samples]
+        if any(times):
+            charts.append({
+                "group": "CPU (selfHeal)",
+                "traces": [{"label": "CPU usage", "unit": "%", "times": times, "values": values}],
+            })
+
+    # 2) Processor temperature from telemetry_marker
+    proc_temp = marker.get("processor_temperature") or []
+    if len(proc_temp) >= 1:
+        times = [p.get("timestamp", "") for p in proc_temp]
+        values = [p.get("value_c", 0) for p in proc_temp]
+        if any(times):
+            charts.append({
+                "group": "Processor temperature",
+                "traces": [{"label": "Temperature", "unit": "°C", "times": times, "values": values}],
+            })
+
+    # 3) Flash usage (Used M, Free M, Percentage %)
+    flash = marker.get("flash_usage") or []
+    if len(flash) >= 1:
+        times = [f.get("timestamp", "") for f in flash]
+        traces = []
+        used_vals = [f.get("Used_M") for f in flash]
+        if any(v is not None for v in used_vals):
+            traces.append({"label": "Used", "unit": "MB", "times": times, "values": [v if v is not None else 0 for v in used_vals]})
+        free_vals = [f.get("Free_M") for f in flash]
+        if any(v is not None for v in free_vals):
+            traces.append({"label": "Free", "unit": "MB", "times": times, "values": [v if v is not None else 0 for v in free_vals]})
+        pct_vals = [f.get("Percentage") for f in flash]
+        if any(v is not None for v in pct_vals):
+            traces.append({"label": "Usage", "unit": "%", "times": times, "values": [v if v is not None else 0 for v in pct_vals]})
+        if traces:
+            charts.append({"group": "Flash usage", "traces": traces})
+
+    # 4) Available memory (kB; optionally scale to MB in frontend or here)
+    avail_mem = marker.get("available_memory") or []
+    if len(avail_mem) >= 1:
+        times = [a.get("timestamp", "") for a in avail_mem]
+        values_kb = [a.get("value_kB", 0) for a in avail_mem]
+        if any(times):
+            # Show in MB for readability
+            values_mb = [round(v / 1024, 2) for v in values_kb]
+            charts.append({
+                "group": "Available memory",
+                "traces": [{"label": "Available", "unit": "MB", "times": times, "values": values_mb}],
+            })
+
+    # 5) Process memory by feature: one trace per feature (RSS sum per timestamp)
+    proc_mem = marker.get("process_memory_by_feature") or []
+    if proc_mem:
+        from collections import defaultdict
+        # (feature_name, timestamp) -> sum of rss_kb (in case of multiple lines per ts)
+        by_feature_ts = defaultdict(int)
+        for item in proc_mem:
+            ts = item.get("timestamp", "")
+            name = item.get("feature_name", "unknown")
+            entries = item.get("entries") or []
+            total_rss = sum(e.get("rss_kb") or 0 for e in entries if isinstance(e, dict))
+            by_feature_ts[(name, ts)] += total_rss
+        # Build list of (timestamp, sum_rss) per feature, then sort by time
+        by_feature = defaultdict(list)
+        for (name, ts), rss in by_feature_ts.items():
+            by_feature[name].append((ts, rss))
+
+        traces = []
+        for feat_name, points in by_feature.items():
+            if not points:
+                continue
+            points.sort(key=lambda x: x[0])
+            times = [p[0] for p in points]
+            values = [p[1] for p in points]
+            label = feat_name.replace("_Memory_usage", "").replace("_Memory_Usage", "").strip() or feat_name
+            traces.append({"label": label, "unit": "KB", "times": times, "values": values})
+        if traces:
+            charts.append({"group": "Process memory by feature", "traces": traces})
+
+    return charts
+
+
 # ---------------------------------------------------------------------------
 # Core: parse fresh, build response, cache the result
 # ---------------------------------------------------------------------------
@@ -126,16 +220,39 @@ def _parse_and_build(project_dir: Path):
         if reports and summary.get("parsed", 0) > 0:
             telemetry_ok = True
 
-    # -- Fallback: build a partial response from PARODUSlog / marker / version
+    # -- Fallback: build a partial response from PARODUSlog / parodusStart-log / marker / version / selfHeal
     if not telemetry_ok:
         try:
-            from logai.info_extractor import find_and_build_fallback_device_info
+            from logai.info_extractor import (
+                find_and_build_fallback_device_info,
+                find_and_parse_selfheal,
+                parse_telemetry_marker_extended,
+            )
             fallback_info = find_and_build_fallback_device_info(project_dir)
         except Exception:
             fallback_info = {}
 
         if not fallback_info:
             return None, None, "No telemetry or device info found"
+
+        # Enrich with selfHeal (IPv6, Telemetry 2.0, CPU, Mem) and telemetry_marker (temp, flash, process memory)
+        marker_data = {}
+        try:
+            selfheal = find_and_parse_selfheal(project_dir)
+            if selfheal:
+                marker_data["selfheal"] = selfheal
+                if selfheal.get("ipv6_present") is not None:
+                    fallback_info["ipv6_support"] = "Yes" if selfheal["ipv6_present"] else "No"
+                if selfheal.get("telemetry2_enabled") is not None:
+                    fallback_info["telemetry2_enabled"] = "Yes" if selfheal["telemetry2_enabled"] else "No"
+            marker_path = project_dir / "telemetry_marker.txt"
+            if marker_path.exists() and marker_path.is_file():
+                raw = marker_path.read_text(encoding="utf-8", errors="ignore")
+                extended = parse_telemetry_marker_extended(raw)
+                if extended:
+                    marker_data["telemetry_marker"] = extended
+        except Exception as e:
+            logger.debug(f"[Telemetry] Fallback marker/selfheal parse: {e}")
 
         response = {
             "device_info": fallback_info,
@@ -148,6 +265,9 @@ def _parse_and_build(project_dir: Path):
             "available_fields": None,
             "cached": False,
         }
+        if marker_data:
+            response["marker_data"] = marker_data
+            response["charts"] = _build_fallback_charts(marker_data)
 
         save_telemetry_cache(project_dir, response, {})
         return response, {}, None
@@ -229,6 +349,9 @@ def parse_telemetry(project_id):
             cached = load_telemetry_cache(pdir)
             if cached:
                 cached["cached"] = True
+                # Backfill fallback charts from marker_data if missing (e.g. cache from before charts were added)
+                if cached.get("marker_data") and not cached.get("charts"):
+                    cached["charts"] = _build_fallback_charts(cached["marker_data"])
                 return jsonify(cached), 200
 
         # Parse fresh, build response, and cache

@@ -6,7 +6,11 @@ Endpoints for user authentication, registration, and profile management.
 Uses the existing DBManager for all database operations.
 """
 
+import json
+import logging
 from flask import Blueprint, request, jsonify
+
+logger = logging.getLogger(__name__)
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
@@ -14,10 +18,19 @@ from flask_jwt_extended import (
     get_jwt_identity,
 )
 
+from pathlib import Path
+
 from api.app import dbm
 from api.auth import get_user_id
+from logai.utils.constants import UPLOAD_DIRECTORY
 
 auth_bp = Blueprint("auth", __name__)
+
+LOG_VIEWER_QUICK_SEARCHES_FILENAME = "log_viewer_quick_searches.json"
+
+
+def _quick_searches_path(user_id: int) -> Path:
+    return Path(UPLOAD_DIRECTORY) / str(user_id) / LOG_VIEWER_QUICK_SEARCHES_FILENAME
 
 
 @auth_bp.route("/health", methods=["GET"])
@@ -193,3 +206,59 @@ def change_password():
         return jsonify({"error": error}), 400
 
     return jsonify({"message": "Password changed successfully"}), 200
+
+
+@auth_bp.route("/log-viewer-quick-searches", methods=["GET"])
+@jwt_required()
+def get_log_viewer_quick_searches():
+    """
+    Get the current user's log viewer quick search buttons (name -> regex).
+    Stored per user in UPLOAD_DIRECTORY/{user_id}/log_viewer_quick_searches.json.
+    Returns: { "buttons": [ { "id", "name", "pattern" }, ... ] }
+    """
+    user_id = get_user_id()
+    path = _quick_searches_path(user_id)
+    if not path.exists():
+        return jsonify({"buttons": []}), 200
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        buttons = data.get("buttons") if isinstance(data, dict) else data
+        if not isinstance(buttons, list):
+            return jsonify({"buttons": []}), 200
+        out = []
+        for b in buttons:
+            if isinstance(b, dict) and "id" in b and "name" in b and "pattern" in b:
+                out.append({"id": str(b["id"]), "name": str(b["name"]), "pattern": str(b["pattern"])})
+        return jsonify({"buttons": out}), 200
+    except (json.JSONDecodeError, OSError):
+        return jsonify({"buttons": []}), 200
+
+
+@auth_bp.route("/log-viewer-quick-searches", methods=["PUT"])
+@jwt_required()
+def save_log_viewer_quick_searches():
+    """
+    Save the current user's log viewer quick search buttons.
+    Body: { "buttons": [ { "id", "name", "pattern" }, ... ] }
+    """
+    user_id = get_user_id()
+    data = request.get_json(silent=True) or {}
+    buttons = data.get("buttons")
+    if not isinstance(buttons, list):
+        return jsonify({"error": "buttons array required"}), 400
+    out = []
+    for b in buttons:
+        if not isinstance(b, dict):
+            continue
+        bid, name, pattern = b.get("id"), b.get("name"), b.get("pattern")
+        if bid is None or name is None or pattern is None:
+            continue
+        out.append({"id": str(bid), "name": str(name), "pattern": str(pattern)})
+    path = _quick_searches_path(user_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"buttons": out}, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.warning("Failed to save log-viewer quick searches for user %s: %s", user_id, e)
+        return jsonify({"error": "Could not save settings. Check server write permissions."}), 500
+    return jsonify({"buttons": out}), 200

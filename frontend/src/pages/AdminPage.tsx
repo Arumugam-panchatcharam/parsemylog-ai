@@ -890,7 +890,7 @@ function SettingsTab() {
             <SmartToyIcon style={{ fontSize: 28 }} className="text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-semibold">AI Chat (Local LLM)</h3>
+            <h3 className="text-base font-semibold">AI Chat (OpenRouter)</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
               Enable or disable the AI-powered log analysis chat for all users.
             </p>
@@ -918,18 +918,18 @@ function SettingsTab() {
 
             {/* Server Health */}
             <div className="mt-4 flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">LLM Server:</span>
+              <span className="text-xs font-medium text-muted-foreground">OpenRouter:</span>
               {isLoading ? (
                 <CircularProgress size={12} />
               ) : llmSettings?.available ? (
                 <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
                   <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                  Online
+                  Configured
                 </span>
               ) : (
                 <span className="flex items-center gap-1 text-xs text-red-500">
                   <span className="h-2 w-2 rounded-full bg-red-500" />
-                  {llmSettings?.enabled ? "Offline — check the LLM Docker service" : "Not checked (disabled)"}
+                  {llmSettings?.enabled ? "Not configured — set OPENROUTER_API_KEY in .env" : "Not checked (disabled)"}
                 </span>
               )}
             </div>
@@ -937,9 +937,9 @@ function SettingsTab() {
             {/* Model Info */}
             {llmSettings?.model_info && (
               <div className="mt-3 p-3 bg-muted/50 rounded-lg text-xs space-y-1">
-                <p className="font-medium">Model Info</p>
+                <p className="font-medium">Provider / model</p>
                 <p className="text-muted-foreground">
-                  ID: {String((llmSettings.model_info as Record<string, unknown>).id || "unknown")}
+                  {String((llmSettings.model_info as Record<string, unknown>).provider || "OpenRouter (free)")} — {String((llmSettings.model_info as Record<string, unknown>).id || "—")}
                 </p>
               </div>
             )}
