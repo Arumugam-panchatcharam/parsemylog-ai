@@ -485,7 +485,7 @@ def quick_search(
     model: "SentenceTransformer",
     qdrant_url: str = "http://localhost:6333",
     top_k: int = 10,
-    cpe_filter: Optional[str] = None,
+    metadata_filter: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Lightweight search that reuses an already-loaded SentenceTransformer model.
@@ -499,7 +499,7 @@ def quick_search(
         model: Pre-loaded SentenceTransformer instance.
         qdrant_url: Qdrant server URL.
         top_k: Maximum results to return.
-        cpe_filter: Optional CPE serial to filter results (e.g., "34194DC2EE5F").
+        metadata_filter: Optional dict to filter by metadata (e.g., {"cpe_serial": "ABC123"}).
 
     Returns:
         List of result dicts with template metadata and similarity score.
@@ -509,17 +509,14 @@ def quick_search(
     client = QdrantClient(url=qdrant_url)
     query_vec = model.encode([query], normalize_embeddings=True)[0]
 
-    # Build filter for CPE if specified
+    # Build filter if metadata_filter is provided
     query_filter = None
-    if cpe_filter:
-        query_filter = Filter(
-            must=[
-                FieldCondition(
-                    key="cpe_serial",
-                    match=MatchValue(value=cpe_filter)
-                )
-            ]
-        )
+    if metadata_filter:
+        conditions = [
+            FieldCondition(key=k, match=MatchValue(value=v))
+            for k, v in metadata_filter.items()
+        ]
+        query_filter = Filter(must=conditions)
 
     results = client.query_points(
         collection_name=collection,

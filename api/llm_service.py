@@ -215,11 +215,18 @@ def _load_rag_context(project_id: str, cpe_id: Optional[str],
     try:
         from logai.utils.constants import QDRANT_URL
         from qdrant_client import QdrantClient
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
         from api.app import get_embedding_model
 
+        # STRATEGY: Single collection per project with CPE metadata filtering
         collection = f"project_{project_id}"
+        
+        # Build metadata filter if searching within a specific CPE
+        query_filter = None
         if cpe_id:
-            collection = f"project_{project_id}_cpe_{cpe_id}"
+            query_filter = Filter(must=[
+                FieldCondition(key="cpe_serial", match=MatchValue(value=cpe_id))
+            ])
 
         client = QdrantClient(url=QDRANT_URL, timeout=10)
 
@@ -236,6 +243,7 @@ def _load_rag_context(project_id: str, cpe_id: Optional[str],
             collection_name=collection,
             query=query_vector,
             limit=top_k,
+            query_filter=query_filter,
         )
 
         points = results.points if hasattr(results, "points") else []
