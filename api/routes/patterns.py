@@ -524,3 +524,74 @@ def get_aggregated_patterns(project_id, domain):
         "source_files": sorted(list(all_source_files)),
         "patterns": paginated_patterns
     }), 200
+
+
+@patterns_bp.route("/<project_id>/domains/<domain>/aggregated/<path:template>/sample-logs", methods=["GET"])
+@jwt_required()
+def get_aggregated_sample_logs(project_id, domain, template):
+    """
+    Get sample log lines for a specific pattern template from the FIRST CPE.
+    
+    Query params:
+        - limit: Maximum number of sample logs to return (default 3)
+    
+    Returns: {
+        "template": str,
+        "samples": [
+            {
+                "cpe_serial": str,
+                "timestamp": str,
+                "logline": str
+            }
+        ]
+    }
+    """
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    
+    limit = request.args.get("limit", 3, type=int)
+    limit = min(max(1, limit), 10)  # Clamp between 1 and 10
+    
+    # Get all CPEs for this project
+    cpes = dbm.list_project_cpes(project_id)
+    
+    if not cpes:
+        return jsonify({
+            "template": template,
+            "samples": []
+        }), 200
+    
+    samples = []
+    
+    # Find the FIRST CPE with this pattern and get samples from it only
+    for cpe in cpes:
+        cpe_dir = _project_dir(user_id, project_id, cpe.serial)
+        df = _load_domain_parquet(cpe_dir, domain)
+        
+        if df.empty or "template" not in df.columns:
+            continue
+        
+        # Filter by template
+        matching = df[df["template"] == template]
+        
+        if matching.empty:
+            continue
+        
+        # Found first CPE with this pattern - take samples from this CPE only
+        for _, row in matching.head(limit).iterrows():
+            samples.append({
+                "cpe_serial": cpe.serial,
+                "timestamp": str(row.get("timestamp", "")),
+                "logline": str(row.get("loglines", ""))
+            })
+        
+        # Stop after finding first CPE with the pattern
+        break
+    
+    return jsonify({
+        "template": template,
+        "samples": samples
+    }), 200
+

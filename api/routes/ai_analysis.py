@@ -246,6 +246,71 @@ def ai_parameters(project_id):
         return jsonify({"error": "template is required"}), 400
 
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    
+    # If searching across ALL CPEs (no cpe_id), aggregate parameters from all CPEs
+    if not cpe_id:
+        try:
+            cpes = dbm.list_project_cpes(project_id)
+            all_param_lists = []
+            
+            for cpe in cpes:
+                cpe_dir = base_dir / cpe.serial
+                
+                # Try to load domain parquet for this CPE
+                if domain:
+                    pq = cpe_dir / f"{domain}_rg.parquet"
+                else:
+                    pq = None
+                    for domain_pq in cpe_dir.glob("*_rg.parquet"):
+                        pq = domain_pq
+                        break
+                
+                if not pq or not pq.exists():
+                    continue
+                
+                try:
+                    df = pd.read_parquet(pq).reset_index(drop=True)
+                    matching = df[df["template"] == template]
+                    
+                    if matching.empty:
+                        continue
+                    
+                    if "parameter_list" in df.columns:
+                        all_param_lists.extend(matching["parameter_list"].tolist())
+                    else:
+                        loglines = matching["loglines"].tolist()
+                        param_values = extract_parameters(template, loglines)
+                        all_param_lists.extend(param_values)
+                        
+                except Exception as e:
+                    logger.warning(f"[AI Params] Error loading CPE {cpe.serial}: {e}")
+                    continue
+            
+            if not all_param_lists:
+                return jsonify({"parameters": []}), 200
+            
+            # Aggregate parameters across all CPEs
+            params_df = pd.DataFrame(all_param_lists)
+            if params_df.empty or params_df.shape[1] == 0:
+                return jsonify({"parameters": []}), 200
+            
+            result = []
+            for col_idx in range(params_df.shape[1]):
+                col_values = params_df.iloc[:, col_idx].dropna().tolist()
+                unique_values = list(set(str(v) for v in col_values if v))
+                result.append({
+                    "position": f"POSITION_{col_idx}",
+                    "count": len([v for v in col_values if v]),
+                    "values": unique_values[:100],
+                })
+            
+            return jsonify({"parameters": result}), 200
+            
+        except Exception as e:
+            logger.error(f"[AI Params] Error aggregating across CPEs: {e}")
+            return jsonify({"parameters": []}), 200
+    
+    # Original logic: Single CPE
     project_dir = base_dir / cpe_id if cpe_id else base_dir
 
     # Resolve parquet
@@ -307,7 +372,7 @@ def ai_loglines(project_id):
     Get matching log lines for a template from AI search.
 
     Body: { "template": str, "parquet_path"?: str, "domain"?: str, "page"?: int, "page_size"?: int }
-    Returns: { "lines": [...], "total": int }
+    Returns: { "lines": [...], "total": int, "sampled_info"?: {...} }
     """
     user_id = get_user_id()
     _, err = _verify_project(project_id, user_id)
@@ -321,11 +386,111 @@ def ai_loglines(project_id):
     page = data.get("page", 1)
     page_size = data.get("page_size", 20)
     cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
+    load_all = data.get("load_all", False)  # Flag to force loading all CPEs
 
     if not template:
         return jsonify({"error": "template is required"}), 400
 
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    
+    # If searching across ALL CPEs (no cpe_id), use smart sampling
+    if not cpe_id:
+        # Sampling limits (prevent OOM on 500+ CPEs)
+        MAX_CPES_TO_SAMPLE = 20 if not load_all else 9999
+        MAX_LOGS_PER_CPE = 10 if not load_all else 100
+        MAX_TOTAL_LOGS = 200 if not load_all else 10000
+        
+        try:
+            cpes = dbm.list_project_cpes(project_id)
+            all_lines = []
+            sampled_cpes = 0
+            total_cpes_with_pattern = 0
+            
+            for cpe in cpes:
+                # Early exit if we've sampled enough CPEs
+                if sampled_cpes >= MAX_CPES_TO_SAMPLE:
+                    break
+                
+                # Early exit if we have enough total logs
+                if len(all_lines) >= MAX_TOTAL_LOGS:
+                    break
+                
+                cpe_dir = base_dir / cpe.serial
+                
+                # Try to load domain parquet for this CPE
+                if domain:
+                    pq = cpe_dir / f"{domain}_rg.parquet"
+                else:
+                    pq = None
+                    for domain_pq in cpe_dir.glob("*_rg.parquet"):
+                        pq = domain_pq
+                        break
+                
+                if not pq or not pq.exists():
+                    continue
+                
+                try:
+                    df = pd.read_parquet(pq).reset_index(drop=True)
+                    matching = df[df["template"] == template]
+                    
+                    if matching.empty:
+                        continue
+                    
+                    total_cpes_with_pattern += 1
+                    sampled_cpes += 1
+                    
+                    # Sample only first N logs from this CPE (for performance)
+                    sample_size = min(MAX_LOGS_PER_CPE, len(matching), MAX_TOTAL_LOGS - len(all_lines))
+                    
+                    for _, row in matching.head(sample_size).iterrows():
+                        all_lines.append({
+                            "timestamp": str(row.get("timestamp", "")),
+                            "loglines": str(row.get("loglines", "")),
+                            "cpe_serial": cpe.serial,
+                        })
+                        
+                        if len(all_lines) >= MAX_TOTAL_LOGS:
+                            break
+                            
+                except Exception as e:
+                    logger.warning(f"[AI Loglines] Error loading CPE {cpe.serial}: {e}")
+                    continue
+            
+            # Sort by timestamp (newest first)
+            all_lines.sort(key=lambda x: x["timestamp"], reverse=True)
+            
+            # Calculate if we have more CPEs with this pattern
+            remaining_cpes = len(cpes) - sampled_cpes
+            is_sampled = sampled_cpes < total_cpes_with_pattern or remaining_cpes > 0
+            
+            total = len(all_lines)
+            start = (page - 1) * page_size
+            end = start + page_size
+            
+            response = {
+                "lines": all_lines[start:end],
+                "total": total,
+                "page": page,
+                "total_pages": max(1, (total + page_size - 1) // page_size),
+            }
+            
+            # Add sampling metadata if results are sampled
+            if is_sampled:
+                response["sampled_info"] = {
+                    "is_sampled": True,
+                    "sampled_cpes": sampled_cpes,
+                    "total_cpes": len(cpes),
+                    "total_cpes_with_pattern": total_cpes_with_pattern,
+                    "max_logs_shown": MAX_TOTAL_LOGS,
+                }
+            
+            return jsonify(response), 200
+            
+        except Exception as e:
+            logger.error(f"[AI Loglines] Error aggregating across CPEs: {e}")
+            return jsonify({"lines": [], "total": 0}), 200
+    
+    # Original logic: Single CPE (no sampling needed)
     project_dir = base_dir / cpe_id if cpe_id else base_dir
 
     pq = Path(parquet_path) if parquet_path else None

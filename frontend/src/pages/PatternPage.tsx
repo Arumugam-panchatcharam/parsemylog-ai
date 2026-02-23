@@ -52,6 +52,22 @@ export default function PatternPage() {
   const [aggregatedPage, setAggregatedPage] = useState(1);
   const [selectedPatternDetails, setSelectedPatternDetails] = useState<AggregatedPattern | null>(null);
 
+  // Fetch sample logs when pattern is selected
+  const { data: sampleLogs } = useQuery({
+    queryKey: ["aggregatedSampleLogs", projectId, selectedDomain, selectedPatternDetails?.template],
+    queryFn: async () => {
+      if (!selectedPatternDetails) return null;
+      const response = await patternsApi.getAggregatedSampleLogs(
+        projectId!,
+        selectedDomain,
+        selectedPatternDetails.template,
+        3
+      );
+      return response.data;
+    },
+    enabled: !!projectId && !!selectedDomain && !!selectedPatternDetails,
+  });
+
   // File filter for single CPE view
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [appliedFiles, setAppliedFiles] = useState<string[]>([]);
@@ -682,6 +698,23 @@ export default function PatternPage() {
                     </div>
                     
                     <div className="flex-1 overflow-auto p-4">
+                      {/* Sample Logs Section - Moved above CPE table */}
+                      {sampleLogs && sampleLogs.samples.length > 0 && (
+                        <div className="mb-6">
+                          <h4 className="text-xs font-semibold mb-2 text-muted-foreground uppercase">
+                            Sample Log Lines ({sampleLogs.samples[0].cpe_serial})
+                          </h4>
+                          <div className="bg-slate-900 text-slate-200 rounded-lg p-3 space-y-1">
+                            {sampleLogs.samples.map((sample, idx) => (
+                              <div key={idx} className="border-b border-slate-800 last:border-b-0 pb-1 last:pb-0 mb-1 last:mb-0">
+                                <div className="text-[10px] text-slate-500 mb-0.5">{sample.timestamp}</div>
+                                <div className="font-mono text-[11px] whitespace-pre-wrap break-all">{sample.logline}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <h4 className="text-xs font-semibold mb-3 text-muted-foreground uppercase">
                         CPEs with this Pattern
                       </h4>
@@ -689,6 +722,7 @@ export default function PatternPage() {
                         <table className="w-full">
                           <thead className="bg-muted/50">
                             <tr>
+                              <th className="text-left px-3 py-2 text-xs font-medium w-12">#</th>
                               <th className="text-left px-3 py-2 text-xs font-medium">CPE Serial</th>
                               <th className="text-right px-3 py-2 text-xs font-medium">Occurrences</th>
                             </tr>
@@ -696,8 +730,9 @@ export default function PatternPage() {
                           <tbody>
                             {Object.entries(selectedPatternDetails.cpe_details)
                               .sort(([, a], [, b]) => b - a)
-                              .map(([serial, count]) => (
+                              .map(([serial, count], idx) => (
                                 <tr key={serial} className="border-t border-border hover:bg-muted/30">
+                                  <td className="px-3 py-2 text-xs text-muted-foreground">{idx + 1}</td>
                                   <td className="px-3 py-2 font-mono text-xs">{serial}</td>
                                   <td className="px-3 py-2 text-right text-xs font-semibold">
                                     {count.toLocaleString()}

@@ -27,11 +27,12 @@ export default function AIAnalysisPage() {
   const [timeUnit, setTimeUnit] = useState<"seconds" | "minutes">("seconds");
   const [syntaxHL, setSyntaxHL] = useState(true);
   const [fontSize, setFontSize] = useState(12);
+  const [filterByCpe, setFilterByCpe] = useState(false); // New state for CPE filtering
   const contextRef = useRef<HTMLDivElement>(null);
 
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
   const searchMutation = useMutation({
-    mutationFn: () => aiApi.search(projectId!, query, 10, cpeId),
+    mutationFn: () => aiApi.search(projectId!, query, 10, filterByCpe ? cpeId : null),
     onSuccess: (res) => {
       setResults(res.data.results || []);
       setSelectedIdx(null);
@@ -39,11 +40,36 @@ export default function AIAnalysisPage() {
     },
   });
   const selected = selectedIdx !== null ? results[selectedIdx] : null;
-  const { data: params } = useQuery({ queryKey: ["aiParams", projectId, selected?.template, selected?.parquet_path, cpeId], queryFn: async () => (await aiApi.getParameters(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: cpeId })).data, enabled: !!projectId && !!selected });
-  const { data: loglines } = useQuery({ queryKey: ["aiLoglines", projectId, selected?.template, selected?.parquet_path, cpeId], queryFn: async () => (await aiApi.getLoglines(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: cpeId })).data, enabled: !!projectId && !!selected });
+  const effectiveCpeId = filterByCpe ? cpeId : null;
+  const { data: params } = useQuery({ queryKey: ["aiParams", projectId, selected?.template, selected?.parquet_path, effectiveCpeId], queryFn: async () => (await aiApi.getParameters(projectId!, { template: selected!.template, parquet_path: selected!.parquet_path, domain: selected!.domain, cpe_id: effectiveCpeId })).data, enabled: !!projectId && !!selected });
+  const { data: loglines } = useQuery({ 
+    queryKey: ["aiLoglines", projectId, selected?.template, selected?.parquet_path, effectiveCpeId], 
+    queryFn: async () => {
+      const response = await aiApi.getLoglines(projectId!, { 
+        template: selected!.template, 
+        parquet_path: selected!.parquet_path, 
+        domain: selected!.domain, 
+        cpe_id: effectiveCpeId
+      });
+      return response.data;
+    }, 
+    enabled: !!projectId && !!selected 
+  });
   const [selectedLogIdx, setSelectedLogIdx] = useState<number | null>(null);
   const selectedLog = selectedLogIdx !== null && loglines?.lines ? loglines.lines[selectedLogIdx] : null;
-  const { data: context } = useQuery({ queryKey: ["aiContext", projectId, selected?.template, selectedLog?.timestamp, timeWindow, timeUnit, cpeId], queryFn: async () => (await aiApi.getContext(projectId!, { template: selected!.template, timestamp: selectedLog!.timestamp, window: timeWindow, unit: timeUnit, filename: selected!.filename, parquet_path: selected!.parquet_path, cpe_id: cpeId })).data, enabled: !!projectId && !!selected && !!selectedLog });
+  const { data: context } = useQuery({ 
+    queryKey: ["aiContext", projectId, selected?.template, selectedLog?.timestamp, timeWindow, timeUnit, selectedLog?.cpe_serial || effectiveCpeId], 
+    queryFn: async () => (await aiApi.getContext(projectId!, { 
+      template: selected!.template, 
+      timestamp: selectedLog!.timestamp, 
+      window: timeWindow, 
+      unit: timeUnit, 
+      filename: selected!.filename, 
+      parquet_path: selected!.parquet_path, 
+      cpe_id: selectedLog?.cpe_serial || effectiveCpeId 
+    })).data, 
+    enabled: !!projectId && !!selected && !!selectedLog 
+  });
   useEffect(() => { if (contextRef.current) contextRef.current.scrollTop = contextRef.current.scrollHeight; }, [context]);
 
   const handleSearch = () => { if (query.trim()) searchMutation.mutate(); };
@@ -53,7 +79,7 @@ export default function AIAnalysisPage() {
     <div className="p-4 space-y-4 max-w-full flex flex-col" style={{ minHeight: "calc(100vh - 2rem)" }}>
       {/* Search Bar */}
       <div className="bg-card border border-border rounded-2xl p-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 mb-3">
           <PsychologyIcon style={{ fontSize: 22, color: "#1a73e8" }} />
           <h2 className="text-sm font-semibold shrink-0">Semantic Search</h2>
           <div className="flex-1 flex items-center gap-2 border border-input rounded-lg px-3 py-1.5 bg-background focus-within:ring-2 focus-within:ring-ring">
@@ -63,6 +89,23 @@ export default function AIAnalysisPage() {
           </div>
           <button onClick={handleSearch} disabled={searchMutation.isPending || !query.trim()} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-40 shrink-0">Search</button>
         </div>
+        
+        {/* CPE Filter Option */}
+        {cpeId && (
+          <div className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors">
+              <input
+                type="checkbox"
+                checked={filterByCpe}
+                onChange={(e) => setFilterByCpe(e.target.checked)}
+                className="accent-primary rounded"
+              />
+              <span className="text-muted-foreground">
+                Filter results to current CPE only <span className="font-mono text-xs">({cpeId})</span>
+              </span>
+            </label>
+          </div>
+        )}
       </div>
 
       {searchMutation.isError && <div className="p-3 bg-destructive/10 text-destructive rounded-lg text-sm">{(searchMutation.error as { response?: { data?: { error?: string } } })?.response?.data?.error || "Search failed"}</div>}
@@ -103,11 +146,30 @@ export default function AIAnalysisPage() {
       {loglines?.lines && loglines.lines.length > 0 && (
         <div className="bg-card border border-border rounded-2xl p-4">
           <h3 className="text-sm font-semibold mb-2">Matching Log Lines ({loglines.total})</h3>
+          
+          {/* Sampling Notice */}
+          {loglines.sampled_info?.is_sampled && (
+            <div className="mb-3 p-2 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-amber-800 dark:text-amber-300">
+                  📊 Showing sampled logs from <strong>{loglines.sampled_info.sampled_cpes}</strong> of{" "}
+                  <strong>{loglines.sampled_info.total_cpes_with_pattern}</strong> CPEs with this pattern
+                  {" "}(max {loglines.sampled_info.max_logs_shown} logs for performance)
+                </span>
+              </div>
+            </div>
+          )}
+          
           <div className="overflow-x-auto bg-slate-900 rounded-lg">
             <table className="w-full text-xs text-slate-200">
-              <thead><tr className="border-b border-slate-700"><th className="text-left py-2 px-3 text-slate-400">Timestamp</th><th className="text-left py-2 px-3 text-slate-400">Log Line</th></tr></thead>
-              <tbody>{loglines.lines.map((l: { timestamp: string; loglines: string }, idx: number) => (
+              <thead><tr className="border-b border-slate-700">
+                {!filterByCpe && <th className="text-left py-2 px-3 text-slate-400">CPE</th>}
+                <th className="text-left py-2 px-3 text-slate-400">Timestamp</th>
+                <th className="text-left py-2 px-3 text-slate-400">Log Line</th>
+              </tr></thead>
+              <tbody>{loglines.lines.map((l: { timestamp: string; loglines: string; cpe_serial?: string }, idx: number) => (
                 <tr key={idx} onClick={() => setSelectedLogIdx(idx)} className={`border-b border-slate-800 cursor-pointer ${selectedLogIdx === idx ? "bg-slate-700/50" : "hover:bg-slate-800/50"}`}>
+                  {!filterByCpe && <td className="py-2 px-3 font-mono text-slate-400 text-[10px]">{l.cpe_serial || "-"}</td>}
                   <td className="py-2 px-3 whitespace-nowrap font-mono text-slate-400">{l.timestamp}</td>
                   <td className="py-2 px-3 font-mono whitespace-pre-wrap break-all">{hl(l.loglines, query)}</td>
                 </tr>

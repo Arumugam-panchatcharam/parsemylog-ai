@@ -185,17 +185,23 @@ export default function LogViewerPage() {
   // After content loads, scroll to the target line
   useEffect(() => {
     if (scrollToLine !== null && fileContent && logContainerRef.current) {
-      const lineIdx = scrollToLine - (fileContent.start_line || 1);
-      if (lineIdx >= 0) {
-        requestAnimationFrame(() => {
-          const el = logContainerRef.current?.querySelector(`[data-line="${scrollToLine}"]`);
-          if (el) {
-            el.scrollIntoView({ behavior: "smooth", block: "center" });
-            el.classList.add("bg-amber-700/40");
-            setTimeout(() => el.classList.remove("bg-amber-700/40"), 2000);
-          }
-          setScrollToLine(null);
-        });
+      const startLine = fileContent.start_line || 1;
+      const endLine = startLine + (fileContent.lines?.length || 0) - 1;
+      
+      // Only scroll if the target line is within the current page's range
+      if (scrollToLine >= startLine && scrollToLine <= endLine) {
+        const lineIdx = scrollToLine - startLine;
+        if (lineIdx >= 0 && lineIdx < fileContent.lines.length) {
+          requestAnimationFrame(() => {
+            const el = logContainerRef.current?.querySelector(`[data-line="${scrollToLine}"]`);
+            if (el) {
+              el.scrollIntoView({ behavior: "auto", block: "center" });
+              el.classList.add("bg-amber-700/40");
+              setTimeout(() => el.classList.remove("bg-amber-700/40"), 2000);
+            }
+            setScrollToLine(null);
+          });
+        }
       }
     }
   }, [scrollToLine, fileContent]);
@@ -625,7 +631,8 @@ export default function LogViewerPage() {
                           key={idx}
                           onDoubleClick={() => {
                             setSelectedFile(m.filename);
-                            setCurrentPage(Math.max(1, Math.ceil(m.line_number / linesPerPage)));
+                            const targetPage = Math.ceil(m.line_number / linesPerPage);
+                            setCurrentPage(targetPage);
                             setScrollToLine(m.line_number);
                           }}
                           title="Double-click to open file and jump to line"
@@ -636,10 +643,14 @@ export default function LogViewerPage() {
                           {renderLine(m.text)}
                         </div>
                       ))
-                    : searchResults.matches.map((m: { line_number: number; text: string; page: number }, idx: number) => (
+                    : searchResults.matches.map((m: { line_number: number; text: string }, idx: number) => (
                         <div
                           key={idx}
-                          onDoubleClick={() => { setCurrentPage(m.page); setScrollToLine(m.line_number); }}
+                          onDoubleClick={() => { 
+                            const targetPage = Math.ceil(m.line_number / linesPerPage);
+                            setCurrentPage(targetPage); 
+                            setScrollToLine(m.line_number); 
+                          }}
                           title="Double-click to jump to this line"
                           className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none"
                         >

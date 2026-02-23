@@ -392,8 +392,14 @@ def get_file_content(project_id, filename):
     if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "File not found on disk"}), 404
 
-    with open(filepath, "r", errors="ignore") as f:
-        lines = [line.rstrip("\r\n") for line in f]
+    # Read in binary mode and split on \n only to match ripgrep/wc -l behavior
+    # This prevents Python from treating standalone \r as line separators
+    with open(filepath, "rb") as f:
+        content = f.read()
+    lines = [line.decode('utf-8', errors='ignore').rstrip("\r\n") for line in content.split(b'\n')]
+    # Remove the last empty line if file ends with \n
+    if lines and lines[-1] == '':
+        lines = lines[:-1]
 
     total_lines = len(lines)
     total_pages = max(1, (total_lines + lpp - 1) // lpp)
@@ -550,13 +556,17 @@ def search_all_files(project_id):
 
     files = dbm.get_project_files(project_id, cpe_id=cpe_id)
     path_to_filename = {}
+    file_paths_to_search = []
     for f in files:
         fp = getattr(f, "file_path", None)
         fn = getattr(f, "filename", None)
         if fp and fn:
-            path_to_filename[Path(fp).resolve()] = fn
+            resolved_path = Path(fp).resolve()
+            path_to_filename[resolved_path] = fn
+            if resolved_path.exists():
+                file_paths_to_search.append(str(resolved_path))
 
-    if not path_to_filename:
+    if not file_paths_to_search:
         return jsonify({"matches": [], "total": 0, "pattern": pattern}), 200
 
     rg_binary = shutil.which("rg")
@@ -569,15 +579,13 @@ def search_all_files(project_id):
         "-i",
         "--max-filesize", "50M",
         "-e", pattern,
-        str(search_dir),
-    ]
+    ] + file_paths_to_search
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=str(search_dir),
         )
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Search timed out"}), 504
@@ -586,7 +594,6 @@ def search_all_files(project_id):
         return jsonify({"error": str(e)}), 500
 
     matches = []
-    search_dir_resolved = search_dir.resolve()
     for line in (result.stdout or "").strip().splitlines():
         if not line:
             continue
@@ -603,10 +610,8 @@ def search_all_files(project_id):
         except ValueError:
             continue
         text = rest[colon2 + 1:]
-        abs_path = (search_dir_resolved / path_part).resolve()
+        abs_path = Path(path_part).resolve()
         filename = path_to_filename.get(abs_path)
-        if filename is None:
-            filename = path_to_filename.get(Path(path_part).resolve())
         if filename is None:
             filename = Path(path_part).name
         matches.append({
@@ -666,7 +671,6 @@ def search_file(project_id, filename):
                 matches.append({
                     "line_number": line_num,
                     "text": line.rstrip("\r\n"),
-                    "page": (line_num - 1) // lpp + 1,
                 })
 
     return jsonify({

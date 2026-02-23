@@ -179,6 +179,11 @@ export const patternsApi = {
     api.get(`/projects/${projectId}/indexing/status`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
+  getAggregatedSampleLogs: (projectId: string, domain: string, template: string, limit = 10) =>
+    api.get<{ template: string; samples: Array<{ cpe_serial: string; timestamp: string; logline: string }> }>(
+      `/projects/${projectId}/domains/${domain}/aggregated/${encodeURIComponent(template)}/sample-logs`,
+      { params: { limit } }
+    ),
 };
 
 // ---------- Telemetry ----------
@@ -227,6 +232,7 @@ export const aiApi = {
     page?: number;
     page_size?: number;
     cpe_id?: string | null;
+    load_all?: boolean;
   }) => api.post(`/projects/${projectId}/ai/loglines`, {
     ...data,
     cpe_id: data.cpe_id || undefined,
