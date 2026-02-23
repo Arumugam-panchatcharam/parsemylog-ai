@@ -485,6 +485,7 @@ def quick_search(
     model: "SentenceTransformer",
     qdrant_url: str = "http://localhost:6333",
     top_k: int = 10,
+    cpe_filter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Lightweight search that reuses an already-loaded SentenceTransformer model.
@@ -498,17 +499,33 @@ def quick_search(
         model: Pre-loaded SentenceTransformer instance.
         qdrant_url: Qdrant server URL.
         top_k: Maximum results to return.
+        cpe_filter: Optional CPE serial to filter results (e.g., "34194DC2EE5F").
 
     Returns:
         List of result dicts with template metadata and similarity score.
     """
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    
     client = QdrantClient(url=qdrant_url)
     query_vec = model.encode([query], normalize_embeddings=True)[0]
+
+    # Build filter for CPE if specified
+    query_filter = None
+    if cpe_filter:
+        query_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="cpe_serial",
+                    match=MatchValue(value=cpe_filter)
+                )
+            ]
+        )
 
     results = client.query_points(
         collection_name=collection,
         query=query_vec.tolist(),
         limit=top_k,
+        query_filter=query_filter,
     )
 
     hits: List[Dict[str, Any]] = []

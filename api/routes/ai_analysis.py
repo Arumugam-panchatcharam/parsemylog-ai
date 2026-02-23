@@ -64,12 +64,10 @@ def ai_search(project_id):
         logger.error(f"[AI Search] Failed to load embedding model: {e}")
         return jsonify({"error": "Embedding model not available"}), 503
 
-    # Per-CPE or per-project Qdrant collection
-    if cpe_id:
-        collection_name = f"project_{project_id}_cpe_{cpe_id}"
-    else:
-        collection_name = f"project_{project_id}"
-    logger.info(f"[AI Search] query='{query}', collection='{collection_name}'")
+    # Use single collection per project (matches indexer strategy)
+    # Vectors are tagged with cpe_serial metadata for filtering
+    collection_name = f"project_{project_id}"
+    logger.info(f"[AI Search] query='{query}', collection='{collection_name}', cpe_filter={cpe_id or 'all'}")
 
     try:
         embedding_results = quick_search(
@@ -78,6 +76,7 @@ def ai_search(project_id):
             model=model,
             qdrant_url=QDRANT_URL,
             top_k=top_k,
+            cpe_filter=cpe_id,  # Filter by CPE serial if specified
         )
     except Exception as e:
         err_str = str(e)
