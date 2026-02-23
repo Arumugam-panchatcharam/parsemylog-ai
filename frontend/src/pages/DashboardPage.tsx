@@ -84,6 +84,7 @@ export default function DashboardPage() {
           </button>
           <button
             onClick={() => setShowCreate(true)}
+            title="Create a new project"
             className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-opacity"
           >
             <AddIcon style={{ fontSize: 18 }} /> New Project
@@ -135,7 +136,7 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mb-3 line-clamp-2 min-h-[2rem]">
+              <p className="text-xs text-muted-foreground mb-3 line-clamp-2 min-h-[2rem]" title={p.description || "No description"}>
                 {p.description || "No description"}
               </p>
               <div className="flex items-center justify-between gap-2">
@@ -159,6 +160,7 @@ export default function DashboardPage() {
                   )}
                   <button
                     onClick={() => openProject(p.id, p.name)}
+                    title="Open project in log viewer"
                     className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-opacity"
                   >
                     Open
@@ -203,6 +205,7 @@ export default function DashboardPage() {
                   <select
                     value={newNatcoId ?? ""}
                     onChange={(e) => setNewNatcoId(e.target.value ? Number(e.target.value) : null)}
+                    title="Assign a country/operator for shared pattern configurations"
                     className="w-full px-3 py-2.5 border border-input rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm"
                   >
                     <option value="">-- No NATCO --</option>
@@ -216,7 +219,7 @@ export default function DashboardPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Project Type</label>
                 <div className="space-y-2">
-                  <label className="flex items-start gap-2 cursor-pointer p-2 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                  <label className="flex items-start gap-2 cursor-pointer p-2 border border-border rounded-lg hover:bg-muted/50 transition-colors" title="Standard project for log analysis">
                     <input
                       type="radio"
                       name="projectType"
@@ -230,7 +233,7 @@ export default function DashboardPage() {
                       <div className="text-xs text-muted-foreground">Upload log files via UI for analysis</div>
                     </div>
                   </label>
-                  <label className="flex items-start gap-2 cursor-pointer p-2 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                  <label className="flex items-start gap-2 cursor-pointer p-2 border border-border rounded-lg hover:bg-muted/50 transition-colors" title="Batch processing project for bulk CPE analysis">
                     <input
                       type="radio"
                       name="projectType"

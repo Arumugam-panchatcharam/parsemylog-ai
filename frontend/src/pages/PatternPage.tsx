@@ -53,7 +53,15 @@ export default function PatternPage() {
   const [selectedPatternDetails, setSelectedPatternDetails] = useState<AggregatedPattern | null>(null);
 
   // Fetch sample logs when pattern is selected
-  const { data: sampleLogs } = useQuery({
+  const { data: sampleLogs } = useQuery<{
+    template: string;
+    samples: Array<{
+      cpe_serial: string;
+      filename?: string;
+      timestamp: string;
+      logline: string;
+    }>;
+  } | null>({
     queryKey: ["aggregatedSampleLogs", projectId, selectedDomain, selectedPatternDetails?.template],
     queryFn: async () => {
       if (!selectedPatternDetails) return null;
@@ -230,6 +238,7 @@ export default function PatternPage() {
         <div className="inline-flex items-center bg-muted rounded-lg p-0.5 gap-0.5">
           <button
             onClick={() => setViewMode("single")}
+            title="Analyze patterns for a single CPE"
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
               viewMode === "single"
                 ? "bg-background text-foreground shadow-sm"
@@ -241,6 +250,7 @@ export default function PatternPage() {
           </button>
           <button
             onClick={() => setViewMode("aggregated")}
+            title="Aggregate patterns across all CPEs in this project"
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
               viewMode === "aggregated"
                 ? "bg-background text-foreground shadow-sm"
@@ -260,7 +270,7 @@ export default function PatternPage() {
         {/* Domain + File filter */}
         <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
           <h3 className="text-sm font-semibold flex items-center gap-1.5"><BarChartIcon style={{ fontSize: 18, color: "#1a73e8" }} /> Domain</h3>
-          <select value={selectedDomain} onChange={(e) => setSelectedDomain(e.target.value)} className="w-full px-3 py-2 text-sm border border-input rounded-lg bg-background">
+          <select value={selectedDomain} onChange={(e) => setSelectedDomain(e.target.value)} title="Choose log domain to analyze" className="w-full px-3 py-2 text-sm border border-input rounded-lg bg-background">
             <option value="">Select a domain...</option>
             {domains?.map((d: { domain: string; label: string; indexed: boolean }) => (
               <option key={d.domain} value={d.domain} disabled={!d.indexed}>{d.label}{d.indexed ? "" : " (not indexed)"}</option>
@@ -270,7 +280,7 @@ export default function PatternPage() {
           {/* File filter */}
           {selectedDomain && domainSourceFiles.length > 0 && (
             <div className="space-y-1">
-              <button onClick={() => setShowFileFilter(!showFileFilter)} className="flex items-center gap-1.5 text-xs text-primary hover:underline">
+              <button onClick={() => setShowFileFilter(!showFileFilter)} title="Filter pattern analysis by selected log files" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
                 <FilterListIcon style={{ fontSize: 16 }} />
                 {showFileFilter ? "Hide" : "Filter"} Files
                 {appliedFiles.length > 0 && <span className="ml-1 bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full text-[10px] font-bold">{appliedFiles.length}/{domainSourceFiles.length}</span>}
@@ -280,12 +290,12 @@ export default function PatternPage() {
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Files ({domainSourceFiles.length})</span>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => setSelectedFiles([...domainSourceFiles])} className="flex items-center gap-0.5 text-[10px] text-primary hover:underline"><SelectAllIcon style={{ fontSize: 12 }} /> All</button>
-                      <button onClick={() => setSelectedFiles([])} className="flex items-center gap-0.5 text-[10px] text-primary hover:underline"><DeselectIcon style={{ fontSize: 12 }} /> None</button>
+                      <button onClick={() => setSelectedFiles([...domainSourceFiles])} title="Select all files" className="flex items-center gap-0.5 text-[10px] text-primary hover:underline"><SelectAllIcon style={{ fontSize: 12 }} /> All</button>
+                      <button onClick={() => setSelectedFiles([])} title="Deselect all files" className="flex items-center gap-0.5 text-[10px] text-primary hover:underline"><DeselectIcon style={{ fontSize: 12 }} /> None</button>
                     </div>
                   </div>
                   {domainSourceFiles.map((fname) => (
-                    <label key={fname} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted rounded px-1 py-0.5">
+                    <label key={fname} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted rounded px-1 py-0.5" title={fname}>
                       <input type="checkbox" checked={selectedFiles.includes(fname)} onChange={() => toggleFile(fname)} className="accent-primary rounded" />
                       <span className="truncate">{fname}</span>
                     </label>
@@ -294,6 +304,7 @@ export default function PatternPage() {
                   <button
                     onClick={() => setAppliedFiles([...selectedFiles])}
                     disabled={!filtersChanged}
+                    title="Apply file filter"
                     className={`mt-1.5 w-full flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg font-medium transition-colors ${filtersChanged ? "bg-primary text-primary-foreground hover:opacity-90" : "bg-muted text-muted-foreground cursor-default"}`}>
                     <PlayArrowIcon style={{ fontSize: 14 }} /> Apply Filter
                   </button>
@@ -321,7 +332,7 @@ export default function PatternPage() {
             <div className="flex flex-wrap gap-1.5">
               {indexStatus?.domains && Object.entries(indexStatus.domains).map(([key, val]: [string, unknown]) => {
                 const d = val as { indexed: boolean; label: string };
-                return <span key={key} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${d.indexed ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"}`}>{d.indexed ? <CheckCircleIcon style={{ fontSize: 14 }} /> : <CircularProgress size={12} />}{d.label}</span>;
+                return <span key={key} title={d.indexed ? "Domain indexed and ready for analysis" : "Indexing in progress..."} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${d.indexed ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"}`}>{d.indexed ? <CheckCircleIcon style={{ fontSize: 14 }} /> : <CircularProgress size={12} />}{d.label}</span>;
               })}
             </div>
           </div>
@@ -348,6 +359,7 @@ export default function PatternPage() {
             <h3 className="text-sm font-semibold">Selected Template</h3>
             <button
               onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedTemplate)}&domain=${encodeURIComponent(selectedDomain)}`)}
+              title="Open in Pattern Analyzer for detailed analysis"
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
             >
               <ManageSearchIcon style={{ fontSize: 14 }} /> Add to Pattern Analyzer
@@ -362,7 +374,7 @@ export default function PatternPage() {
               <h3 className="text-sm font-semibold">Trend ({tsData.freq})</h3>
               <div className="flex items-center gap-2">
                 <ScheduleIcon style={{ fontSize: 16 }} className="text-muted-foreground" />
-                {intervalMarks.map((label, idx) => <button key={idx} onClick={() => setTimeInterval(idx)} className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-colors ${timeInterval === idx ? "bg-primary text-primary-foreground" : "border border-border hover:bg-muted text-muted-foreground"}`}>{label}</button>)}
+                {intervalMarks.map((label, idx) => <button key={idx} onClick={() => setTimeInterval(idx)} title={label === "1s" ? "1 second" : label === "1m" ? "1 minute" : label === "1h" ? "1 hour" : "1 day"} className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-colors ${timeInterval === idx ? "bg-primary text-primary-foreground" : "border border-border hover:bg-muted text-muted-foreground"}`}>{label}</button>)}
               </div>
             </div>
             <Plot data={[{ x: tsData.data.map((d: { timestamp: string }) => d.timestamp), y: tsData.data.map((d: { count: number }) => d.count), type: "scattergl", mode: "lines+markers", marker: { size: 4, color: "#1a73e8" }, line: { width: 2 } }]}
@@ -375,7 +387,7 @@ export default function PatternPage() {
           <div className="bg-card border border-border rounded-2xl p-4">
             <h3 className="text-sm font-semibold mb-2">Dynamic Values</h3>
             <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-border"><th className="text-left py-2 px-3">Position</th><th className="text-left py-2 px-3">Count</th><th className="text-left py-2 px-3">Values</th></tr></thead>
-              <tbody>{params.parameters.map((p: { position: string; count: number; values: string[] }) => <tr key={p.position} className="border-b border-border"><td className="py-2 px-3 font-medium">{p.position}</td><td className="py-2 px-3">{p.count}</td><td className="py-2 px-3 max-w-md truncate">{p.values.join(", ")}</td></tr>)}</tbody></table></div>
+              <tbody>{params.parameters.map((p: { position: string; count: number; values: string[] }) => <tr key={p.position} className="border-b border-border"><td className="py-2 px-3 font-medium">{p.position}</td><td className="py-2 px-3">{p.count}</td><td className="py-2 px-3 max-w-md truncate" title={p.values.join(", ")}>{p.values.join(", ")}</td></tr>)}</tbody></table></div>
           </div>
         )}
 
@@ -461,7 +473,7 @@ export default function PatternPage() {
                   {selectedDomain && aggregatedData?.source_files && aggregatedData.source_files.length > 0 ? (
                     <div className="space-y-0.5">
                       {aggregatedData.source_files.map((fname) => (
-                        <label key={fname} className="flex items-center gap-2 text-[11px] cursor-pointer hover:bg-background hover:shadow-sm rounded px-2 py-1 transition-all">
+                        <label key={fname} className="flex items-center gap-2 text-[11px] cursor-pointer hover:bg-background hover:shadow-sm rounded px-2 py-1 transition-all" title={fname}>
                           <input 
                             type="checkbox" 
                             checked={aggregatedSelectedFiles.includes(fname)} 
@@ -569,6 +581,7 @@ export default function PatternPage() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={exportPatterns}
+                      title="Export all patterns to CSV (excluding hidden)"
                       className="flex items-center gap-1 px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:opacity-90"
                     >
                       <DownloadIcon style={{ fontSize: 14 }} />
@@ -691,6 +704,7 @@ export default function PatternPage() {
                       </div>
                       <button
                         onClick={() => setSelectedPatternDetails(null)}
+                        title="Close"
                         className="text-muted-foreground hover:text-foreground p-1"
                       >
                         <CloseIcon style={{ fontSize: 20 }} />
@@ -702,7 +716,8 @@ export default function PatternPage() {
                       {sampleLogs && sampleLogs.samples.length > 0 && (
                         <div className="mb-6">
                           <h4 className="text-xs font-semibold mb-2 text-muted-foreground uppercase">
-                            Sample Log Lines ({sampleLogs.samples[0].cpe_serial})
+                            Sample Log Lines ({sampleLogs.samples[0].cpe_serial}
+                            {sampleLogs.samples[0].filename && ` - ${sampleLogs.samples[0].filename}`})
                           </h4>
                           <div className="bg-slate-900 text-slate-200 rounded-lg p-3 space-y-1">
                             {sampleLogs.samples.map((sample, idx) => (

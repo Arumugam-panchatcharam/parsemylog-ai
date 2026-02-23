@@ -403,10 +403,10 @@ export default function LogViewerPage() {
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0 flex-wrap">
         <div className="flex items-center gap-1 border border-input rounded-lg bg-background px-2 py-1 flex-1 min-w-[200px] max-w-md focus-within:ring-1 focus-within:ring-ring">
           <SearchIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
-          <input value={searchPattern} onChange={(e) => setSearchPattern(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} placeholder="Search (regex)..." className="flex-1 bg-transparent outline-none text-xs min-w-0" />
-          <button onClick={() => doSearch()} disabled={!searchPattern.trim() || (!searchAllFiles && !selectedFile)} className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0 disabled:opacity-50">Go</button>
+          <input value={searchPattern} onChange={(e) => setSearchPattern(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} placeholder="Search (regex)..." title="Search logs with regex pattern (press Enter to search)" className="flex-1 bg-transparent outline-none text-xs min-w-0" />
+          <button onClick={() => doSearch()} disabled={!searchPattern.trim() || (!searchAllFiles && !selectedFile)} title="Execute search" className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0 disabled:opacity-50">Go</button>
         </div>
-        <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer whitespace-nowrap">
+        <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer whitespace-nowrap" title="Search across all log files in the current CPE">
           <input type="checkbox" checked={searchAllFiles} onChange={(e) => setSearchAllFiles(e.target.checked)} className="rounded border-border" />
           All files
         </label>
@@ -478,7 +478,7 @@ export default function LogViewerPage() {
                       </ul>
                     </div>
                   )}
-                  <button type="button" onClick={closeQuickSearchForm} className="absolute top-1 right-1 p-0.5 rounded hover:bg-muted"><CloseIcon style={{ fontSize: 14 }} /></button>
+                  <button type="button" onClick={closeQuickSearchForm} title="Close" className="absolute top-1 right-1 p-0.5 rounded hover:bg-muted"><CloseIcon style={{ fontSize: 14 }} /></button>
                 </div>,
                 document.body
               )}
@@ -491,11 +491,11 @@ export default function LogViewerPage() {
           <FormatColorTextIcon style={{ fontSize: 13 }} /> Syntax
         </button>
         <div className="flex items-center gap-0.5">
-          <button onClick={() => setFontSize((s) => Math.max(8, s - 1))} className="p-0.5 rounded hover:bg-muted"><TextDecreaseIcon style={{ fontSize: 14 }} /></button>
+          <button onClick={() => setFontSize((s) => Math.max(8, s - 1))} title="Decrease font size" className="p-0.5 rounded hover:bg-muted"><TextDecreaseIcon style={{ fontSize: 14 }} /></button>
           <span className="text-[10px] text-muted-foreground w-4 text-center">{fontSize}</span>
-          <button onClick={() => setFontSize((s) => Math.min(20, s + 1))} className="p-0.5 rounded hover:bg-muted"><TextIncreaseIcon style={{ fontSize: 14 }} /></button>
+          <button onClick={() => setFontSize((s) => Math.min(20, s + 1))} title="Increase font size" className="p-0.5 rounded hover:bg-muted"><TextIncreaseIcon style={{ fontSize: 14 }} /></button>
         </div>
-        <select value={linesPerPage} onChange={(e) => { setLinesPerPage(Number(e.target.value)); setCurrentPage(1); }} className="text-[10px] border border-input rounded bg-background px-1 py-0.5">
+        <select value={linesPerPage} onChange={(e) => { setLinesPerPage(Number(e.target.value)); setCurrentPage(1); }} title="Number of lines to display per page" className="text-[10px] border border-input rounded bg-background px-1 py-0.5">
           {LINES_OPTIONS.map((n) => <option key={n} value={n}>{n} lines</option>)}
         </select>
         <div className="w-px h-5 bg-border mx-1" />
@@ -539,7 +539,7 @@ export default function LogViewerPage() {
                   <CircularProgress size={10} thickness={5} /> Indexing
                 </span>
               )}
-              <button onClick={() => qc.invalidateQueries({ queryKey: ["files", projectId] })} className="p-0.5 rounded hover:bg-muted"><RefreshIcon style={{ fontSize: 14 }} className="text-muted-foreground" /></button>
+              <button onClick={() => qc.invalidateQueries({ queryKey: ["files", projectId] })} title="Refresh file list" className="p-0.5 rounded hover:bg-muted"><RefreshIcon style={{ fontSize: 14 }} className="text-muted-foreground" /></button>
             </div>
           </div>
           {hasFiles && (
@@ -551,6 +551,7 @@ export default function LogViewerPage() {
                   value={fileSearchQuery}
                   onChange={(e) => setFileSearchQuery(e.target.value)}
                   placeholder="Search files..."
+                  title="Filter files by name"
                   className="flex-1 min-w-0 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground"
                 />
               </div>
@@ -583,18 +584,18 @@ export default function LogViewerPage() {
           {selectedFile && (
             <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-muted/30 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="text-xs font-medium truncate">{selectedFile}</span>
+                <span className="text-xs font-medium truncate" title={selectedFile}>{selectedFile}</span>
                 {fileContent && <span className="text-[10px] text-muted-foreground shrink-0">L{fileContent.start_line}–{fileContent.end_line} of {fileContent.total_lines}</span>}
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button onClick={() => { if (projectId && selectedFile) downloadFile(projectId, selectedFile, cpeId); }} className="p-0.5 rounded hover:bg-muted" title="Download"><DownloadIcon style={{ fontSize: 16 }} className="text-muted-foreground" /></button>
                 {fileContent && fileContent.total_pages > 1 && (<>
                   <div className="w-px h-4 bg-border mx-1" />
-                  <button onClick={() => setCurrentPage(1)} disabled={currentPage <= 1} className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><FirstPageIcon style={{ fontSize: 16 }} /></button>
-                  <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage <= 1} className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronLeftIcon style={{ fontSize: 16 }} /></button>
+                  <button onClick={() => setCurrentPage(1)} disabled={currentPage <= 1} title="Go to first page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><FirstPageIcon style={{ fontSize: 16 }} /></button>
+                  <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage <= 1} title="Go to previous page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronLeftIcon style={{ fontSize: 16 }} /></button>
                   <span className="text-[10px] px-1">{currentPage}/{fileContent.total_pages}</span>
-                  <button onClick={() => setCurrentPage((p) => Math.min(fileContent.total_pages, p + 1))} disabled={currentPage >= fileContent.total_pages} className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronRightIcon style={{ fontSize: 16 }} /></button>
-                  <button onClick={() => setCurrentPage(fileContent.total_pages)} disabled={currentPage >= fileContent.total_pages} className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><LastPageIcon style={{ fontSize: 16 }} /></button>
+                  <button onClick={() => setCurrentPage((p) => Math.min(fileContent.total_pages, p + 1))} disabled={currentPage >= fileContent.total_pages} title="Go to next page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronRightIcon style={{ fontSize: 16 }} /></button>
+                  <button onClick={() => setCurrentPage(fileContent.total_pages)} disabled={currentPage >= fileContent.total_pages} title="Go to last page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><LastPageIcon style={{ fontSize: 16 }} /></button>
                 </>)}
               </div>
             </div>
@@ -670,9 +671,9 @@ export default function LogViewerPage() {
             <div className="flex items-center justify-between px-2 py-1.5 border-b border-border">
               <div className="flex items-center gap-1.5 min-w-0">
                 <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1 shrink-0"><NoteAltIcon style={{ fontSize: 14 }} /> Notes</h3>
-                {hasNotes && <span className="text-[9px] text-green-600 dark:text-green-400 font-medium shrink-0" title="Notes are saved for this project">Saved</span>}
+                {hasNotes && <span className="text-[9px] text-green-600 dark:text-green-400 font-medium shrink-0" title="Notes saved for this project">Saved</span>}
               </div>
-              <button onClick={() => setShowNotes(false)} className="p-0.5 rounded hover:bg-muted shrink-0"><CloseIcon style={{ fontSize: 14 }} /></button>
+              <button onClick={() => setShowNotes(false)} title="Close notes panel" className="p-0.5 rounded hover:bg-muted shrink-0"><CloseIcon style={{ fontSize: 14 }} /></button>
             </div>
             {hasUnsavedChanges && (
               <div className="px-2 py-1 text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">

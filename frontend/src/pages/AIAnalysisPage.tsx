@@ -84,7 +84,7 @@ export default function AIAnalysisPage() {
           <h2 className="text-sm font-semibold shrink-0">Semantic Search</h2>
           <div className="flex-1 flex items-center gap-2 border border-input rounded-lg px-3 py-1.5 bg-background focus-within:ring-2 focus-within:ring-ring">
             <SearchIcon style={{ fontSize: 18 }} className="text-muted-foreground shrink-0" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} placeholder="Describe the log pattern you're looking for..." className="flex-1 bg-transparent outline-none text-sm min-w-0" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} placeholder="Describe the log pattern you're looking for..." title="Describe the pattern you're looking for in natural language (e.g., 'connection timeout', 'device reboot')" className="flex-1 bg-transparent outline-none text-sm min-w-0" />
             {searchMutation.isPending && <CircularProgress size={16} />}
           </div>
           <button onClick={handleSearch} disabled={searchMutation.isPending || !query.trim()} className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-40 shrink-0">Search</button>
@@ -93,7 +93,7 @@ export default function AIAnalysisPage() {
         {/* CPE Filter Option */}
         {cpeId && (
           <div className="flex items-center gap-2 text-sm">
-            <label className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors">
+            <label className="flex items-center gap-2 cursor-pointer hover:text-foreground transition-colors" title="Restrict search results to the currently selected CPE only">
               <input
                 type="checkbox"
                 checked={filterByCpe}
@@ -120,7 +120,7 @@ export default function AIAnalysisPage() {
               <thead><tr className="border-b border-border text-left"><th className="py-2 px-3">Filename</th><th className="py-2 px-3">Template</th><th className="py-2 px-3 text-center">Freq</th><th className="py-2 px-3 text-center">Score</th><th className="py-2 px-3 text-center w-10"></th></tr></thead>
               <tbody>{results.map((r, idx) => (
                 <tr key={idx} onClick={() => { setSelectedIdx(idx); setSelectedLogIdx(null); }} className={`border-b border-border cursor-pointer transition-colors ${selectedIdx === idx ? "bg-accent" : "hover:bg-muted"}`}>
-                  <td className="py-2 px-3">{r.filename}</td><td className="py-2 px-3 font-mono max-w-md truncate">{r.template}</td>
+                  <td className="py-2 px-3">{r.filename}</td><td className="py-2 px-3 font-mono max-w-md truncate" title={r.template}>{r.template}</td>
                   <td className="py-2 px-3 text-center">{r.frequency}</td><td className={`py-2 px-3 text-center font-medium ${r.similarity >= 0.8 ? "text-green-600" : r.similarity < 0.5 ? "text-muted-foreground" : ""}`}>{r.similarity}</td>
                   <td className="py-2 px-3 text-center"><button onClick={(e) => { e.stopPropagation(); const domain = r.domain?.trim(); navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(r.template)}${domain ? `&domain=${encodeURIComponent(domain)}` : ""}`); }} title="Add to Pattern Analyzer" className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/20 text-muted-foreground hover:text-blue-600 transition-colors"><ManageSearchIcon style={{ fontSize: 16 }} /></button></td>
                 </tr>
@@ -136,7 +136,7 @@ export default function AIAnalysisPage() {
           <h3 className="text-sm font-semibold mb-2">Parameters</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs"><thead><tr className="border-b border-border"><th className="text-left py-2 px-3">Position</th><th className="text-left py-2 px-3">Count</th><th className="text-left py-2 px-3">Values</th></tr></thead>
-              <tbody>{params.parameters.map((p: { position: string; count: number; values: string[] }) => (<tr key={p.position} className="border-b border-border"><td className="py-2 px-3 font-medium">{p.position}</td><td className="py-2 px-3">{p.count}</td><td className="py-2 px-3 max-w-md truncate">{p.values.join(", ")}</td></tr>))}</tbody>
+              <tbody>{params.parameters.map((p: { position: string; count: number; values: string[] }) => (<tr key={p.position} className="border-b border-border"><td className="py-2 px-3 font-medium">{p.position}</td><td className="py-2 px-3">{p.count}</td><td className="py-2 px-3 max-w-md truncate" title={p.values.join(", ")}>{p.values.join(", ")}</td></tr>))}</tbody>
             </table>
           </div>
         </div>
@@ -190,20 +190,20 @@ export default function AIAnalysisPage() {
               <div className="flex items-center gap-1.5">
                 <AccessTimeIcon style={{ fontSize: 15 }} className="text-muted-foreground" />
                 {(["seconds", "minutes"] as const).map((u) => (
-                  <button key={u} onClick={() => setTimeUnit(u)} className={`px-2 py-1 text-xs rounded-lg font-medium ${timeUnit === u ? "bg-primary text-primary-foreground" : "border border-border hover:bg-muted"}`}>{u}</button>
+                  <button key={u} onClick={() => setTimeUnit(u)} title={u === "seconds" ? "Show context in seconds" : "Show context in minutes"} className={`px-2 py-1 text-xs rounded-lg font-medium ${timeUnit === u ? "bg-primary text-primary-foreground" : "border border-border hover:bg-muted"}`}>{u}</button>
                 ))}
               </div>
               <div className="flex items-center gap-2">
-                <input type="range" min={timeUnit === "seconds" ? 5 : 1} max={timeUnit === "seconds" ? 60 : 10} step={timeUnit === "seconds" ? 5 : 1} value={timeWindow} onChange={(e) => setTimeWindow(Number(e.target.value))} className="w-20 accent-primary" />
+                <input type="range" min={timeUnit === "seconds" ? 5 : 1} max={timeUnit === "seconds" ? 60 : 10} step={timeUnit === "seconds" ? 5 : 1} value={timeWindow} onChange={(e) => setTimeWindow(Number(e.target.value))} title={`Context window: show ±${timeWindow} ${timeUnit} around each matched log line`} className="w-20 accent-primary" />
                 <span className="text-xs font-medium w-10">{timeWindow}{timeUnit === "seconds" ? "s" : "min"}</span>
               </div>
-              <button onClick={() => setSyntaxHL(!syntaxHL)} className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg font-medium ${syntaxHL ? "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300" : "border border-border hover:bg-muted text-muted-foreground"}`}>
+              <button onClick={() => setSyntaxHL(!syntaxHL)} title="Toggle syntax highlighting" className={`flex items-center gap-1 px-2 py-1 text-xs rounded-lg font-medium ${syntaxHL ? "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300" : "border border-border hover:bg-muted text-muted-foreground"}`}>
                 <FormatColorTextIcon style={{ fontSize: 13 }} /> Syntax
               </button>
               <div className="flex items-center gap-1">
-                <button onClick={() => setFontSize((s) => Math.max(8, s - 1))} className="p-1 rounded hover:bg-muted"><TextDecreaseIcon style={{ fontSize: 15 }} /></button>
+                <button onClick={() => setFontSize((s) => Math.max(8, s - 1))} title="Decrease font size" className="p-1 rounded hover:bg-muted"><TextDecreaseIcon style={{ fontSize: 15 }} /></button>
                 <span className="text-[10px] text-muted-foreground w-5 text-center">{fontSize}</span>
-                <button onClick={() => setFontSize((s) => Math.min(20, s + 1))} className="p-1 rounded hover:bg-muted"><TextIncreaseIcon style={{ fontSize: 15 }} /></button>
+                <button onClick={() => setFontSize((s) => Math.min(20, s + 1))} title="Increase font size" className="p-1 rounded hover:bg-muted"><TextIncreaseIcon style={{ fontSize: 15 }} /></button>
               </div>
             </div>
           </div>

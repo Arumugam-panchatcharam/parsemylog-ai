@@ -583,6 +583,7 @@ def get_aggregated_sample_logs(project_id, domain, template):
         for _, row in matching.head(limit).iterrows():
             samples.append({
                 "cpe_serial": cpe.serial,
+                "filename": str(row.get("source_file", "")),
                 "timestamp": str(row.get("timestamp", "")),
                 "logline": str(row.get("loglines", ""))
             })

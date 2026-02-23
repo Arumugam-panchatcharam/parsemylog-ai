@@ -123,6 +123,7 @@ export default function BatchJobsPage() {
                 value={cpeFolderPath}
                 onChange={(e) => setCpeFolderPath(e.target.value)}
                 placeholder="cpe_logs_batch_01-100"
+                title="Folder name under /app/batch_cpe_logs/ containing CPE .zip files"
                 className="w-full px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
               />
               <p className="text-xs text-muted-foreground mt-1">
@@ -186,6 +187,13 @@ export default function BatchJobsPage() {
                       className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(
                         job.status
                       )}`}
+                      title={
+                        job.status === "completed" ? "Job completed successfully" :
+                        job.status === "processing" ? "Job is currently processing" :
+                        job.status === "failed" ? "Job failed - click for details" :
+                        job.status === "cancelled" ? "Job was cancelled" :
+                        "Job is queued and waiting to start"
+                      }
                     >
                       {getStatusIcon(job.status)}
                       {job.status.toUpperCase()}
@@ -205,7 +213,7 @@ export default function BatchJobsPage() {
                         {job.progress_percent.toFixed(1)}%
                       </span>
                     </div>
-                    <div className="w-full bg-muted rounded-full h-2">
+                    <div className="w-full bg-muted rounded-full h-2" title={`${job.processed_cpes + job.failed_cpes} of ${job.total_cpes} CPEs processed (${job.progress_percent.toFixed(1)}%)`}>
                       <div
                         className="bg-primary h-2 rounded-full transition-all duration-300"
                         style={{ width: `${job.progress_percent}%` }}

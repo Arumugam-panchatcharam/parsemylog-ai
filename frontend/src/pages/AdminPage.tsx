@@ -132,7 +132,7 @@ function UsersTab() {
     <>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">User Management</h2>
-        <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })} className="p-2 border border-border rounded-lg hover:bg-muted">
+        <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminUsers"] })} title="Refresh user list" className="p-2 border border-border rounded-lg hover:bg-muted">
           <RefreshIcon style={{ fontSize: 18 }} />
         </button>
       </div>
@@ -157,7 +157,11 @@ function UsersTab() {
               <div>
                 <h3 className="font-semibold text-sm flex items-center gap-1">
                   {u.username}
-                  {u.is_admin && <AdminPanelSettingsIcon style={{ fontSize: 16, color: "#f9ab00" }} />}
+                  {u.is_admin && (
+                    <span title="Administrator">
+                      <AdminPanelSettingsIcon style={{ fontSize: 16, color: "#f9ab00" }} />
+                    </span>
+                  )}
                 </h3>
                 <p className="text-xs text-muted-foreground">{u.email || "No email"} - Created: {formatDate(u.created_at)}</p>
                 <p className="text-xs text-muted-foreground mt-1">{u.project_count} projects, {u.file_count} files</p>
@@ -284,7 +288,7 @@ function NatcoTab() {
           <PublicIcon style={{ fontSize: 22 }} /> NATCO Management
         </h2>
         <div className="flex gap-2">
-          <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminNatcos"] })} className="p-2 border border-border rounded-lg hover:bg-muted">
+          <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminNatcos"] })} title="Refresh NATCO list" className="p-2 border border-border rounded-lg hover:bg-muted">
             <RefreshIcon style={{ fontSize: 18 }} />
           </button>
           <button onClick={() => { setShowCreate(true); setFormCode(""); setFormName(""); setFormDesc(""); }} className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90">
@@ -615,16 +619,16 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
             <p className="text-xs text-muted-foreground mt-0.5">{Object.keys(domains).length} domains, {totalPatterns} patterns</p>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted">
+            <button onClick={() => fileInputRef.current?.click()} title="Import patterns from JSON or YAML file" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted">
               <UploadFileIcon style={{ fontSize: 14 }} />
               Import JSON/YAML
             </button>
             <input ref={fileInputRef} type="file" accept=".json,.yaml,.yml" onChange={handleFileImport} className="hidden" />
-            <button onClick={() => importMutation.mutate()} disabled={importMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-50">
+            <button onClick={() => importMutation.mutate()} disabled={importMutation.isPending} title="Import preset patterns for this NATCO" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-50">
               {importMutation.isPending ? <CircularProgress size={12} /> : <DownloadIcon style={{ fontSize: 14 }} />}
               Import Presets
             </button>
-            <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
+            <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} title="Save all pattern changes to database" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
               {saveMutation.isPending ? <CircularProgress size={12} sx={{ color: "white" }} /> : <SaveIcon style={{ fontSize: 14 }} />}
               Save All
             </button>
@@ -640,7 +644,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               {/* Add domain row */}
               <div className="flex gap-2 mb-4">
                 <input type="text" value={newDomainName} onChange={(e) => setNewDomainName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addDomain()} placeholder="New domain name" className="flex-1 text-sm px-3 py-2 rounded-lg border border-border bg-background" />
-                <button onClick={addDomain} disabled={!newDomainName.trim()} className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                <button onClick={addDomain} disabled={!newDomainName.trim()} title="Add new domain" className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
                   <AddIcon style={{ fontSize: 16 }} />
                 </button>
               </div>
@@ -663,8 +667,8 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                           <span className="text-xs text-muted-foreground">({pats.length})</span>
                         </div>
                         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                          <button onClick={() => addPattern(domain)} className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/20"><AddIcon style={{ fontSize: 16 }} /></button>
-                          <button onClick={() => { if (confirm(`Remove domain "${domain}"?`)) removeDomain(domain); }} className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 16 }} /></button>
+                          <button onClick={() => addPattern(domain)} title="Add pattern to this domain" className="p-1 rounded hover:bg-blue-100 dark:hover:bg-blue-900/20"><AddIcon style={{ fontSize: 16 }} /></button>
+                          <button onClick={() => { if (confirm(`Remove domain "${domain}"?`)) removeDomain(domain); }} title="Remove this domain and all its patterns" className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 16 }} /></button>
                         </div>
                       </div>
                       {!collapsed && (
@@ -684,7 +688,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                   <input type="checkbox" checked={p.enabled} onChange={(e) => updatePattern(domain, idx, "enabled", e.target.checked)} className="h-3.5 w-3.5 accent-blue-600" />
                                   <input type="text" value={p.name} onChange={(e) => updatePattern(domain, idx, "name", e.target.value)} placeholder="Name" className="text-xs px-2 py-1 rounded border border-border bg-background min-w-0" />
                                   <input type="text" value={p.regex} onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)} placeholder="Regex" className="text-xs px-2 py-1 rounded border border-border bg-background font-mono min-w-0" />
-                                  <button onClick={() => removePattern(domain, idx)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 14 }} /></button>
+                                  <button onClick={() => removePattern(domain, idx)} title="Remove this pattern" className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 14 }} /></button>
                                 </div>
                               ))}
                             </>
@@ -754,13 +758,13 @@ function ReviewTab() {
           <RateReviewIcon style={{ fontSize: 22 }} /> Pattern Submissions
         </h2>
         <div className="flex gap-2">
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-sm px-3 py-1.5 border border-border rounded-lg bg-background">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} title="Filter pattern submissions by approval status" className="text-sm px-3 py-1.5 border border-border rounded-lg bg-background">
             <option value="pending">Pending</option>
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
             <option value="">All</option>
           </select>
-          <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminSubmissions"] })} className="p-2 border border-border rounded-lg hover:bg-muted">
+          <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminSubmissions"] })} title="Refresh pattern submissions" className="p-2 border border-border rounded-lg hover:bg-muted">
             <RefreshIcon style={{ fontSize: 18 }} />
           </button>
         </div>
@@ -878,7 +882,7 @@ function SettingsTab() {
         <h2 className="text-lg font-semibold flex items-center gap-2">
           <SettingsIcon style={{ fontSize: 22 }} /> System Settings
         </h2>
-        <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminLlmSettings"] })} className="p-2 border border-border rounded-lg hover:bg-muted">
+        <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminLlmSettings"] })} title="Refresh settings" className="p-2 border border-border rounded-lg hover:bg-muted">
           <RefreshIcon style={{ fontSize: 18 }} />
         </button>
       </div>
@@ -900,6 +904,7 @@ function SettingsTab() {
               <button
                 onClick={() => toggleMutation.mutate(!llmSettings?.enabled)}
                 disabled={isLoading || toggleMutation.isPending}
+                title="Enable or disable AI chat for all users"
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary/30 ${
                   llmSettings?.enabled ? "bg-primary" : "bg-gray-300 dark:bg-gray-600"
                 } disabled:opacity-50`}
@@ -922,12 +927,12 @@ function SettingsTab() {
               {isLoading ? (
                 <CircularProgress size={12} />
               ) : llmSettings?.available ? (
-                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400" title="OpenRouter API configured and ready">
                   <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
                   Configured
                 </span>
               ) : (
-                <span className="flex items-center gap-1 text-xs text-red-500">
+                <span className="flex items-center gap-1 text-xs text-red-500" title="OpenRouter API not configured">
                   <span className="h-2 w-2 rounded-full bg-red-500" />
                   {llmSettings?.enabled ? "Not configured — set OPENROUTER_API_KEY in .env" : "Not checked (disabled)"}
                 </span>

@@ -85,6 +85,7 @@ export default function Sidebar() {
           {collapsed && <img src={logoImg} alt="ParseMyLog AI" className="h-6 w-6 mx-auto" />}
           <button
             onClick={() => setCollapsed(!collapsed)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             className="p-1 rounded hover:bg-sidebar-accent text-sidebar-foreground hidden md:block"
           >
             {collapsed ? <ChevronRightIcon style={{ fontSize: 18 }} /> : <ChevronLeftIcon style={{ fontSize: 18 }} />}
@@ -98,7 +99,7 @@ export default function Sidebar() {
       {isWorkspace && !collapsed && projectName && (
         <div className="px-3 py-2 border-b border-sidebar-border bg-sidebar-accent">
           <p className="text-xs text-muted-foreground">Project</p>
-          <p className="text-sm font-medium truncate">{projectName}</p>
+          <p className="text-sm font-medium truncate" title={projectName}>{projectName}</p>
         </div>
       )}
 
@@ -112,6 +113,7 @@ export default function Sidebar() {
             <NavLink
               to="/dashboard"
               onClick={() => { clearProject(); clearCPE(); }}
+              title={collapsed ? "Back to Dashboard" : undefined}
               className={cn(
                 "flex items-center gap-2 px-3 py-2 text-sm rounded-lg hover:bg-sidebar-accent text-muted-foreground",
                 collapsed && "justify-center px-2"
@@ -125,6 +127,7 @@ export default function Sidebar() {
               <NavLink
                 key={item.to}
                 to={item.to}
+                title={collapsed ? item.label : undefined}
                 className={({ isActive }) =>
                   cn(
                     "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
@@ -145,6 +148,7 @@ export default function Sidebar() {
                 <div className="my-2 border-t border-sidebar-border" />
                 <NavLink
                   to="/workspace/chat"
+                  title={collapsed ? "AI Chat" : undefined}
                   className={({ isActive }) =>
                     cn(
                       "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
@@ -165,6 +169,7 @@ export default function Sidebar() {
           <>
             <NavLink
               to="/dashboard"
+              title={collapsed ? "Dashboard" : undefined}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
@@ -180,6 +185,7 @@ export default function Sidebar() {
             </NavLink>
             <NavLink
               to="/pcap"
+              title={collapsed ? "PCAP Analyzer" : undefined}
               className={({ isActive }) =>
                 cn(
                   "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
@@ -196,6 +202,7 @@ export default function Sidebar() {
             {user?.is_admin && (
               <NavLink
                 to="/admin"
+                title={collapsed ? "Admin Panel" : undefined}
                 className={({ isActive }) =>
                   cn(
                     "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
@@ -240,7 +247,9 @@ export default function Sidebar() {
                 <p className="text-sm font-medium text-sidebar-foreground truncate flex items-center gap-1">
                   {user.username}
                   {user.is_admin && (
-                    <AdminPanelSettingsIcon style={{ fontSize: 13, color: "#f9ab00" }} />
+                    <span title="Administrator">
+                      <AdminPanelSettingsIcon style={{ fontSize: 13, color: "#f9ab00" }} />
+                    </span>
                   )}
                 </p>
                 <p className="text-xs text-muted-foreground truncate">

@@ -96,9 +96,10 @@ export default function CPESelector() {
         <button
           type="button"
           onClick={() => setDropdownOpen((o) => !o)}
+          title="Select a CPE device to view"
           className="w-full text-left text-xs bg-sidebar border border-sidebar-border rounded px-2 py-1.5 text-sidebar-foreground focus:outline-none focus:ring-1 focus:ring-primary flex items-center justify-between gap-1"
         >
-          <span className="truncate">
+          <span className="truncate" title={selectedCpe ? `${selectedCpe.serial}${selectedCpe.mac ? ` (${selectedCpe.mac})` : ""}` : "Select CPE..."}>
             {selectedCpe
               ? `${selectedCpe.serial}${selectedCpe.mac ? ` (${selectedCpe.mac})` : ""}`
               : "Select CPE..."}
@@ -115,6 +116,7 @@ export default function CPESelector() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search by serial or MAC..."
+                  title="Search CPEs by serial number or MAC address"
                   className="flex-1 min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
                   autoFocus
                 />
@@ -136,6 +138,7 @@ export default function CPESelector() {
                     className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors ${
                       cpeId === c.serial ? "bg-primary/15 text-primary font-medium" : "text-foreground"
                     }`}
+                    title={`${c.serial}${c.mac ? ` (${c.mac})` : ""}${c.date_from ? ` — ${c.date_from}` : ""}`}
                   >
                     <span className="block truncate">
                       {c.serial}
