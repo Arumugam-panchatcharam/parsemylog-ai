@@ -291,6 +291,7 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             if job and (job.processed_cpes + job.failed_cpes) >= job.total_cpes:
                 dbm.update_batch_job_status(job_id, "completed")
                 logger.info(f"[BatchJob {job_id}] All CPEs processed!")
+                _trigger_reboot_summary(job_id, user_id, project_id)
             
             logger.info(f"[CPE {serial}] Completed in {elapsed:.1f}s - {len(log_files)} logs, {patterns_indexed} patterns")
             
@@ -317,10 +318,59 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
                         dbm.update_batch_job_status(job_id, "failed", "All CPEs failed")
                     else:
                         dbm.update_batch_job_status(job_id, "completed")
+                        _trigger_reboot_summary(job_id, user_id, project_id)
         except:
             pass
         
         raise
+
+
+def _trigger_reboot_summary(job_id: str, user_id: int, project_id: str):
+    """Dispatch the reboot summary generation task after batch completion."""
+    try:
+        generate_reboot_summary.apply_async(
+            args=(job_id, user_id, project_id),
+            priority=3,
+        )
+        logger.info(f"[BatchJob {job_id}] Dispatched reboot summary generation")
+    except Exception as exc:
+        logger.warning(f"[BatchJob {job_id}] Failed to dispatch reboot summary: {exc}")
+
+
+@celery.task(bind=True, name="generate_reboot_summary")
+def generate_reboot_summary(self, job_id: str, user_id: int, project_id: str):
+    """
+    Generate LLM-ready reboot root-cause summary for a completed batch job.
+
+    Produces:
+    - reboot_summary_per_cpe.jsonl (one JSON line per CPE)
+    - fleet_reboot_summary.json (fleet-wide aggregate)
+    """
+    logger.info(f"[RebootSummary] Task started for job={job_id}, project={project_id}")
+    try:
+        from logai.utils.constants import UPLOAD_DIRECTORY
+        from logai.reboot_llm_summary import generate_batch_reboot_summary
+
+        project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+        if not project_dir.exists():
+            logger.error(f"[RebootSummary] Project dir not found: {project_dir}")
+            return {"status": "error", "message": "Project directory not found"}
+
+        result = generate_batch_reboot_summary(
+            project_dir=project_dir,
+            project_id=project_id,
+            job_id=job_id,
+        )
+
+        logger.info(
+            f"[RebootSummary] Completed for job={job_id}: "
+            f"{result['per_cpe_count']} CPEs in {result['elapsed_sec']}s"
+        )
+        return {"status": "completed", **result}
+
+    except Exception as exc:
+        logger.error(f"[RebootSummary] Error for job={job_id}: {exc}", exc_info=True)
+        return {"status": "error", "message": str(exc)}
 
 
 # Legacy task (keep for backward compatibility)

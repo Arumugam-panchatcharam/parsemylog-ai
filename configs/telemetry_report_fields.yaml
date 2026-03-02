@@ -245,6 +245,117 @@ field_groups:
         type: status
 
   # -------------------------------------------------------------------------
+  # GPON (status card)
+  # -------------------------------------------------------------------------
+  - label: "GPON"
+    fields:
+      - key: "Device.GPON.ConnectionStatus"
+        label: "GPON Connection"
+        type: status
+        sample: last
+
+      - key: "Device.GPON.OperationalState"
+        label: "Operational State"
+        type: status
+        sample: last
+
+      - key: "Device.GPON.RegistrationState"
+        label: "Registration"
+        type: text
+        sample: last
+
+      - key: "Device.GPON.RxSignalLevel"
+        label: "Rx Signal"
+        type: numeric
+        unit: "dBm/10"
+
+      - key: "Device.GPON.TxSignalLevel"
+        label: "Tx Signal"
+        type: numeric
+        unit: "dBm/10"
+
+      - key: "Device.GPON.DownstreamSpeed"
+        label: "Downstream"
+        type: numeric
+        unit: "kbps"
+
+      - key: "Device.GPON.UpstreamSpeed"
+        label: "Upstream"
+        type: numeric
+        unit: "kbps"
+
+      - key: "Device.GPON.FramesLost"
+        label: "Frames Lost"
+        type: numeric
+
+  # -------------------------------------------------------------------------
+  # PPP / WANoE (status card)
+  # -------------------------------------------------------------------------
+  - label: "PPP / WANoE"
+    fields:
+      - key: "Device.PPP.Interface.1.ConnectionStatus"
+        label: "PPP Status"
+        type: status
+        sample: last
+
+      - key: "Device.WANoE.ConnectionStatus"
+        label: "WANoE Connection"
+        type: status
+        sample: last
+
+      - key: "Device.WANoE.LastConnError"
+        label: "Last Error"
+        type: text
+        sample: last
+
+      - key: "Device.WANoE.DownstreamSpeed"
+        label: "WANoE Downstream"
+        type: numeric
+        unit: "kbps"
+
+      - key: "Device.WANoE.UpstreamSpeed"
+        label: "WANoE Upstream"
+        type: numeric
+        unit: "kbps"
+
+  # -------------------------------------------------------------------------
+  # WAN Traffic (chart)
+  # -------------------------------------------------------------------------
+  - label: "WAN Traffic"
+    fields:
+      - key: "Device.WAN.BytesReceived"
+        label: "WAN Rx Bytes"
+        type: numeric
+        unit: "B"
+        plot: true
+
+      - key: "Device.WAN.BytesSent"
+        label: "WAN Tx Bytes"
+        type: numeric
+        unit: "B"
+        plot: true
+
+      - key: "Device.WAN.PacketsReceived"
+        label: "WAN Rx Packets"
+        type: numeric
+        plot: true
+
+      - key: "Device.WAN.PacketsSent"
+        label: "WAN Tx Packets"
+        type: numeric
+        plot: true
+
+      - key: "Device.WAN.ErrorsReceived"
+        label: "WAN Rx Errors"
+        type: numeric
+        plot: true
+
+      - key: "Device.WAN.ErrorsSent"
+        label: "WAN Tx Errors"
+        type: numeric
+        plot: true
+
+  # -------------------------------------------------------------------------
   # Device Identity & Misc
   # -------------------------------------------------------------------------
   - label: "Device Info"

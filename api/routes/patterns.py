@@ -22,8 +22,11 @@ logger = logging.getLogger(__name__)
 
 patterns_bp = Blueprint("patterns", __name__)
 
-# Expected domains
-_ALL_DOMAINS = ["wireless", "platform", "core_router", "cellular", "mesh"]
+# Core domains (used for all_done check -- always expected to be indexed)
+_CORE_DOMAINS = ["wireless", "platform", "core_router", "cellular", "mesh"]
+
+# All domains including newer additions
+_ALL_DOMAINS = _CORE_DOMAINS + ["telemetry", "common", "voice"]
 
 _DOMAIN_LABELS = {
     "wireless": "Wireless",
@@ -31,6 +34,9 @@ _DOMAIN_LABELS = {
     "core_router": "Core Router",
     "cellular": "Cellular",
     "mesh": "Mesh",
+    "telemetry": "Telemetry",
+    "common": "Common",
+    "voice": "Voice",
 }
 
 
@@ -379,7 +385,9 @@ def indexing_status(project_id):
             "label": _DOMAIN_LABELS.get(domain, domain),
         }
 
-    all_done = all(d["indexed"] for d in domains.values())
+    all_done = all(
+        domains[d]["indexed"] for d in _CORE_DOMAINS if d in domains
+    )
 
     # Check if indexer is running
     is_indexing_flag = False

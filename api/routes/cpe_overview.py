@@ -29,8 +29,11 @@ logger = logging.getLogger(__name__)
 
 cpe_overview_bp = Blueprint("cpe_overview", __name__)
 
-# Expected domains (same as patterns.py)
-_ALL_DOMAINS = ["wireless", "platform", "core_router", "cellular", "mesh"]
+# Core domains (same as patterns.py)
+_CORE_DOMAINS = ["wireless", "platform", "core_router", "cellular", "mesh"]
+
+# All domains including newer additions
+_ALL_DOMAINS = _CORE_DOMAINS + ["telemetry", "common", "voice"]
 
 _DOMAIN_LABELS = {
     "wireless": "Wireless",
@@ -38,6 +41,9 @@ _DOMAIN_LABELS = {
     "core_router": "Core Router",
     "cellular": "Cellular",
     "mesh": "Mesh",
+    "telemetry": "Telemetry",
+    "common": "Common",
+    "voice": "Voice",
 }
 
 

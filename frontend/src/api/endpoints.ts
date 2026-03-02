@@ -68,6 +68,42 @@ export interface CPEProcessRecord {
   completed_at?: string;
 }
 
+export interface RebootFleetSummary {
+  project_id: string;
+  job_id: string;
+  generated_at: string;
+  sample_info: {
+    total_cpes: number;
+    hardware_breakdown: Record<string, number>;
+    firmware_breakdown: Record<string, number>;
+  };
+  reboot_overview: {
+    total_reboots: number;
+    cpes_with_reboots: number;
+    pct_with_reboots: number;
+    avg_reboots_per_affected: number;
+  };
+  wan_overview: {
+    total_disconnections: number;
+    cpes_affected: number;
+    pct_affected: number;
+  };
+  problem_categories: {
+    wifi: { cpes_affected: number; pct_affected: number; worst_case: Array<{ serial: string; total_events: number }> };
+    wan: { cpes_affected: number; pct_affected: number; worst_case: Array<{ serial: string; total_events: number }> };
+    memory: { cpes_above_85pct: number; pct_above_85pct: number; worst_case: Array<{ serial: string; peak_pct?: number }> };
+  };
+  cause_distribution: Record<string, number>;
+  failure_chain_distribution: Record<string, number>;
+  top_templates: Array<{ template: string; count: number }>;
+  client_churn_stats: { cpes_with_sustained_storms: number; pct_with_storms: number; avg_peak_rate: number };
+  btm_steering_stats: { cpes_with_btm_events: number; total_btm_events: number };
+  gpon_wan_health: { cpes_with_signal_degrade: number; cpes_with_wan_errors: number };
+  telemetry_source_distribution: Record<string, number>;
+  unknown_cohort: string[];
+  data_quality: { pct_with_telemetry: number; domain_coverage: Record<string, number> };
+}
+
 export const batchJobsApi = {
   create: (projectId: string, cpeFolderPath: string, jobType = "cpe_processing") =>
     api.post<{ job_id: string; status: string; total_cpes: number; message: string; celery_task_id: string }>(
@@ -92,6 +128,19 @@ export const batchJobsApi = {
     ),
   delete: (projectId: string, jobId: string) =>
     api.delete<{ message: string }>(`/projects/${projectId}/batch-jobs/${jobId}`),
+  getRebootSummary: (projectId: string, jobId: string) =>
+    api.get<{ available: boolean; per_cpe_count: number; fleet_summary: RebootFleetSummary }>(
+      `/projects/${projectId}/batch-jobs/${jobId}/reboot-summary`
+    ),
+  regenerateRebootSummary: (projectId: string, jobId: string) =>
+    api.post<{ message: string; celery_task_id: string }>(
+      `/projects/${projectId}/batch-jobs/${jobId}/reboot-summary/regenerate`
+    ),
+  downloadRebootSummary: (projectId: string, jobId: string, type: "fleet" | "per_cpe" = "fleet") =>
+    api.get(`/projects/${projectId}/batch-jobs/${jobId}/reboot-summary/download`, {
+      params: { type },
+      responseType: "blob",
+    }),
 };
 
 // ---------- Files ----------

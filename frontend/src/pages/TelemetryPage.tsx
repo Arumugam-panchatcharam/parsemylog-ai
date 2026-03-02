@@ -182,6 +182,8 @@ export default function TelemetryPage() {
     if (t.includes("power") || t.includes("dpd")) return PowerSettingsNewIcon;
     if (t.includes("cujo") || t.includes("security")) return SecurityIcon;
     if (t.includes("airties") || t.includes("edge")) return HubIcon;
+    if (t.includes("gpon")) return NetworkCheckIcon;
+    if (t.includes("ppp") || t.includes("wanoe") || t.includes("wan")) return RouterIcon;
     return ToggleOnIcon;
   };
 

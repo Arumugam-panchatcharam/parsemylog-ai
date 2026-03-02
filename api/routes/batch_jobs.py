@@ -8,16 +8,19 @@ Endpoints for managing batch CPE processing jobs:
 - List CPE processing records
 - Retry failed CPEs
 - Cancel running jobs
+- Fetch / regenerate reboot LLM summaries
 """
 
+import json
 import logging
 from pathlib import Path
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id
+from logai.utils.constants import UPLOAD_DIRECTORY
 
 logger = logging.getLogger(__name__)
 
@@ -461,3 +464,121 @@ def delete_batch_job(project_id, job_id):
         return jsonify({"error": error}), 500
     
     return jsonify({"message": "Job deleted"}), 200
+
+
+# ---------------------------------------------------------------------------
+# Reboot LLM Summary
+# ---------------------------------------------------------------------------
+
+def _get_project_dir(user_id: int, project_id: str) -> Path:
+    return Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+
+
+@batch_jobs_bp.route("/<project_id>/batch-jobs/<job_id>/reboot-summary", methods=["GET"])
+@jwt_required()
+def get_reboot_summary(project_id, job_id):
+    """
+    Fetch the generated reboot LLM summary for a batch job.
+
+    Returns the fleet aggregate JSON and metadata.  Per-CPE JSONL is
+    available via the ``/download`` sub-endpoint.
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    job = dbm.get_batch_job(job_id)
+    if not job or job.project_id != project_id:
+        return jsonify({"error": "Job not found"}), 404
+
+    from logai.reboot_llm_summary import load_summary_outputs
+
+    project_dir = _get_project_dir(user_id, project_id)
+    outputs = load_summary_outputs(project_dir)
+
+    if not outputs:
+        return jsonify({"error": "Summary not yet generated", "available": False}), 404
+
+    return jsonify({
+        "available": True,
+        "per_cpe_count": outputs["per_cpe_count"],
+        "fleet_summary": outputs["fleet_summary"],
+    }), 200
+
+
+@batch_jobs_bp.route("/<project_id>/batch-jobs/<job_id>/reboot-summary/regenerate", methods=["POST"])
+@jwt_required()
+def regenerate_reboot_summary(project_id, job_id):
+    """
+    Force regenerate the reboot LLM summary for a batch job.
+
+    Dispatches an async Celery task and returns immediately.
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    job = dbm.get_batch_job(job_id)
+    if not job or job.project_id != project_id:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job.status not in ("completed", "failed"):
+        return jsonify({"error": "Job must be completed or failed to generate summary"}), 400
+
+    from services.celery_worker.tasks import generate_reboot_summary
+
+    task = generate_reboot_summary.apply_async(
+        args=(job_id, user_id, project_id),
+        priority=5,
+    )
+
+    return jsonify({
+        "message": "Summary regeneration started",
+        "celery_task_id": task.id,
+    }), 202
+
+
+@batch_jobs_bp.route("/<project_id>/batch-jobs/<job_id>/reboot-summary/download", methods=["GET"])
+@jwt_required()
+def download_reboot_summary(project_id, job_id):
+    """
+    Download reboot summary artifacts.
+
+    Query params:
+        - type: ``fleet`` (default) or ``per_cpe``
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    job = dbm.get_batch_job(job_id)
+    if not job or job.project_id != project_id:
+        return jsonify({"error": "Job not found"}), 404
+
+    from logai.reboot_llm_summary import OUTPUT_DIR_NAME, FLEET_FILE, PER_CPE_FILE
+
+    project_dir = _get_project_dir(user_id, project_id)
+    output_dir = project_dir / OUTPUT_DIR_NAME
+
+    file_type = request.args.get("type", "fleet")
+    if file_type == "per_cpe":
+        target = output_dir / PER_CPE_FILE
+        mimetype = "application/x-ndjson"
+        download_name = f"reboot_summary_per_cpe_{job_id[:8]}.jsonl"
+    else:
+        target = output_dir / FLEET_FILE
+        mimetype = "application/json"
+        download_name = f"fleet_reboot_summary_{job_id[:8]}.json"
+
+    if not target.exists():
+        return jsonify({"error": "Summary file not found"}), 404
+
+    return send_file(
+        target,
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=download_name,
+    )

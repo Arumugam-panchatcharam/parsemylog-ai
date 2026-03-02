@@ -89,7 +89,7 @@ class DomainPatternConfig:
     Pattern configuration for a single domain loaded from YAML.
 
     Attributes:
-        domain: Domain name (wireless, platform, cellular, mesh, core_router).
+        domain: Domain name (wireless, platform, cellular, mesh, core_router, telemetry, common, voice).
         files: Glob patterns for log files to scan.
         context_lines: Number of context lines around matches.
         case_insensitive: Whether to use case-insensitive matching.

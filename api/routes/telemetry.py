@@ -37,11 +37,13 @@ _STATUS_LABEL_GROUPS = {
     "WiFi Radio", "WiFi SSID",
     "Cellular Backup", "SmartHome", "Deep Power Down",
     "WiFi Global", "CUJO Agent", "Airties Edge",
+    "GPON", "PPP / WANoE",
 }
 _SKIP_CHART_GROUPS = {
     "WiFi Radio", "WiFi SSID", "Device Info",
     "Cellular Backup", "SmartHome", "Deep Power Down",
     "WiFi Global", "CUJO Agent", "Airties Edge",
+    "GPON", "PPP / WANoE",
 }
 
 

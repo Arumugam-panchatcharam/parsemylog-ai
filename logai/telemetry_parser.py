@@ -407,6 +407,7 @@ _DCM_CURL_RE = re.compile(
 
 # Mapping from dcmscript short keys to TR-181 paths used by charts/summary
 _DCM_KEY_TO_TR181: Dict[str, str] = {
+    # System / device identity
     "CPUUsage": "Device.DeviceInfo.ProcessStatus.CPUUsage",
     "DeviceUpTime": "Device.DeviceInfo.UpTime",
     "MemInfoFree": "Device.DeviceInfo.MemoryStatus.Free",
@@ -420,7 +421,74 @@ _DCM_KEY_TO_TR181: Dict[str, str] = {
     "manufacturer": "Device.DeviceInfo.Manufacturer",
     "hosts_connected_device_number": "Device.Hosts.X_CISCO_COM_ConnectedDeviceNumber",
     "last_reboot_reason_split": "Device.DeviceInfo.X_RDKCENTRAL-COM_LastRebootReason",
+    # PPP (single-instance)
+    "ppp_interface_1_status": "Device.PPP.Interface.1.ConnectionStatus",
+    # Ethernet link
+    "ethernet_link_1_status": "Device.Ethernet.Link.1.Status",
+    # GPON
+    "gpon_connectionStatus": "Device.GPON.ConnectionStatus",
+    "gpon_operationalState": "Device.GPON.OperationalState",
+    "gpon_registrationState": "Device.GPON.RegistrationState",
+    "gpon_rxSignalLevel": "Device.GPON.RxSignalLevel",
+    "gpon_txSignalLevel": "Device.GPON.TxSignalLevel",
+    "gpon_downstreamSpeed": "Device.GPON.DownstreamSpeed",
+    "gpon_upstreamSpeed": "Device.GPON.UpstreamSpeed",
+    "gpon_framesLost": "Device.GPON.FramesLost",
+    # WANoE
+    "wanoe_connectionStatus": "Device.WANoE.ConnectionStatus",
+    "wanoe_lastConnError": "Device.WANoE.LastConnError",
+    "wanoe_downstreamSpeed": "Device.WANoE.DownstreamSpeed",
+    "wanoe_upstreamSpeed": "Device.WANoE.UpstreamSpeed",
+    # WAN traffic
+    "wan_bytesReceived": "Device.WAN.BytesReceived",
+    "wan_bytesSent": "Device.WAN.BytesSent",
+    "wan_packetsReceived": "Device.WAN.PacketsReceived",
+    "wan_packetsSent": "Device.WAN.PacketsSent",
+    "wan_errorsReceived": "Device.WAN.ErrorsReceived",
+    "wan_errorsSent": "Device.WAN.ErrorsSent",
 }
+
+# Pattern-based mappings for multi-instance dcmscript keys → TR-181 paths.
+# Each tuple: (compiled regex, TR-181 template with ``{N}`` placeholder).
+_DCM_PATTERN_TO_TR181 = [
+    # WiFi Radio
+    (re.compile(r"^wifi_radio_(\d+)_enable$"), "Device.WiFi.Radio.{N}.Enable"),
+    (re.compile(r"^wifi_radio_(\d+)_status$"), "Device.WiFi.Radio.{N}.Status"),
+    (re.compile(r"^wifi_radio_(\d+)_channel$"), "Device.WiFi.Radio.{N}.Channel"),
+    (re.compile(r"^wifi_radio_(\d+)_operatingfrequencyband$"), "Device.WiFi.Radio.{N}.OperatingFrequencyBand"),
+    (re.compile(r"^wifi_radio_(\d+)_operatingchannelbandwidth$"), "Device.WiFi.Radio.{N}.OperatingChannelBandwidth"),
+    (re.compile(r"^wifi_radio_(\d+)_current_operating_channel_bandwith$"), "Device.WiFi.Radio.{N}.OperatingChannelBandwidth"),
+    (re.compile(r"^wifi_radio_(\d+)_transmitpower$"), "Device.WiFi.Radio.{N}.TransmitPower"),
+    (re.compile(r"^wifi_radio_(\d+)_stats_noise$"), "Device.WiFi.Radio.{N}.Stats.Noise"),
+    # WiFi SSID
+    (re.compile(r"^wifi_ssid_(\d+)_ssid$"), "Device.WiFi.SSID.{N}.SSID"),
+    (re.compile(r"^wifi_ssid_(\d+)_enable$"), "Device.WiFi.SSID.{N}.Enable"),
+    (re.compile(r"^wifi_ssid_(\d+)_status$"), "Device.WiFi.SSID.{N}.Status"),
+    (re.compile(r"^wifi_ssid_(\d+)_stats_bytesreceived$"), "Device.WiFi.SSID.{N}.Stats.BytesReceived"),
+    (re.compile(r"^wifi_ssid_(\d+)_stats_bytessent$"), "Device.WiFi.SSID.{N}.Stats.BytesSent"),
+    (re.compile(r"^wifi_ssid_(\d+)_stats_errorsreceived$"), "Device.WiFi.SSID.{N}.Stats.ErrorsReceived"),
+    (re.compile(r"^wifi_ssid_(\d+)_stats_errorssent$"), "Device.WiFi.SSID.{N}.Stats.ErrorsSent"),
+]
+
+
+def _apply_dcm_tr181_aliases(fields: Dict[str, Any]) -> None:
+    """Add TR-181 aliases to *fields* in-place (static + pattern-based)."""
+    # Static 1:1 mappings
+    for short_key, tr181_key in _DCM_KEY_TO_TR181.items():
+        if short_key in fields and tr181_key not in fields:
+            fields[tr181_key] = fields[short_key]
+
+    # Pattern-based multi-instance mappings
+    extra: Dict[str, Any] = {}
+    for key, value in fields.items():
+        for pattern, template in _DCM_PATTERN_TO_TR181:
+            m = pattern.match(key)
+            if m:
+                tr181_key = template.replace("{N}", m.group(1))
+                if tr181_key not in fields:
+                    extra[tr181_key] = value
+                break
+    fields.update(extra)
 
 
 def parse_dcmscript_curl_reports(content: str) -> List[Dict[str, Any]]:
@@ -461,9 +529,7 @@ def parse_dcmscript_curl_reports(content: str) -> List[Dict[str, Any]]:
         fields = _flatten_search_result(parsed_json["searchResult"])
 
         # Inject TR-181 aliases for keys the rest of the pipeline expects
-        for short_key, tr181_key in _DCM_KEY_TO_TR181.items():
-            if short_key in fields and tr181_key not in fields:
-                fields[tr181_key] = fields[short_key]
+        _apply_dcm_tr181_aliases(fields)
 
         # Parse embedded Time field (same format as T2 reports)
         time_str = fields.get("Time", "")

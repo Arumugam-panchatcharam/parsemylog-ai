@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate } from "react-router-dom";
-import { batchJobsApi, type CPEProcessRecord } from "@/api/endpoints";
+import { batchJobsApi, type CPEProcessRecord, type RebootFleetSummary } from "@/api/endpoints";
 import CircularProgress from "@mui/material/CircularProgress";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CancelIcon from "@mui/icons-material/Cancel";
@@ -10,6 +10,9 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
 import PendingIcon from "@mui/icons-material/Pending";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
+import DownloadIcon from "@mui/icons-material/Download";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import AssessmentIcon from "@mui/icons-material/Assessment";
 
 export default function BatchJobDetailPage() {
   const { projectId, jobId } = useParams<{ projectId: string; jobId: string }>();
@@ -52,6 +55,40 @@ export default function BatchJobDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["batchJob", projectId, jobId] });
     },
   });
+
+  // Reboot summary
+  const { data: summaryData, isLoading: summaryLoading, refetch: refetchSummary } = useQuery({
+    queryKey: ["rebootSummary", projectId, jobId],
+    queryFn: () => batchJobsApi.getRebootSummary(projectId!, jobId!),
+    enabled: !!projectId && !!jobId && job?.status === "completed",
+    retry: false,
+  });
+
+  const regenMutation = useMutation({
+    mutationFn: () => batchJobsApi.regenerateRebootSummary(projectId!, jobId!),
+    onSuccess: () => {
+      setTimeout(() => refetchSummary(), 5000);
+    },
+  });
+
+  const handleDownload = async (type: "fleet" | "per_cpe") => {
+    try {
+      const resp = await batchJobsApi.downloadRebootSummary(projectId!, jobId!, type);
+      const blob = new Blob([resp.data as BlobPart]);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = type === "fleet"
+        ? `fleet_reboot_summary_${jobId?.slice(0, 8)}.json`
+        : `reboot_summary_per_cpe_${jobId?.slice(0, 8)}.jsonl`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      // silently ignore download errors
+    }
+  };
+
+  const summary = summaryData?.data?.fleet_summary as RebootFleetSummary | undefined;
 
   const formatDuration = (seconds?: number) => {
     if (!seconds) return "N/A";
@@ -195,6 +232,178 @@ export default function BatchJobDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Reboot Summary Section */}
+      {job.status === "completed" && (
+        <div className="bg-card border border-border rounded-xl p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <AssessmentIcon className="text-primary" />
+              <h2 className="text-lg font-semibold">Reboot Root-Cause Summary</h2>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => regenMutation.mutate()}
+                disabled={regenMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                title="Regenerate the reboot summary from scratch"
+              >
+                <RefreshIcon style={{ fontSize: 16 }} />
+                {regenMutation.isPending ? "Generating..." : "Regenerate"}
+              </button>
+              {summary && (
+                <>
+                  <button
+                    onClick={() => handleDownload("fleet")}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                    title="Download fleet aggregate JSON"
+                  >
+                    <DownloadIcon style={{ fontSize: 16 }} />
+                    Fleet JSON
+                  </button>
+                  <button
+                    onClick={() => handleDownload("per_cpe")}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+                    title="Download per-CPE JSONL for LLM input"
+                  >
+                    <DownloadIcon style={{ fontSize: 16 }} />
+                    Per-CPE JSONL
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {summaryLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <CircularProgress size={24} />
+              <span className="ml-2 text-muted-foreground text-sm">Loading summary...</span>
+            </div>
+          ) : !summary ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <p className="mb-2">No reboot summary available yet.</p>
+              <p className="text-xs">
+                Click "Regenerate" to generate the LLM-ready reboot root-cause analysis.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Overview Stats */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <div className="text-xs text-muted-foreground uppercase">CPEs Analyzed</div>
+                  <div className="text-xl font-semibold">{summary.sample_info.total_cpes}</div>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <div className="text-xs text-muted-foreground uppercase">Total Reboots</div>
+                  <div className="text-xl font-semibold text-red-600">{summary.reboot_overview.total_reboots}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {summary.reboot_overview.pct_with_reboots}% of CPEs affected
+                  </div>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <div className="text-xs text-muted-foreground uppercase">WAN Disconnections</div>
+                  <div className="text-xl font-semibold text-orange-600">{summary.wan_overview.total_disconnections}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {summary.wan_overview.pct_affected}% of CPEs affected
+                  </div>
+                </div>
+                <div className="p-3 bg-muted/50 rounded-lg">
+                  <div className="text-xs text-muted-foreground uppercase">Unknown Cause</div>
+                  <div className="text-xl font-semibold text-yellow-600">{summary.unknown_cohort.length}</div>
+                  <div className="text-xs text-muted-foreground">CPEs with unexplained reboots</div>
+                </div>
+              </div>
+
+              {/* Problem Categories */}
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase mb-2">Problem Categories</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="p-3 border border-border rounded-lg">
+                    <div className="text-sm font-medium">WiFi Issues</div>
+                    <div className="text-lg font-semibold">{summary.problem_categories.wifi.cpes_affected} CPEs</div>
+                    <div className="text-xs text-muted-foreground">{summary.problem_categories.wifi.pct_affected}% of fleet</div>
+                    {summary.client_churn_stats.cpes_with_sustained_storms > 0 && (
+                      <div className="text-xs text-red-600 mt-1">
+                        {summary.client_churn_stats.cpes_with_sustained_storms} with disconnect storms
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-3 border border-border rounded-lg">
+                    <div className="text-sm font-medium">WAN Issues</div>
+                    <div className="text-lg font-semibold">{summary.problem_categories.wan.cpes_affected} CPEs</div>
+                    <div className="text-xs text-muted-foreground">{summary.problem_categories.wan.pct_affected}% of fleet</div>
+                    {summary.gpon_wan_health.cpes_with_signal_degrade > 0 && (
+                      <div className="text-xs text-orange-600 mt-1">
+                        {summary.gpon_wan_health.cpes_with_signal_degrade} with GPON signal issues
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-3 border border-border rounded-lg">
+                    <div className="text-sm font-medium">Memory Issues</div>
+                    <div className="text-lg font-semibold">{summary.problem_categories.memory.cpes_above_85pct} CPEs</div>
+                    <div className="text-xs text-muted-foreground">{summary.problem_categories.memory.pct_above_85pct}% above 85% usage</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cause Distribution */}
+              {Object.keys(summary.cause_distribution).length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase mb-2">Root Cause Distribution</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(summary.cause_distribution)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([cause, count]) => (
+                        <span
+                          key={cause}
+                          className="px-2 py-1 bg-muted rounded text-xs font-mono"
+                          title={`${count} CPEs with ${cause} as primary suspected cause`}
+                        >
+                          {cause.replace(/_/g, " ")}: {count}
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Failure Chains */}
+              {Object.keys(summary.failure_chain_distribution).length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase mb-2">Failure Chains Detected</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(summary.failure_chain_distribution)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([chain, count]) => (
+                        <span
+                          key={chain}
+                          className="px-2 py-1 bg-orange-100 dark:bg-orange-950 text-orange-800 dark:text-orange-200 rounded text-xs"
+                        >
+                          {chain.replace(/_/g, " ")}: {count} CPEs
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Telemetry Source & Data Quality */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-muted-foreground">
+                <div>
+                  <span className="font-medium">Telemetry Sources:</span>{" "}
+                  {Object.entries(summary.telemetry_source_distribution).map(([src, cnt]) => (
+                    <span key={src} className="mr-2">{src}: {cnt}</span>
+                  ))}
+                </div>
+                <div>
+                  <span className="font-medium">Data Quality:</span>{" "}
+                  {summary.data_quality.pct_with_telemetry}% with telemetry |{" "}
+                  Generated {new Date(summary.generated_at).toLocaleString()}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* CPE Records */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
