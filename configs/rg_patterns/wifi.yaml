@@ -8,6 +8,8 @@ domain: wireless
 # Leading * handles both clean names and timestamp-prefixed filenames
 files:
   - "*WiFilog.txt*"
+  - "*wificlientdrop.txt*"
+  - "*wifi_snapshot.txt*"
   - "*wifi_vendor_driver.log*"
   - "*wifi_vendor_hal.log*"
   - "*wifi_vendor_hostapd.log*"
@@ -31,7 +33,9 @@ literals:
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|crash|abort|panic)\\b"
+  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|incorrect|crash|abort|panic)\\b"
+  # Generic auth/disassociation keywords (position-independent)
+  - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?)\\b"
   # Station events (client left/removed/kicked)
   - "\\b(STA|station|client)\\s+(left|removed|kicked|rejected|denied)\\b"
   # Signal quality issues

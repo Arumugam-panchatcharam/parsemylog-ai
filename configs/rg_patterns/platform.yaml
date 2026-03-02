@@ -9,24 +9,26 @@ domain: platform
 files:
   - "*Consolelog.txt*"
   - "*ArmConsolelog.txt*"
-  - "*SelfHeal*.txt*"
-  - "*SelfHeal*.log*"
-  - "*LM*.txt*"
-  - "*core_log.txt*"
+  - "*console-ramoops-0*"
   - "*kernel*"
-  - "*messages*"
-  - "*syslog.txt*"
-  - "*systemdLog.txt*"
   - "*systeminfolog*"
   - "*system_eventlog*"
   - "*volatile_eventlog*"
-  - "*ntpLog.log*"
-  - "*dibbler-client.log*"
-  - "*dibbler-server.log*"
-  - "*ETHAGENTLog.txt*"
   - "*BootTime.log*"
-  - "*telemetry*.txt*"
-  - "*telemetry*.log*"
+  - "*SelfHeal*"
+  - "*MnetDebug.txt*"
+  - "*TDMlog.txt*"
+  - "*RXTX100Log.txt*"
+  - "*SpeedtestLog.txt*"
+  - "*SmartHomeAgentLog.txt*"
+  - "*EnrolmentAgentLog.txt*"
+  - "*VPNManagerLog.txt*"
+  - "*IPv6PrivacyLog.txt*"
+  - "*network_snapshot.txt*"
+  - "*wifi_snapshot.txt*"
+  - "*qos_config.log*"
+  - "*rtrouted.log*"
+  - "*client.sh-log*"
 
 # Number of context lines before/after each match
 context_lines: 3
@@ -53,6 +55,8 @@ literals:
 regex:
   # Generic error/failure indicators
   - "\\b(err|error|fail(ed|ure)?|crash|abort|panic|timeout)\\b"
+  # Generic platform issue keywords (position-independent)
+  - "\\b(reboot|restart|shutdown|reset|power.?cycle|hung_task|soft.?lockup|oops|watchdog|unsync|time.?sync)\\b"
   # Memory issues
   - "\\b(oom|OOM|out.of.memory|memory.?(leak|exhausted|low))\\b"
   # Kernel issues
@@ -67,8 +71,8 @@ regex:
   - "\\bboot\\s+(fail|error|timeout|stuck)\\b"
   # CPU/load issues
   - "\\b(cpu|load)\\s+(high|spike|100|stuck)\\b"
-  # Firmware/XCONF update issues
-  - "\\b(firmware|upgrade|update|xconf)\\s+(fail|error|abort|corrupt)\\b"
+  # Firmware/update issues
+  - "\\b(firmware|upgrade|update)\\s+(fail|error|abort|corrupt)\\b"
   # SSP restart
   - "\\bSSP\\s+(restart|crash|exit)\\b"
   # NTP sync issues

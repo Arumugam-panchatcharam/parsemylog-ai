@@ -7,11 +7,9 @@ domain: cellular
 # Log files to scan (glob patterns)
 # Leading * handles both clean names and timestamp-prefixed filenames
 files:
+  - "*CellularManagerLog.txt*"
   - "*CellularManager[Ll]og.txt*"
   - "*CELLULARMANAGERLog.txt*"
-  - "*CcspCellularSsp*.log*"
-  - "*lte*.log*"
-  - "*modem*.log*"
 
 # Number of context lines before/after each match
 context_lines: 3
@@ -32,6 +30,8 @@ literals:
 regex:
   # Generic error/failure indicators
   - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
+  # Generic cellular issue keywords (position-independent)
+  - "\\b(no.?signal|deregister|unregister|attach.?fail|reg.?fail|unresponsive|not.?detect|absent|locked|drop|lost)\\b"
   # Signal issues
   - "\\b(no.?signal|signal.?(lost|weak|low)|RSSI|RSRP|SINR)\\s*[=:]\\s*-\\d{2,3}\\b"
   # Registration issues

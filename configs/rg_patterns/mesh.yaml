@@ -26,6 +26,8 @@ literals:
 regex:
   # Generic error/failure indicators
   - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
+  # Generic mesh issue keywords (position-independent)
+  - "\\b(backhaul|topology|steer(ing)?|agent|controller|satellite|extender|pod|offline|unstable|degrade|conflict|easymesh|ieee1905|1905)\\b"
   # Backhaul issues
   - "\\b(backhaul)\\s+(down|fail|lost|disconnect|degrade)\\b"
   # Topology changes

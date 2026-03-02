@@ -397,6 +397,163 @@ def parse_telemetry_legacy(content: str) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# dcmscript.log CURL_CMD parser (fallback when T2 is disabled)
+# ---------------------------------------------------------------------------
+
+# Matches CURL_CMD lines and captures the JSON payload between -d '...'
+_DCM_CURL_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s+\S+:\s+DCM_log\s+-\s+CURL_CMD:.*?-d\s+'(\{.*)"
+)
+
+# Mapping from dcmscript short keys to TR-181 paths used by charts/summary
+_DCM_KEY_TO_TR181: Dict[str, str] = {
+    "CPUUsage": "Device.DeviceInfo.ProcessStatus.CPUUsage",
+    "DeviceUpTime": "Device.DeviceInfo.UpTime",
+    "MemInfoFree": "Device.DeviceInfo.MemoryStatus.Free",
+    "MemInfoTotal": "Device.DeviceInfo.MemoryStatus.Total",
+    "ProcessNumberOfEntries": "Device.DeviceInfo.ProcessStatus.ProcessNumberOfEntries",
+    "ModelName": "Device.DeviceInfo.ModelName",
+    "ManufacturerOUI": "Device.DeviceInfo.ManufacturerOUI",
+    "ProductClass": "Device.DeviceInfo.ProductClass",
+    "description": "Device.DeviceInfo.Description",
+    "hardwareversion": "Device.DeviceInfo.HardwareVersion",
+    "manufacturer": "Device.DeviceInfo.Manufacturer",
+    "hosts_connected_device_number": "Device.Hosts.X_CISCO_COM_ConnectedDeviceNumber",
+    "last_reboot_reason_split": "Device.DeviceInfo.X_RDKCENTRAL-COM_LastRebootReason",
+}
+
+
+def parse_dcmscript_curl_reports(content: str) -> List[Dict[str, Any]]:
+    """
+    Parse dcmscript.log content to extract telemetry from CURL_CMD payloads.
+
+    Each CURL_CMD line posts a ``searchResult`` JSON array to the telemetry
+    backend.  The array contains single-key dicts that we flatten into a
+    fields dict.  Core keys are also mapped to their TR-181 equivalents so
+    that existing chart / summary logic works transparently.
+
+    Args:
+        content: Raw text content of dcmscript.log.
+
+    Returns:
+        List of parsed report dicts (same schema as parse_telemetry_reports).
+    """
+    reports: List[Dict[str, Any]] = []
+
+    for line in content.splitlines():
+        m = _DCM_CURL_RE.match(line)
+        if not m:
+            continue
+
+        log_ts = m.group(1)
+        json_tail = m.group(2)
+
+        # The payload may extend past the closing brace (URL, flags, etc.).
+        # Find the outermost balanced JSON object.
+        json_str = _extract_balanced_json(json_tail)
+        if not json_str:
+            continue
+
+        parsed_json = _try_parse_json(json_str)
+        if not parsed_json or "searchResult" not in parsed_json:
+            continue
+
+        fields = _flatten_search_result(parsed_json["searchResult"])
+
+        # Inject TR-181 aliases for keys the rest of the pipeline expects
+        for short_key, tr181_key in _DCM_KEY_TO_TR181.items():
+            if short_key in fields and tr181_key not in fields:
+                fields[tr181_key] = fields[short_key]
+
+        # Parse embedded Time field (same format as T2 reports)
+        time_str = fields.get("Time", "")
+        try:
+            report_time = datetime.strptime(time_str, _REPORT_TIME_FMT)
+        except (ValueError, TypeError):
+            # Fall back to the log-line timestamp
+            try:
+                report_time = datetime.strptime(log_ts, "%Y-%m-%dT%H:%M:%S")
+            except (ValueError, TypeError):
+                report_time = None
+
+        uptime_raw = fields.get("Device.DeviceInfo.UpTime",
+                                fields.get("DeviceUpTime", "0"))
+        try:
+            uptime = int(uptime_raw)
+        except (ValueError, TypeError):
+            uptime = 0
+
+        reports.append({
+            "time": report_time,
+            "log_timestamp": log_ts,
+            "profile": fields.get("Profile", "dcmscript"),
+            "mac": fields.get("mac", ""),
+            "version": fields.get("Version", ""),
+            "uptime": uptime,
+            "fields": fields,
+            "raw_json": parsed_json,
+            "parse_ok": True,
+        })
+
+    return reports
+
+
+def _extract_balanced_json(s: str) -> Optional[str]:
+    """Extract the first balanced ``{...}`` substring from *s*."""
+    depth = 0
+    start = None
+    in_string = False
+    escape_next = False
+
+    for i, ch in enumerate(s):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0 and start is not None:
+                return s[start:i + 1]
+
+    # Truncated: attempt repair
+    if start is not None and depth > 0:
+        open_brackets = s[start:].count("[") - s[start:].count("]")
+        repair = s[start:] + "]" * max(open_brackets, 0) + "}" * depth
+        return repair
+
+    return None
+
+
+def _flatten_search_result(search_result: list) -> Dict[str, Any]:
+    """Flatten ``searchResult`` array of single-key dicts into one dict.
+
+    Skips entries whose value is an empty string (no telemetry data).
+    For duplicate keys the last value wins (matching T2 behaviour).
+    """
+    fields: Dict[str, Any] = {}
+    for item in search_result:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            if isinstance(value, str) and value == "":
+                continue
+            fields[key] = value
+    return fields
+
+
+# ---------------------------------------------------------------------------
 # Merge & group
 # ---------------------------------------------------------------------------
 
@@ -693,37 +850,55 @@ def extract_configured_fields(
 # Convenience: parse from file path
 # ---------------------------------------------------------------------------
 
-def parse_telemetry_file(file_path: Path) -> Tuple[List[Dict], Dict, Dict]:
+def parse_telemetry_file(
+    file_path: Path,
+    dcmscript_path: Optional[Path] = None,
+) -> Tuple[List[Dict], Dict, Dict]:
     """
-    Convenience function: parse a telemetry2_0.txt file end-to-end.
+    Convenience function: parse a telemetry file end-to-end.
 
-    Tries the T2 tid-based parser first, falls back to legacy brace-counting
-    if no reports are found.
+    Parser priority:
+      1. T2 tid-based parser (telemetry2_0.txt cJSON Reports)
+      2. Legacy brace-counting parser
+      3. dcmscript.log CURL_CMD searchResult parser (when *dcmscript_path*
+         is provided and the first two parsers yield no reports)
 
     Args:
-        file_path: Path to telemetry2_0.txt.
+        file_path: Path to the primary telemetry file (telemetry2_0.txt).
+        dcmscript_path: Optional path to dcmscript.log used as a fallback
+            when T2 is disabled or yields no parsable reports.
 
     Returns:
         Tuple of (reports, merged, summary).
     """
-    if not file_path.exists():
-        logger.warning(f"[TelemetryParser] File not found: {file_path}")
-        return [], {}, {}
+    reports: List[Dict[str, Any]] = []
 
-    content = file_path.read_text(encoding="utf-8", errors="replace")
+    if file_path.exists():
+        content = file_path.read_text(encoding="utf-8", errors="replace")
 
-    # Try T2 format first
-    reports = parse_telemetry_reports(content)
+        # Try T2 format first
+        reports = parse_telemetry_reports(content)
 
-    # Fallback to legacy parser if no reports found
-    if not reports:
-        reports = parse_telemetry_legacy(content)
+        # Fallback to legacy parser if no reports found
+        if not reports:
+            reports = parse_telemetry_legacy(content)
+
+    # Final fallback: parse dcmscript.log CURL_CMD payloads
+    if not reports and dcmscript_path and dcmscript_path.exists():
+        dcm_content = dcmscript_path.read_text(encoding="utf-8", errors="replace")
+        reports = parse_dcmscript_curl_reports(dcm_content)
+        if reports:
+            logger.info(
+                f"[TelemetryParser] Using dcmscript fallback: "
+                f"{len(reports)} reports from {dcmscript_path.name}"
+            )
 
     merged = merge_telemetry_reports(reports)
     summary = extract_telemetry_summary(reports)
 
+    source = file_path.name if reports else "none"
     logger.info(
-        f"[TelemetryParser] Parsed {file_path.name}: "
+        f"[TelemetryParser] Parsed {source}: "
         f"{summary.get('parsed', 0)}/{summary.get('total', 0)} reports OK"
     )
 

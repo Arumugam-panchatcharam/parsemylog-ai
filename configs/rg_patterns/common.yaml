@@ -1,0 +1,25 @@
+domain: common
+
+files:
+  - "*core_log.txt*"
+  - "*messages*"
+  - "*syslog*"
+  - "*user*"
+  - "*PAMlog.txt*"
+  - "*LM.txt*"
+  - "*OnBoardingLog.txt*"
+  - "*ServiceLog.txt*"
+  - "*systemdLog.txt*"
+  - "*local7notice*"
+  - "*critlog*"
+
+context_lines: 3
+case_insensitive: true
+
+literals:
+  - "FATAL"
+  - "SEGFAULT"
+  - "core dump"
+
+regex:
+  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|crash|abort|panic)\\b"

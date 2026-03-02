@@ -63,18 +63,29 @@ def _find_telemetry_file(project_dir: Path) -> Optional[Path]:
     return None
 
 
+def _find_dcmscript_file(project_dir: Path) -> Optional[Path]:
+    """Find dcmscript.log in project directory (fallback telemetry source)."""
+    if project_dir.exists():
+        for f in project_dir.iterdir():
+            if f.is_file() and "dcmscript" in f.name.lower() and f.name.lower().endswith(".log"):
+                return f
+    return None
+
+
 def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
     """Parse telemetry and version.txt to collect device info and key metrics.
 
     When telemetry2_0 is missing or has no parsable reports, falls back to
-    PARODUSlog.txt + telemetry_marker.txt + version.txt for device identity.
+    dcmscript.log CURL_CMD payloads, then to PARODUSlog.txt +
+    telemetry_marker.txt + version.txt for device identity.
     """
     result: Dict[str, Any] = {"device_info": {}, "key_metrics": {}}
 
     telemetry_file = _find_telemetry_file(project_dir)
+    dcmscript_file = _find_dcmscript_file(project_dir)
     telemetry_ok = False
 
-    if telemetry_file:
+    if telemetry_file or dcmscript_file:
         try:
             from logai.telemetry_parser import (
                 parse_telemetry_file,
@@ -82,7 +93,10 @@ def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
                 load_report_field_config,
             )
 
-            reports, merged, summary = parse_telemetry_file(telemetry_file)
+            primary = telemetry_file or dcmscript_file
+            reports, merged, summary = parse_telemetry_file(
+                primary, dcmscript_path=dcmscript_file,
+            )
 
             if reports and summary.get("parsed", 0) > 0:
                 telemetry_ok = True

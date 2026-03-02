@@ -68,6 +68,15 @@ def _find_telemetry_file(project_dir: Path) -> Optional[Path]:
     return None
 
 
+def _find_dcmscript_file(project_dir: Path) -> Optional[Path]:
+    """Find dcmscript.log in project directory (fallback telemetry source)."""
+    if project_dir.exists():
+        for f in project_dir.iterdir():
+            if f.is_file() and "dcmscript" in f.name.lower() and f.name.lower().endswith(".log"):
+                return f
+    return None
+
+
 def _auto_scale_unit(values, unit):
     """Auto-scale values to readable units."""
     if not values or not unit:
@@ -207,16 +216,21 @@ def _parse_and_build(project_dir: Path):
     or (None, None, error_message) on failure.
 
     When telemetry2_0 is missing or has no parsable reports, falls back to
-    PARODUSlog.txt + telemetry_marker.txt + version.txt to provide at least
-    the device identity information.
+    dcmscript.log CURL_CMD payloads first, then to PARODUSlog.txt +
+    telemetry_marker.txt + version.txt to provide at least the device
+    identity information.
     """
     telemetry_file = _find_telemetry_file(project_dir)
+    dcmscript_file = _find_dcmscript_file(project_dir)
     telemetry_ok = False
     reports = None
     summary = None
 
-    if telemetry_file:
-        reports, _merged, summary = parse_telemetry_file(telemetry_file)
+    if telemetry_file or dcmscript_file:
+        primary = telemetry_file or dcmscript_file
+        reports, _merged, summary = parse_telemetry_file(
+            primary, dcmscript_path=dcmscript_file,
+        )
         if reports and summary.get("parsed", 0) > 0:
             telemetry_ok = True
 

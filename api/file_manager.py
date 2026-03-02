@@ -206,16 +206,22 @@ class FileManager:
         # The telemetry is now parsed on-demand in the Telemetry tab callback,
         # but we still look for the file to include in the archive.
         telemetry_file = None
+        dcmscript_file = None
         merged_dir = Path(self.merged_logs_path)
         for f in merged_dir.iterdir():
             if f.is_file() and f.name.startswith("telemetry2_0"):
                 telemetry_file = f
-                break
+            elif (f.is_file() and "dcmscript" in f.name.lower()
+                  and f.name.lower().endswith(".log")):
+                dcmscript_file = f
 
-        if telemetry_file:
+        primary = telemetry_file or dcmscript_file
+        if primary:
             try:
                 os.makedirs(self.telemetry_path, exist_ok=True)
-                reports, merged, summary = parse_telemetry_file(telemetry_file)
+                reports, merged, summary = parse_telemetry_file(
+                    primary, dcmscript_path=dcmscript_file,
+                )
                 print(f"Telemetry: {summary.get('parsed', 0)}/{summary.get('total', 0)} reports parsed")
             except Exception as e:
                 print(f"Telemetry parsing error (non-fatal): {e}")
