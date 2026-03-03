@@ -21,6 +21,7 @@ from flask_jwt_extended import jwt_required
 from api.app import dbm
 from api.auth import get_user_id
 from logai.utils.constants import UPLOAD_DIRECTORY
+from services.celery_worker.celery_app import celery
 
 logger = logging.getLogger(__name__)
 
@@ -407,26 +408,40 @@ def cancel_batch_job(project_id, job_id):
     if job.status in ("completed", "failed", "cancelled"):
         return jsonify({"error": f"Job already {job.status}"}), 400
     
-    # Update job status
+    # Update job status first so running tasks can detect it
     dbm.update_batch_job_status(job_id, "cancelled")
     
-    # Revoke pending Celery tasks
-    from celery import current_app
-    pending_records = dbm.get_job_cpe_records(job_id, status="pending")
-    
     revoked = 0
-    for record in pending_records:
-        if record.celery_task_id:
-            current_app.control.revoke(record.celery_task_id, terminate=False)
-            dbm.update_cpe_record_status(record.id, "skipped", error_message="Job cancelled by user")
-            revoked += 1
+    terminated = 0
     
-    logger.info(f"[BatchJob {job_id}] Cancelled (revoked {revoked} pending tasks)")
+    all_records = dbm.get_job_cpe_records(job_id)
+    for record in all_records:
+        if record.celery_task_id:
+            is_active = record.status in ("pending", "processing")
+            celery.control.revoke(
+                record.celery_task_id,
+                terminate=is_active,
+                signal="SIGTERM" if is_active else None,
+            )
+            if record.status == "pending":
+                revoked += 1
+            elif record.status == "processing":
+                terminated += 1
+        if record.status in ("pending", "processing"):
+            dbm.update_cpe_record_status(
+                record.id, "skipped", error_message="Job cancelled by user"
+            )
+    
+    logger.info(
+        f"[BatchJob {job_id}] Cancelled "
+        f"(revoked {revoked} pending, terminated {terminated} processing)"
+    )
     
     return jsonify({
         "message": "Job cancelled",
         "status": "cancelled",
         "revoked_tasks": revoked,
+        "terminated_tasks": terminated,
     }), 200
 
 
@@ -458,6 +473,16 @@ def delete_batch_job(project_id, job_id):
     
     if job.status in ("queued", "processing"):
         return jsonify({"error": "Cannot delete active job. Cancel it first."}), 400
+    
+    # Revoke any lingering tasks in Redis before deleting DB rows
+    all_records = dbm.get_job_cpe_records(job_id)
+    revoked = 0
+    for record in all_records:
+        if record.celery_task_id:
+            celery.control.revoke(record.celery_task_id, terminate=True)
+            revoked += 1
+    if revoked:
+        logger.info(f"[BatchJob {job_id}] Revoked {revoked} tasks before delete")
     
     success, error = dbm.delete_batch_job(job_id)
     if not success:

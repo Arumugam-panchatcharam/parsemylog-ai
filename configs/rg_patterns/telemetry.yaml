@@ -1,9 +1,6 @@
 domain: telemetry
 
 files:
-  - "*telemetry*"
-  - "*telemetry2_0.txt*"
-  - "*telemetry_marker.txt*"
   - "*WEBPAlog.txt*"
   - "*PARODUSlog.txt*"
   - "*parodusStart-log.txt*"
@@ -11,7 +8,6 @@ files:
   - "*RTMessagelog.txt*"
   - "*xconf.txt*"
   - "*dcmProcessing.log*"
-  - "*dcmscript.log*"
   - "*TlsVerify.txt*"
   - "*XDNSlog.txt*"
 
@@ -34,5 +30,5 @@ literals:
 
 regex:
   - "\\b(err|error|fail(ed|ure)?|timeout|invalid|disconnect(ed)?)\\b"
-  - "\\b(telemetry|telemetry_marker|telemetry2_0|webpa|parodus|xconf|rtmessage|rbus|xdns|tls)\\b"
+  - "\\b(telemetry|telemetry_marker|webpa|parodus|xconf|rtmessage|rbus|xdns|tls)\\b"
   - "\\b(token|auth|certificate|cloud|upstream|downstream)\\s*(fail|error|expired|invalid|reject|disconnect|lost)?\\b"

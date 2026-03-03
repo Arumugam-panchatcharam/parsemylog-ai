@@ -20,6 +20,7 @@ import time
 import logging
 import zipfile
 import tarfile
+from sqlalchemy.exc import IntegrityError
 import shutil
 from pathlib import Path
 from typing import Dict, Any
@@ -35,9 +36,24 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT_CPE_TASKS = 4
 
 
+class JobCancelled(Exception):
+    """Raised when the parent batch job has been cancelled."""
+    pass
+
+
+def _check_job_cancelled(dbm, job_id: str):
+    """Raise JobCancelled if the batch job has been cancelled or deleted."""
+    job = dbm.get_batch_job(job_id)
+    if not job:
+        raise JobCancelled(f"Batch job {job_id} no longer exists")
+    if job.status == "cancelled":
+        raise JobCancelled(f"Batch job {job_id} was cancelled")
+
+
 class CPEProcessTask(Task):
     """Base task class with retry logic and error handling."""
     autoretry_for = (Exception,)
+    dont_autoretry_for = (JobCancelled, IntegrityError)
     retry_kwargs = {'max_retries': 3, 'countdown': 60}
     retry_backoff = True
     retry_backoff_max = 600
@@ -96,6 +112,12 @@ def process_cpe_batch_job(self, job_id: str, user_id: int, project_id: str,
             
             # Dispatch individual CPE processing tasks
             for zip_file in zip_files:
+                # Stop dispatching if the job was cancelled mid-way
+                job = dbm.get_batch_job(job_id)
+                if job and job.status == "cancelled":
+                    logger.info(f"[BatchJob {job_id}] Job cancelled — stopping dispatch")
+                    break
+                
                 serial = zip_file.stem  # Filename without .zip extension
                 
                 # Create CPE processing record
@@ -167,6 +189,9 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
         dbm.init_app(app)
         
         with app.app_context():
+            # Bail out early if job was already cancelled
+            _check_job_cancelled(dbm, job_id)
+            
             # Get or create CPE record
             records = dbm.get_job_cpe_records(job_id)
             record = next((r for r in records if r.serial == serial), None)
@@ -236,6 +261,9 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             log_files = register_cpe_files(cpe_dir, project_id, serial, dbm)
             logger.info(f"[CPE {serial}] Registered {len(log_files)} files")
             
+            # Check cancellation before the most expensive step
+            _check_job_cancelled(dbm, job_id)
+            
             # Step 6: Index patterns (uses shared Qdrant collection with CPE metadata)
             patterns_indexed = 0
             try:
@@ -295,6 +323,18 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
                 "elapsed_sec": elapsed,
             }
             
+    except JobCancelled:
+        logger.info(f"[CPE {serial}] Skipped — job {job_id} was cancelled")
+        try:
+            with app.app_context():
+                dbm.update_cpe_record_status(
+                    record_id, "skipped",
+                    error_message="Job cancelled by user"
+                )
+        except Exception:
+            pass
+        return {"status": "skipped", "serial": serial, "reason": "job_cancelled"}
+    
     except Exception as e:
         logger.error(f"[CPE {serial}] Error: {e}", exc_info=True)
         
