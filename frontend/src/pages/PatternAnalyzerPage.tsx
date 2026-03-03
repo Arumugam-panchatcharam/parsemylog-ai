@@ -11,7 +11,7 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SaveIcon from "@mui/icons-material/Save";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import DownloadIcon from "@mui/icons-material/Download";
+
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import ErrorIcon from "@mui/icons-material/Error";
@@ -166,9 +166,6 @@ export default function PatternAnalyzerPage() {
   // Scan results
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
 
-  // Preset import
-  const [showPresets, setShowPresets] = useState(false);
-
   // NATCO governance state
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
   const [submitComment, setSubmitComment] = useState("");
@@ -186,16 +183,16 @@ export default function PatternAnalyzerPage() {
 
   const hasNatco = !!globalInfo?.natco;
 
-  // -- Sync from global mutation --
+  // -- Sync from global mutation (sends current UI patterns so merge includes unsaved edits) --
   const syncMutation = useMutation({
-    mutationFn: () => patternGovernanceApi.sync(projectId!),
+    mutationFn: () => patternGovernanceApi.sync(projectId!, domains),
     onSuccess: (res) => {
       setDomains(res.data.domains);
       queryClient.invalidateQueries({ queryKey: ["regex-patterns", projectId] });
     },
   });
 
-  // -- Open submit dialog: fetch diff first --
+  // -- Open submit dialog: send current UI patterns for diff (no save round-trip) --
   const openSubmitDialog = async () => {
     if (!projectId) return;
     setDiffLoading(true);
@@ -204,9 +201,8 @@ export default function PatternAnalyzerPage() {
     setSelectedChanges({});
     setSubmitComment("");
     try {
-      const res = await patternGovernanceApi.diff(projectId);
+      const res = await patternGovernanceApi.diff(projectId, domains);
       setDiffData(res.data.domains);
-      // Auto-select all new and modified patterns
       const sel: Record<string, boolean> = {};
       for (const [domain, diff] of Object.entries(res.data.domains)) {
         for (const p of diff.new) sel[`${domain}::${p.regex}`] = true;
@@ -297,16 +293,6 @@ export default function PatternAnalyzerPage() {
       setCollapsedDomains(new Set(Object.keys(savedDomains)));
     }
   }, [savedDomains, patternsLoaded]);
-
-  // -- Load presets --
-  const { data: presetsData } = useQuery({
-    queryKey: ["regex-presets", projectId],
-    queryFn: async () => {
-      const res = await patternAnalyzerApi.getPresets(projectId!);
-      return res.data.presets;
-    },
-    enabled: !!projectId && showPresets,
-  });
 
   // -- Load reboots on mount --
   const { data: rebootsData } = useQuery({
@@ -463,12 +449,34 @@ export default function PatternAnalyzerPage() {
     });
   };
 
+  // Track which domain just had a pattern added so we can scroll to it
+  const [scrollTarget, setScrollTarget] = useState<{ domain: string; idx: number } | null>(null);
+  const newPatternRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollTarget && newPatternRef.current) {
+      newPatternRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // Focus the regex input inside the new row
+      const regexInput = newPatternRef.current.querySelector<HTMLInputElement>("input[placeholder='Regular expression']");
+      regexInput?.focus();
+      setScrollTarget(null);
+    }
+  }, [scrollTarget, domains]);
+
   // -- Pattern CRUD helpers --
   const addPattern = (domain: string) => {
+    const newIdx = (domains[domain] || []).length;
     setDomains((prev) => ({
       ...prev,
       [domain]: [...(prev[domain] || []), { name: "", regex: "", enabled: true }],
     }));
+    // Expand the domain if collapsed and schedule scroll
+    setCollapsedDomains((prev) => {
+      const next = new Set(prev);
+      next.delete(domain);
+      return next;
+    });
+    setScrollTarget({ domain, idx: newIdx });
   };
 
   const removePattern = (domain: string, idx: number) => {
@@ -483,18 +491,6 @@ export default function PatternAnalyzerPage() {
       ...prev,
       [domain]: (prev[domain] || []).map((p, i) => (i === idx ? { ...p, [field]: value } : p)),
     }));
-  };
-
-  const importPreset = (presetDomain: string) => {
-    const presetPatterns = presetsData?.[presetDomain] || [];
-    const existing = domains[presetDomain] || [];
-    const existingRegexes = new Set(existing.map((p) => p.regex));
-    const newPatterns = presetPatterns.filter((p) => !existingRegexes.has(p.regex));
-    setDomains((prev) => ({
-      ...prev,
-      [presetDomain]: [...(prev[presetDomain] || []), ...newPatterns],
-    }));
-    setShowPresets(false);
   };
 
   // -- JSON file import --
@@ -750,12 +746,6 @@ export default function PatternAnalyzerPage() {
           </h3>
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => setShowPresets(!showPresets)}
-              className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-border bg-background hover:bg-muted transition-colors"
-            >
-              <DownloadIcon style={{ fontSize: 14 }} /> Import Preset
-            </button>
-            <button
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-border bg-background hover:bg-muted transition-colors"
             >
@@ -832,24 +822,6 @@ export default function PatternAnalyzerPage() {
             </button>
           </div>
         </div>
-
-        {/* Preset import dropdown */}
-        {showPresets && presetsData && (
-          <div className="px-4 py-2 border-b border-border bg-yellow-50/50 dark:bg-yellow-900/10">
-            <p className="text-[11px] text-muted-foreground mb-1.5">Import patterns from a domain preset (patterns are added to matching domain):</p>
-            <div className="flex flex-wrap gap-2">
-              {Object.keys(presetsData).map((domain) => (
-                <button
-                  key={domain}
-                  onClick={() => importPreset(domain)}
-                  className="px-3 py-1 text-xs font-medium rounded-full border border-border bg-background hover:bg-muted transition-colors"
-                >
-                  {domain.replace(/_/g, " ")} ({presetsData[domain].length})
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* New domain input */}
         {showNewDomain && (
@@ -955,6 +927,7 @@ export default function PatternAnalyzerPage() {
                           {patterns.map((p, idx) => (
                             <div
                               key={idx}
+                              ref={scrollTarget?.domain === domain && scrollTarget?.idx === idx ? newPatternRef : undefined}
                               className="grid grid-cols-[32px_1fr_2fr_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30"
                             >
                               <input
@@ -987,6 +960,14 @@ export default function PatternAnalyzerPage() {
                           ))}
                         </>
                       )}
+                      {/* Inline add-pattern row at the bottom */}
+                      <button
+                        onClick={() => addPattern(domain)}
+                        className="flex items-center gap-1.5 w-full px-1 py-1.5 mt-1 text-[11px] text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/10 rounded transition-colors border border-dashed border-transparent hover:border-blue-300 dark:hover:border-blue-700"
+                      >
+                        <AddIcon style={{ fontSize: 14 }} />
+                        Add pattern
+                      </button>
                     </div>
                   )}
                 </div>

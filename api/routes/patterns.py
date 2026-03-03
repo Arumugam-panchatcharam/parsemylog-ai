@@ -71,6 +71,10 @@ def list_domains(project_id):
     """
     List indexed domains for a project.
 
+    When ``cpe_id`` is provided, checks that specific CPE directory.
+    Otherwise scans all CPE directories so the aggregated (ALL CPEs)
+    view correctly reports domain availability.
+
     Returns: [ { "domain", "label", "indexed", "file_count" } ]
     """
     user_id = get_user_id()
@@ -79,19 +83,39 @@ def list_domains(project_id):
         return err
 
     cpe_id = request.args.get("cpe_id")
-    pdir = _project_dir(user_id, project_id, cpe_id)
+
+    # Collect directories to probe for parquet files
+    if cpe_id:
+        probe_dirs = [_project_dir(user_id, project_id, cpe_id)]
+    else:
+        # No CPE specified — check project root first, then all CPE dirs
+        project_root = _project_dir(user_id, project_id)
+        cpes = dbm.list_project_cpes(project_id)
+        probe_dirs = [project_root] + [
+            project_root / cpe.serial for cpe in (cpes or [])
+        ]
+
     result = []
     for domain in _ALL_DOMAINS:
-        pq_path = pdir / f"{domain}_rg.parquet"
-        indexed = pq_path.exists()
+        indexed = False
         file_count = 0
-        if indexed:
-            try:
-                df = pd.read_parquet(pq_path, columns=["source_file"] if "source_file" in pd.read_parquet(pq_path, columns=[]).columns else [])
-                if "source_file" in df.columns:
-                    file_count = df["source_file"].nunique()
-            except Exception:
-                pass
+        for pdir in probe_dirs:
+            pq_path = pdir / f"{domain}_rg.parquet"
+            if pq_path.exists():
+                indexed = True
+                try:
+                    df = pd.read_parquet(
+                        pq_path,
+                        columns=["source_file"]
+                        if "source_file"
+                        in pd.read_parquet(pq_path, columns=[]).columns
+                        else [],
+                    )
+                    if "source_file" in df.columns:
+                        file_count += df["source_file"].nunique()
+                except Exception:
+                    pass
+                break  # found an indexed parquet — no need to check more
         result.append({
             "domain": domain,
             "label": _DOMAIN_LABELS.get(domain, domain),
@@ -368,6 +392,9 @@ def indexing_status(project_id):
     """
     Get domain indexing status.
 
+    When ``cpe_id`` is provided, checks that specific CPE directory.
+    Otherwise scans all CPE directories for parquet presence.
+
     Returns: { "domains": { domain: { "indexed", "label" } }, "all_done": bool, "is_indexing": bool }
     """
     user_id = get_user_id()
@@ -376,10 +403,21 @@ def indexing_status(project_id):
         return err
 
     cpe_id = request.args.get("cpe_id")
-    pdir = _project_dir(user_id, project_id, cpe_id)
+
+    if cpe_id:
+        probe_dirs = [_project_dir(user_id, project_id, cpe_id)]
+    else:
+        project_root = _project_dir(user_id, project_id)
+        cpes = dbm.list_project_cpes(project_id)
+        probe_dirs = [project_root] + [
+            project_root / cpe.serial for cpe in (cpes or [])
+        ]
+
     domains = {}
     for domain in _ALL_DOMAINS:
-        indexed = (pdir / f"{domain}_rg.parquet").exists()
+        indexed = any(
+            (pdir / f"{domain}_rg.parquet").exists() for pdir in probe_dirs
+        )
         domains[domain] = {
             "indexed": indexed,
             "label": _DOMAIN_LABELS.get(domain, domain),
@@ -449,10 +487,20 @@ def get_aggregated_patterns(project_id, domain):
     file_filter_str = request.args.get("file_filter", "")
     file_filter = [f.strip() for f in file_filter_str.split(",") if f.strip()] if file_filter_str else None
     
-    # Get all CPEs for this project
+    # Build list of (label, directory) pairs to scan
     cpes = dbm.list_project_cpes(project_id)
+    scan_entries: list[tuple[str, Path]] = []
+    if cpes:
+        for cpe in cpes:
+            scan_entries.append((cpe.serial, _project_dir(user_id, project_id, cpe.serial)))
+    else:
+        # No CPE records — fall back to project root (single-CPE uploads)
+        project_root = _project_dir(user_id, project_id)
+        pq = project_root / f"{domain}_rg.parquet"
+        if pq.exists():
+            scan_entries.append(("root", project_root))
     
-    if not cpes:
+    if not scan_entries:
         return jsonify({
             "domain": domain,
             "total_cpes": 0,
@@ -464,18 +512,16 @@ def get_aggregated_patterns(project_id, domain):
             "patterns": []
         }), 200
     
-    # Aggregate patterns from all CPEs
+    # Aggregate patterns from all entries
     pattern_data = {}  # template -> {occurrence_count, cpe_details: {serial: count}}
     all_source_files = set()
     
-    for cpe in cpes:
-        cpe_dir = _project_dir(user_id, project_id, cpe.serial)
-        df = _load_domain_parquet(cpe_dir, domain)
+    for label, entry_dir in scan_entries:
+        df = _load_domain_parquet(entry_dir, domain)
         
         if df.empty or "template" not in df.columns:
             continue
         
-        # Collect source files from the first CPE
         if "source_file" in df.columns:
             all_source_files.update(df["source_file"].dropna().unique().tolist())
         
@@ -485,7 +531,7 @@ def get_aggregated_patterns(project_id, domain):
             if df.empty:
                 continue
         
-        # Count occurrences per template for this CPE
+        # Count occurrences per template for this entry
         template_counts = df["template"].value_counts()
         
         for template, count in template_counts.items():
@@ -497,7 +543,7 @@ def get_aggregated_patterns(project_id, domain):
                 }
             
             pattern_data[template_str]["occurrence_count"] += int(count)
-            pattern_data[template_str]["cpe_details"][cpe.serial] = int(count)
+            pattern_data[template_str]["cpe_details"][label] = int(count)
     
     # Convert to list format
     patterns_list = []
@@ -524,7 +570,7 @@ def get_aggregated_patterns(project_id, domain):
     
     return jsonify({
         "domain": domain,
-        "total_cpes": len(cpes),
+        "total_cpes": len(scan_entries),
         "total_unique_patterns": total_patterns,
         "page": page,
         "page_size": page_size,
@@ -562,10 +608,19 @@ def get_aggregated_sample_logs(project_id, domain, template):
     limit = request.args.get("limit", 3, type=int)
     limit = min(max(1, limit), 10)  # Clamp between 1 and 10
     
-    # Get all CPEs for this project
+    # Build list of (label, directory) pairs to scan
     cpes = dbm.list_project_cpes(project_id)
+    scan_entries: list[tuple[str, Path]] = []
+    if cpes:
+        for cpe in cpes:
+            scan_entries.append((cpe.serial, _project_dir(user_id, project_id, cpe.serial)))
+    else:
+        project_root = _project_dir(user_id, project_id)
+        pq = project_root / f"{domain}_rg.parquet"
+        if pq.exists():
+            scan_entries.append(("root", project_root))
     
-    if not cpes:
+    if not scan_entries:
         return jsonify({
             "template": template,
             "samples": []
@@ -573,30 +628,26 @@ def get_aggregated_sample_logs(project_id, domain, template):
     
     samples = []
     
-    # Find the FIRST CPE with this pattern and get samples from it only
-    for cpe in cpes:
-        cpe_dir = _project_dir(user_id, project_id, cpe.serial)
-        df = _load_domain_parquet(cpe_dir, domain)
+    # Find the FIRST entry with this pattern and get samples from it only
+    for label, entry_dir in scan_entries:
+        df = _load_domain_parquet(entry_dir, domain)
         
         if df.empty or "template" not in df.columns:
             continue
         
-        # Filter by template
         matching = df[df["template"] == template]
         
         if matching.empty:
             continue
         
-        # Found first CPE with this pattern - take samples from this CPE only
         for _, row in matching.head(limit).iterrows():
             samples.append({
-                "cpe_serial": cpe.serial,
+                "cpe_serial": label,
                 "filename": str(row.get("source_file", "")),
                 "timestamp": str(row.get("timestamp", "")),
                 "logline": str(row.get("loglines", ""))
             })
         
-        # Stop after finding first CPE with the pattern
         break
     
     return jsonify({

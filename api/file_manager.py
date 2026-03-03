@@ -88,6 +88,89 @@ class ConfigIndex:
         raise ValueError(f"No config found for file: {filename}")
 
 
+# ---------- Shared CPE Processing Utilities ----------
+#
+# These functions are the canonical implementations for log merging,
+# file collection, and DB registration.  Both the normal upload path
+# (files.py / _process_multi_cpe_background) and the batch/Celery path
+# (tasks.py / process_single_cpe) MUST call these instead of
+# reimplementing the logic, so that fixes apply in one place.
+
+_SKIP_EXTENSIONS = frozenset({
+    '.parquet', '.json', '.tgz', '.tar', '.gz',
+    '.zip', '.xls', '.xlsx', '.bin',
+})
+
+
+def merge_cpe_logs(staging_dir, cpe_dir, merged_subdir=None):
+    """
+    Run LogMerger to merge logs from *staging_dir* into *cpe_dir*.
+
+    If *merged_subdir* is given, LogMerger writes into
+    ``cpe_dir / merged_subdir`` first, then all files are moved up to
+    *cpe_dir* and the subdir is removed.  This avoids mixing temporary
+    merge artefacts with other files already in *cpe_dir*.
+
+    Returns the number of merged files moved into *cpe_dir*.
+    """
+    staging_dir = Path(staging_dir)
+    cpe_dir = Path(cpe_dir)
+
+    if merged_subdir:
+        output_dir = cpe_dir / merged_subdir
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        output_dir = cpe_dir
+
+    merger = LogMerger(str(staging_dir), str(output_dir))
+    merger.merge_logs()
+
+    if merged_subdir and output_dir.exists():
+        file_count = 0
+        for fname in os.listdir(output_dir):
+            src = output_dir / fname
+            dst = cpe_dir / fname
+            if src.is_file():
+                shutil.move(str(src), str(dst))
+                file_count += 1
+        shutil.rmtree(output_dir, ignore_errors=True)
+        return file_count
+
+    return sum(1 for f in cpe_dir.iterdir() if f.is_file())
+
+
+def collect_cpe_log_files(cpe_dir):
+    """
+    Collect log files from a CPE directory (direct children only).
+
+    Uses an exclusion-based filter so extensionless syslog files
+    (messages, user, kernel, local7notice …) are included.
+    """
+    cpe_dir = Path(cpe_dir)
+    return [
+        f for f in cpe_dir.iterdir()
+        if f.is_file()
+        and not f.name.startswith('.')
+        and f.suffix.lower() not in _SKIP_EXTENSIONS
+        and f.stat().st_size > 0
+    ]
+
+
+def register_cpe_files(cpe_dir, project_id, serial, dbm):
+    """
+    Collect and register CPE log files in the database.
+
+    Delegates to :func:`collect_cpe_log_files` for the file list, then
+    calls ``dbm.save_cpe_file`` for each one.
+
+    Returns the list of registered :class:`~pathlib.Path` objects.
+    """
+    log_files = collect_cpe_log_files(cpe_dir)
+    for f in log_files:
+        dbm.save_cpe_file(project_id, serial, f, f.name)
+    return log_files
+
+
 class FileManager:
     """
     Processor for handling uploaded files in the application.
@@ -492,22 +575,10 @@ class FileManager:
                 cpe_output_dir = project_dir / serial
                 os.makedirs(cpe_output_dir, exist_ok=True)
 
-                merged_dir = cpe_output_dir / MERGED_LOGS_DIR_NAME
-                os.makedirs(merged_dir, exist_ok=True)
-
-                merger = LogMerger(str(staging_dir), str(merged_dir))
-                merger.merge_logs()
-
-                # Move merged files from merged_logs/ up to cpe_output_dir
-                file_count = 0
-                if merged_dir.exists():
-                    for fname in os.listdir(merged_dir):
-                        src = merged_dir / fname
-                        dst = cpe_output_dir / fname
-                        if src.is_file():
-                            shutil.move(str(src), str(dst))
-                            file_count += 1
-                    shutil.rmtree(merged_dir, ignore_errors=True)
+                file_count = merge_cpe_logs(
+                    staging_dir, cpe_output_dir,
+                    merged_subdir=MERGED_LOGS_DIR_NAME,
+                )
 
                 cpe_results.append({
                     "serial": serial,

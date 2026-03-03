@@ -21,7 +21,7 @@ from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id
-from api.file_manager import FileManager
+from api.file_manager import FileManager, register_cpe_files
 from logai.utils.constants import (
     UPLOAD_DIRECTORY,
     MERGED_LOGS_DIR_NAME,
@@ -248,9 +248,7 @@ def _process_multi_cpe_background(flask_app, project_id, user_id, project_dir, p
                 )
                 cpe_dir = project_dir / serial
                 if cpe_dir.exists():
-                    for f in cpe_dir.iterdir():
-                        if f.is_file() and f.stat().st_size > 0:
-                            dbm.save_cpe_file(project_id, serial, f, f.name)
+                    register_cpe_files(cpe_dir, project_id, serial, dbm)
                     indexer_batch.append((cpe_dir, project_id, serial))
                 processed_cpes.append(serial)
 

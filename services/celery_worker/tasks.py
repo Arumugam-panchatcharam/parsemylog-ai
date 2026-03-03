@@ -71,7 +71,8 @@ def process_cpe_batch_job(self, job_id: str, user_id: int, project_id: str,
         
         # Create minimal Flask app for DB context
         app = Flask(__name__)
-        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.getenv('DB_PATH', '/app/data/logai_users.db')}"
+        db_path_resolved = os.getenv('DB_PATH', '/app/data/logai_users.db')
+        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path_resolved}"
         app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
         
         dbm = DBManager()
@@ -151,15 +152,15 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
     try:
         # Import dependencies
         from api.user_db_mngr import DBManager
-        from api.file_manager import FileManager
-        from api.log_merger import LogMerger
+        from api.file_manager import merge_cpe_logs, register_cpe_files
         from logai.info_extractor import find_and_parse_version_txt, find_and_build_fallback_device_info
         from logai.utils.constants import UPLOAD_DIRECTORY
         from flask import Flask
         
         # Create Flask app context
         app = Flask(__name__)
-        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.getenv('DB_PATH', '/app/data/logai_users.db')}"
+        db_path_resolved = os.getenv('DB_PATH', '/app/data/logai_users.db')
+        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path_resolved}"
         app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
         
         dbm = DBManager()
@@ -207,15 +208,9 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
                     
                     shutil.move(str(src), str(dst))
             
-            # Step 3: Merge logs directly into cpe_dir (not a subdirectory)
+            # Step 3: Merge logs (shared with normal upload path)
             logger.info(f"[CPE {serial}] Merging logs...")
-            # LogMerger expects directory with archives/logs and output directory
-            merger = LogMerger(str(staging_dir), str(cpe_dir))
-            merger.merge_logs()
-            
-            # Count merged files in cpe_dir
-            log_files = [f for f in cpe_dir.rglob('*') if f.is_file() and f.suffix in ('.log', '.txt') and not f.name.startswith('.')]
-            logger.info(f"[CPE {serial}] Merged into {len(log_files)} files")
+            merge_cpe_logs(staging_dir, cpe_dir)
             
             # Step 4: Quick metadata scan
             mac = None
@@ -225,7 +220,6 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             try:
                 version_info = find_and_parse_version_txt(cpe_dir)
                 if version_info:
-                    # Extract dates if available
                     pass
             except:
                 pass
@@ -237,12 +231,10 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             except:
                 pass
             
-            # Step 5: Save CPE record in DB
+            # Step 5: Save CPE + register files (shared with normal upload path)
             dbm.save_cpe(project_id, serial, mac, date_from, date_to)
-            
-            # Register merged files in DB
-            for log_file in log_files:
-                dbm.save_cpe_file(project_id, serial, log_file, log_file.name)
+            log_files = register_cpe_files(cpe_dir, project_id, serial, dbm)
+            logger.info(f"[CPE {serial}] Registered {len(log_files)} files")
             
             # Step 6: Index patterns (uses shared Qdrant collection with CPE metadata)
             patterns_indexed = 0

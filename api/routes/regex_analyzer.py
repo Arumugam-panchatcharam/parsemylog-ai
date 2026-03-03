@@ -775,6 +775,11 @@ def sync_from_global(project_id):
     """
     Merge latest global NATCO patterns into the user's local patterns.
 
+    Accepts an optional ``{ "domains": {...} }`` body to use as the
+    current user patterns instead of loading from the saved YAML.
+    This ensures unsaved UI edits are included in the merge without
+    passing through the normalising save endpoint.
+
     Logic:
       - Global patterns replace/update matching entries (by domain + regex)
       - User-only patterns (not in global) are preserved
@@ -809,8 +814,12 @@ def sync_from_global(project_id):
             "enabled": gp.enabled,
         })
 
-    # Load current project patterns
-    user_domains = load_project_patterns(user_id, project_id)
+    # Use caller-supplied patterns or fall back to saved YAML
+    body = request.get_json(silent=True) or {}
+    if "domains" in body and isinstance(body["domains"], dict):
+        user_domains = body["domains"]
+    else:
+        user_domains = load_project_patterns(user_id, project_id)
 
     # Merge: global patterns take precedence, project-only patterns preserved
     merged: Dict[str, List[Dict[str, Any]]] = {}
@@ -820,9 +829,8 @@ def sync_from_global(project_id):
     for domain in all_domains:
         global_pats = global_by_domain.get(domain, [])
         user_pats = user_domains.get(domain, [])
-
-        # Build a map of user patterns by regex
-        user_by_regex = {p["regex"]: p for p in user_pats}
+        if not isinstance(user_pats, list):
+            user_pats = []
 
         domain_result: List[Dict[str, Any]] = []
 
@@ -839,7 +847,7 @@ def sync_from_global(project_id):
 
         # Then add user-only patterns (not in global)
         for up in user_pats:
-            if up["regex"] not in global_regexes:
+            if isinstance(up, dict) and up.get("regex") not in global_regexes:
                 domain_result.append(up)
 
         if domain_result:
@@ -849,11 +857,16 @@ def sync_from_global(project_id):
     return jsonify({"domains": merged, "synced": synced}), 200
 
 
-@regex_analyzer_bp.route("/<project_id>/patterns/diff", methods=["GET"])
+@regex_analyzer_bp.route("/<project_id>/patterns/diff", methods=["GET", "POST"])
 @jwt_required()
 def diff_patterns(project_id):
     """
     Compare user's local patterns against the NATCO global config.
+
+    Accepts GET (loads saved patterns from YAML) or POST with
+    ``{ "domains": {...} }`` to diff the caller-supplied patterns
+    directly, avoiding the normalisation round-trip through the
+    save endpoint.
 
     Returns per-domain categorisation:
         {
@@ -894,17 +907,25 @@ def diff_patterns(project_id):
             "name": gp.name, "regex": gp.regex, "enabled": gp.enabled,
         }
 
-    # Load project patterns
-    user_domains = load_project_patterns(user_id, project_id)
+    # Use caller-supplied patterns (POST) or fall back to saved YAML (GET)
+    body = request.get_json(silent=True) or {}
+    if request.method == "POST" and "domains" in body and isinstance(body["domains"], dict):
+        user_domains = body["domains"]
+    else:
+        user_domains = load_project_patterns(user_id, project_id)
 
     result_domains: Dict[str, Dict[str, list]] = {}
     for domain, user_pats in user_domains.items():
+        if not isinstance(user_pats, list):
+            continue
         gmap = global_by_domain.get(domain, {})
         new_pats = []
         modified_pats = []
         unchanged_pats = []
 
         for p in user_pats:
+            if not isinstance(p, dict):
+                continue
             rx = p.get("regex", "")
             name = p.get("name", "")
             enabled = p.get("enabled", True)

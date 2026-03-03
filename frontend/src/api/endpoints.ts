@@ -439,10 +439,10 @@ export interface DomainDiff {
 export const patternGovernanceApi = {
   getGlobal: (projectId: string) =>
     api.get<{ domains: DomainPatterns; natco: NatcoInfo | null }>(`/projects/${projectId}/patterns/global`),
-  diff: (projectId: string) =>
-    api.get<{ domains: Record<string, DomainDiff>; natco: NatcoInfo | null }>(`/projects/${projectId}/patterns/diff`),
-  sync: (projectId: string) =>
-    api.post<{ domains: DomainPatterns; synced: number }>(`/projects/${projectId}/patterns/sync`),
+  diff: (projectId: string, currentDomains?: DomainPatterns) =>
+    api.post<{ domains: Record<string, DomainDiff>; natco: NatcoInfo | null }>(`/projects/${projectId}/patterns/diff`, { domains: currentDomains ?? {} }),
+  sync: (projectId: string, currentDomains?: DomainPatterns) =>
+    api.post<{ domains: DomainPatterns; synced: number }>(`/projects/${projectId}/patterns/sync`, { domains: currentDomains ?? {} }),
   submit: (projectId: string, domain: string, patterns: Array<UserPattern & { change_type?: string }>, comment?: string) =>
     api.post<{ id: number; message: string }>(`/projects/${projectId}/patterns/submit`, {
       domain, patterns, comment,

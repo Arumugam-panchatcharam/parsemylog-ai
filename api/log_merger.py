@@ -66,12 +66,11 @@ class LogMerger:
                 except Exception as e:
                     print(f"Error extracting {src_file}: {e}")
 
-                # ---- Auto-prefix files that lack a timestamp prefix ----
                 # Some providers (e.g. telekom-hr) put log files inside a
                 # short-date directory (01-27-26-09-02AM/WiFilog.txt) without
                 # the YYYY-MM-DD-HH-MM-SS prefix that _merge_log_files needs.
-                # If none of the extracted files match FILE_NAME_REGEX, derive
-                # the timestamp from the tgz filename and prefix all files.
+                # Derive the timestamp from the tgz filename and prefix any
+                # files that lack it; already-prefixed files are left as-is.
                 self._auto_prefix_extracted(dest, base)
             else:
                 # If the file has a timestamp prefix (e.g. 2026-02-06-06-51-36_WiFilog.txt),
@@ -84,27 +83,17 @@ class LogMerger:
 
     def _auto_prefix_extracted(self, dest: str, base: str):
         """
-        If extracted files lack a YYYY-MM-DD-HH-MM-SS prefix, derive the
-        timestamp from the tgz filename (``base``) and rename them in place.
+        Ensure every extracted file carries a YYYY-MM-DD-HH-MM-SS prefix.
 
-        Files are moved from any nested subdirectory directly into ``dest``
-        so that ``_merge_log_files`` can find them via ``os.walk``.
+        Files that already match ``FILE_NAME_REGEX`` are left as-is (but
+        flattened to ``dest`` if they sit in a nested subdirectory).
+        All other files are prefixed with the 6-part timestamp extracted
+        from the tgz filename (``base``).
 
-        No-op when files already carry the expected prefix.
+        This handles both pure-unprefixed tarballs (e.g. telekom-hr) and
+        hypothetical mixed tarballs where some files carry the prefix and
+        others do not.
         """
-        # Quick check: does ANY extracted file already have the prefix?
-        has_prefixed = False
-        for root, _, files in os.walk(dest):
-            for fname in files:
-                if self.FILE_NAME_REGEX.match(fname):
-                    has_prefixed = True
-                    break
-            if has_prefixed:
-                break
-        if has_prefixed:
-            return  # Files are fine, nothing to do
-
-        # Try to extract a full timestamp from the tgz base name
         ts_match = self.TGZ_TS_RE.search(base)
         if not ts_match:
             return  # No timestamp available — can't prefix
@@ -113,10 +102,16 @@ class LogMerger:
         renamed = 0
         for root, dirs, files in os.walk(dest, topdown=False):
             for fname in files:
+                if self.FILE_NAME_REGEX.match(fname):
+                    # Already prefixed — flatten to dest level if nested
+                    if root != dest:
+                        dst_path = os.path.join(dest, fname)
+                        if not os.path.exists(dst_path):
+                            shutil.move(os.path.join(root, fname), dst_path)
+                    continue
                 src_path = os.path.join(root, fname)
                 new_name = f"{ts_prefix}_{fname}"
                 dst_path = os.path.join(dest, new_name)
-                # Avoid overwriting if name collision
                 if os.path.exists(dst_path):
                     continue
                 shutil.move(src_path, dst_path)
@@ -134,21 +129,21 @@ class LogMerger:
     def _merge_log_files(self):
         # Collect log files
         logs = defaultdict(list)
+        orphaned: list[Path] = []
         for root, _, files in os.walk(self.temp_dir):
             for fname in files:
                 match = self.FILE_NAME_REGEX.match(fname)
-                if not match:
-                    continue
-
-                ts_str, log_name, index = match.groups()
-                logs[log_name].append({
-                    "timestamp": self._parse_timestamp(ts_str),
-                    "index": int(index) if index else -1,
-                    "path": Path(root) / fname
-                })
+                if match:
+                    ts_str, log_name, index = match.groups()
+                    logs[log_name].append({
+                        "timestamp": self._parse_timestamp(ts_str),
+                        "index": int(index) if index else -1,
+                        "path": Path(root) / fname
+                    })
+                else:
+                    orphaned.append(Path(root) / fname)
 
         # Merge logs
-        #print(logs)
         for log_name, entries in logs.items():
             # timestamp asc, rollover desc (.1 → .0 → none)
             entries.sort(key=lambda e: (e["timestamp"], -e["index"]))
@@ -159,9 +154,21 @@ class LogMerger:
                     try:
                         with open(entry["path"], "rb") as f:
                             shutil.copyfileobj(f, out)
-                            # TODO: do we need marker between merged files?
                     except Exception as e:
                         print(f"[WARN] Failed reading {entry['path']}: {e}")
+
+        # Safety net: copy files that _auto_prefix_extracted could not prefix
+        # (e.g. tgz filename had no 6-part timestamp). These are genuine log
+        # files that would otherwise be silently lost.
+        if orphaned:
+            copied = 0
+            for src in orphaned:
+                dst = Path(self.merged_logs_path) / src.name
+                if not dst.exists() and src.stat().st_size > 0:
+                    shutil.copy2(str(src), str(dst))
+                    copied += 1
+            if copied:
+                print(f"[LogMerger] Copied {copied} unprefixed file(s) directly to output")
 
         print(f"Merged logs are available at: {self.merged_logs_path}")
 
