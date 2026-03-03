@@ -302,7 +302,7 @@ class FileManager:
         if primary:
             try:
                 os.makedirs(self.telemetry_path, exist_ok=True)
-                reports, merged, summary = parse_telemetry_file(
+                reports, merged, summary, _src = parse_telemetry_file(
                     primary, dcmscript_path=dcmscript_file,
                 )
                 print(f"Telemetry: {summary.get('parsed', 0)}/{summary.get('total', 0)} reports parsed")

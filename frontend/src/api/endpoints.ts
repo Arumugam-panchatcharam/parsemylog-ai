@@ -68,40 +68,50 @@ export interface CPEProcessRecord {
   completed_at?: string;
 }
 
-export interface RebootFleetSummary {
-  project_id: string;
-  job_id: string;
-  generated_at: string;
-  sample_info: {
-    total_cpes: number;
-    hardware_breakdown: Record<string, number>;
-    firmware_breakdown: Record<string, number>;
+// Event types shared by issue analysis
+export interface WindowEvents {
+  [category: string]: {
+    count: number;
+    sample_lines: string[];
+    timestamps: string[];
   };
-  reboot_overview: {
-    total_reboots: number;
-    cpes_with_reboots: number;
-    pct_with_reboots: number;
-    avg_reboots_per_affected: number;
+}
+
+export interface RebootEvent {
+  timestamp: string;
+  reason: string;
+  window?: { start: string; end: string };
+  window_events: WindowEvents;
+  likely_trigger: string;
+  trigger_description: string;
+  total_events_in_window: number;
+}
+
+export interface TelemetryTimeseries {
+  timestamps: string[];
+  cpu: (number | null)[];
+  memory_pct: (number | null)[];
+  temperature: (number | null)[];
+  connected_devices: (number | null)[];
+  wan_rx_bytes_rate: (number | null)[];
+  wan_tx_bytes_rate: (number | null)[];
+  wifi_ssid1_rx_bytes_rate: (number | null)[];
+  wifi_ssid1_tx_bytes_rate: (number | null)[];
+  wifi_ssid2_rx_bytes_rate: (number | null)[];
+  wifi_ssid2_tx_bytes_rate: (number | null)[];
+  snapshot?: {
+    gpon?: Record<string, string>;
+    wan?: Record<string, string>;
+    wifi?: Record<string, string>;
   };
-  wan_overview: {
-    total_disconnections: number;
-    cpes_affected: number;
-    pct_affected: number;
-  };
-  problem_categories: {
-    wifi: { cpes_affected: number; pct_affected: number; worst_case: Array<{ serial: string; total_events: number }> };
-    wan: { cpes_affected: number; pct_affected: number; worst_case: Array<{ serial: string; total_events: number }> };
-    memory: { cpes_above_85pct: number; pct_above_85pct: number; worst_case: Array<{ serial: string; peak_pct?: number }> };
-  };
-  cause_distribution: Record<string, number>;
-  failure_chain_distribution: Record<string, number>;
-  top_templates: Array<{ template: string; count: number }>;
-  client_churn_stats: { cpes_with_sustained_storms: number; pct_with_storms: number; avg_peak_rate: number };
-  btm_steering_stats: { cpes_with_btm_events: number; total_btm_events: number };
-  gpon_wan_health: { cpes_with_signal_degrade: number; cpes_with_wan_errors: number };
-  telemetry_source_distribution: Record<string, number>;
-  unknown_cohort: string[];
-  data_quality: { pct_with_telemetry: number; domain_coverage: Record<string, number> };
+  [key: string]: unknown;
+}
+
+export interface MemorySummary {
+  avg_pct?: number;
+  peak_pct?: number;
+  min_pct?: number;
+  samples?: number;
 }
 
 export const batchJobsApi = {
@@ -128,19 +138,196 @@ export const batchJobsApi = {
     ),
   delete: (projectId: string, jobId: string) =>
     api.delete<{ message: string }>(`/projects/${projectId}/batch-jobs/${jobId}`),
-  getRebootSummary: (projectId: string, jobId: string) =>
-    api.get<{ available: boolean; per_cpe_count: number; fleet_summary: RebootFleetSummary }>(
-      `/projects/${projectId}/batch-jobs/${jobId}/reboot-summary`
+};
+
+// ---------- Knowledge Graph ----------
+export interface KnowledgeGraphSummary {
+  id: string;
+  name: string;
+  natco_id: number | null;
+  natco_code?: string;
+  natco_name?: string;
+  description: string;
+  is_template: boolean;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeNodeData {
+  [key: string]: unknown;
+  id: string;
+  graph_id: string;
+  node_type: "EVENT" | "CONDITION" | "ISSUE" | "ROOT_CAUSE" | "SUBGRAPH";
+  name: string;
+  label: string;
+  domain: string | null;
+  detection_config: {
+    method?: string;
+    keywords?: string[];
+    patterns?: string[];
+    source_domains?: string[];
+    exclusions?: string[];
+    threshold?: { metric: string; operator: string; value: number };
+    referenced_graph_id?: string;
+    activation_mode?: "any_issue" | "all_issues";
+  } | null;
+  description: string | null;
+  position_x: number;
+  position_y: number;
+}
+
+export interface KnowledgeEdgeData {
+  [key: string]: unknown;
+  id: string;
+  graph_id: string;
+  source_node_id: string;
+  target_node_id: string;
+  relationship_type: "COULD_CAUSE" | "LEADS_TO" | "INDICATES" | "CORRELATES_WITH";
+  conditions: {
+    source_min_count?: number;
+    time_window_minutes?: number;
+    confidence?: number;
+  } | null;
+  label: string | null;
+  description: string | null;
+}
+
+export interface KnowledgeGraphFull extends KnowledgeGraphSummary {
+  nodes: KnowledgeNodeData[];
+  edges: KnowledgeEdgeData[];
+}
+
+export interface GraphTemplate {
+  filename: string;
+  name: string;
+  description: string;
+  node_count: number;
+  edge_count: number;
+}
+
+export const knowledgeGraphApi = {
+  list: (params?: { natco_id?: number; is_template?: boolean }) =>
+    api.get<KnowledgeGraphSummary[]>("/knowledge-graphs/", { params }),
+  create: (data: { name: string; natco_id?: number | null; description?: string; is_template?: boolean }) =>
+    api.post<KnowledgeGraphSummary>("/knowledge-graphs/", data),
+  get: (graphId: string) =>
+    api.get<KnowledgeGraphFull>(`/knowledge-graphs/${graphId}`),
+  update: (graphId: string, data: { name?: string; description?: string; natco_id?: number | null; is_template?: boolean }) =>
+    api.put<KnowledgeGraphSummary>(`/knowledge-graphs/${graphId}`, data),
+  delete: (graphId: string) =>
+    api.delete(`/knowledge-graphs/${graphId}`),
+
+  createNode: (graphId: string, data: Partial<KnowledgeNodeData>) =>
+    api.post<KnowledgeNodeData>(`/knowledge-graphs/${graphId}/nodes`, data),
+  updateNode: (graphId: string, nodeId: string, data: Partial<KnowledgeNodeData>) =>
+    api.put<KnowledgeNodeData>(`/knowledge-graphs/${graphId}/nodes/${nodeId}`, data),
+  deleteNode: (graphId: string, nodeId: string) =>
+    api.delete(`/knowledge-graphs/${graphId}/nodes/${nodeId}`),
+
+  createEdge: (graphId: string, data: Partial<KnowledgeEdgeData>) =>
+    api.post<KnowledgeEdgeData>(`/knowledge-graphs/${graphId}/edges`, data),
+  updateEdge: (graphId: string, edgeId: string, data: Partial<KnowledgeEdgeData>) =>
+    api.put<KnowledgeEdgeData>(`/knowledge-graphs/${graphId}/edges/${edgeId}`, data),
+  deleteEdge: (graphId: string, edgeId: string) =>
+    api.delete(`/knowledge-graphs/${graphId}/edges/${edgeId}`),
+
+  importGraph: (data: { template?: string; natco_id?: number } & Record<string, unknown>) =>
+    api.post<KnowledgeGraphFull>("/knowledge-graphs/import", data),
+  exportGraph: (graphId: string) =>
+    api.get<{ name: string; description: string; nodes: unknown[]; edges: unknown[] }>(`/knowledge-graphs/${graphId}/export`),
+  listTemplates: () =>
+    api.get<GraphTemplate[]>("/knowledge-graphs/templates"),
+};
+
+// ---------- Issue Analysis ----------
+export interface IssueAnalysisOverview {
+  available: boolean;
+  fleet_report?: {
+    project_id: string;
+    job_id: string;
+    graph_name: string;
+    generated_at: string;
+    total_cpes: number;
+    hardware_breakdown: Record<string, number>;
+    firmware_breakdown: Record<string, number>;
+    reboot_overview: {
+      total_reboots: number;
+      cpes_with_reboots: number;
+      pct_with_reboots: number;
+      avg_reboots_per_cpe: number;
+    };
+    trigger_distribution: Record<string, number>;
+    issue_categories: Record<string, { cpes_affected: number; pct_affected: number; total_events: number }>;
+    problem_areas: {
+      wifi: { cpes_affected: number; pct_affected: number; worst_case: Array<{ serial: string; total_events: number }> };
+      wan: { cpes_affected: number; pct_affected: number; worst_case: Array<{ serial: string; total_events: number }> };
+      memory: { cpes_above_85pct: number; pct_above_85pct: number; worst_case: Array<{ serial: string; peak_pct?: number }> };
+    };
+    root_cause_distribution: Record<string, number>;
+    telemetry_source_distribution: Record<string, number>;
+  };
+  per_cpe_count?: number;
+  per_cpe_serials?: string[];
+}
+
+export interface IssueAnalysisCPEReport {
+  identity: {
+    cpe_serial: string;
+    mac?: string;
+    model?: string;
+    firmware?: string;
+  };
+  telemetry_source: string;
+  total_reboots: number;
+  reboots: RebootEvent[];
+  telemetry_timeseries: TelemetryTimeseries;
+  memory_summary: MemorySummary;
+  aggregate_issues: Record<string, number>;
+  causal_chains: Array<{ path: string[]; path_ids: string[]; length: number }>;
+  root_causes: Array<{
+    node_id: string;
+    name: string;
+    label: string;
+    node_type: string;
+    confidence: number;
+    evidence_count: number;
+    score: number;
+    contributing_events: Array<{ node_id: string; name: string; count: number; confidence: number }>;
+  }>;
+  graph_name: string;
+  analysis_elapsed_ms: number;
+}
+
+export const issueAnalysisApi = {
+  // Batch-job scoped
+  trigger: (projectId: string, jobId: string, graphId: string) =>
+    api.post<{ message: string; celery_task_id: string; graph_name: string }>(
+      `/projects/${projectId}/batch-jobs/${jobId}/issue-analysis`,
+      { graph_id: graphId },
     ),
-  regenerateRebootSummary: (projectId: string, jobId: string) =>
-    api.post<{ message: string; celery_task_id: string }>(
-      `/projects/${projectId}/batch-jobs/${jobId}/reboot-summary/regenerate`
+  get: (projectId: string, jobId: string) =>
+    api.get<IssueAnalysisOverview>(
+      `/projects/${projectId}/batch-jobs/${jobId}/issue-analysis`,
     ),
-  downloadRebootSummary: (projectId: string, jobId: string, type: "fleet" | "per_cpe" = "fleet") =>
-    api.get(`/projects/${projectId}/batch-jobs/${jobId}/reboot-summary/download`, {
-      params: { type },
-      responseType: "blob",
-    }),
+  getCPE: (projectId: string, jobId: string, cpeSerial: string) =>
+    api.get<IssueAnalysisCPEReport>(
+      `/projects/${projectId}/batch-jobs/${jobId}/issue-analysis/cpe/${encodeURIComponent(cpeSerial)}`,
+    ),
+  // Direct project-level (single/few CPEs, no batch job)
+  triggerDirect: (projectId: string, graphId: string) =>
+    api.post<{ message: string; celery_task_id: string; graph_name: string }>(
+      `/projects/${projectId}/issue-analysis`,
+      { graph_id: graphId },
+    ),
+  getDirect: (projectId: string) =>
+    api.get<IssueAnalysisOverview>(
+      `/projects/${projectId}/issue-analysis`,
+    ),
+  getCPEDirect: (projectId: string, cpeSerial: string) =>
+    api.get<IssueAnalysisCPEReport>(
+      `/projects/${projectId}/issue-analysis/cpe/${encodeURIComponent(cpeSerial)}`,
+    ),
 };
 
 // ---------- Files ----------

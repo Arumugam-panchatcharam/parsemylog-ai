@@ -318,7 +318,7 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
 
 
 def _trigger_reboot_summary(job_id: str, user_id: int, project_id: str):
-    """Dispatch the reboot summary generation task after batch completion."""
+    """Dispatch reboot summary after batch completion."""
     try:
         generate_reboot_summary.apply_async(
             args=(job_id, user_id, project_id),
@@ -362,6 +362,54 @@ def generate_reboot_summary(self, job_id: str, user_id: int, project_id: str):
 
     except Exception as exc:
         logger.error(f"[RebootSummary] Error for job={job_id}: {exc}", exc_info=True)
+        return {"status": "error", "message": str(exc)}
+
+
+@celery.task(bind=True, name="run_issue_analysis")
+def run_issue_analysis(self, job_id: str, user_id: int, project_id: str, graph_id: str):
+    """
+    Run graph-driven issue analysis for a completed batch job.
+    Uses the specified knowledge graph to detect patterns and causal chains.
+    """
+    logger.info(f"[IssueAnalysis] Task started for job={job_id}, graph={graph_id}")
+    try:
+        from logai.utils.constants import UPLOAD_DIRECTORY
+        from logai.graph_analyzer import load_graph_definition, generate_batch_analysis
+        from api.user_db_mngr import DBManager
+        from flask import Flask
+
+        project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+        if not project_dir.exists():
+            logger.error(f"[IssueAnalysis] Project dir not found: {project_dir}")
+            return {"status": "error", "message": "Project directory not found"}
+
+        # Load graph definition inside Flask app context (Celery has no app context)
+        app = Flask(__name__)
+        db_path_resolved = os.getenv('DB_PATH', '/app/data/logai_users.db')
+        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path_resolved}"
+        app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+        dbm = DBManager()
+        dbm.init_app(app)
+
+        with app.app_context():
+            graph_def = load_graph_definition(graph_id)
+
+        result = generate_batch_analysis(
+            project_dir=project_dir,
+            project_id=project_id,
+            job_id=job_id,
+            graph_def=graph_def,
+        )
+
+        logger.info(
+            f"[IssueAnalysis] Completed for job={job_id}: "
+            f"{result['total_cpes']} CPEs in {result['elapsed_sec']}s"
+        )
+        return {"status": "completed", **result}
+
+    except Exception as exc:
+        logger.error(f"[IssueAnalysis] Error for job={job_id}: {exc}", exc_info=True)
         return {"status": "error", "message": str(exc)}
 
 

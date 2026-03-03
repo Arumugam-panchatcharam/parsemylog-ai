@@ -10,6 +10,8 @@ import TimelineIcon from "@mui/icons-material/Timeline";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import AccountTreeIcon from "@mui/icons-material/AccountTree";
+import HubIcon from "@mui/icons-material/Hub";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
@@ -28,6 +30,7 @@ const workspaceNav = [
   { to: "/workspace/telemetry", icon: TimelineIcon, label: "Telemetry" },
   { to: "/workspace/ai", icon: PsychologyIcon, label: "Semantic Search" },
   { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
+  { to: "/workspace/issue-analysis", icon: AccountTreeIcon, label: "Issue Analysis" },
 ];
 
 export default function Sidebar() {
@@ -182,6 +185,22 @@ export default function Sidebar() {
             >
               <DescriptionIcon style={{ fontSize: 18 }} />
               {!collapsed && "Dashboard"}
+            </NavLink>
+            <NavLink
+              to="/knowledge-graph"
+              title={collapsed ? "Knowledge Graph" : undefined}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
+                  isActive
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                    : "text-muted-foreground hover:bg-sidebar-accent",
+                  collapsed && "justify-center px-2"
+                )
+              }
+            >
+              <HubIcon style={{ fontSize: 18 }} />
+              {!collapsed && "Knowledge Graph"}
             </NavLink>
             <NavLink
               to="/pcap"

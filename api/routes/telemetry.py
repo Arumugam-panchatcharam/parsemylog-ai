@@ -230,7 +230,7 @@ def _parse_and_build(project_dir: Path):
 
     if telemetry_file or dcmscript_file:
         primary = telemetry_file or dcmscript_file
-        reports, _merged, summary = parse_telemetry_file(
+        reports, _merged, summary, _src = parse_telemetry_file(
             primary, dcmscript_path=dcmscript_file,
         )
         if reports and summary.get("parsed", 0) > 0:

@@ -110,8 +110,11 @@ EVIDENCE_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "keywords": [
             r"CCSP_ERR", r"CCSP_CRASH",
             r"ccsp\s*(error|fail|crash|timeout)",
-            r"0x232D", r"GetParameterValues.*fail",
-            r"PSM\s*(error|fail)",
+            r"CcspCcMbi_GetParameterValues.*Failure\s+status",
+            r"(?<!getDHCPv4ServerPoolParametersFrom)PSM\.\s*(ERROR|CRIT)",
+        ],
+        "exclusions": [
+            r"getDHCPv4ServerPoolParametersFromPSM",
         ],
     },
     "mesh_backhaul": {
@@ -154,8 +157,12 @@ EVIDENCE_CATEGORIES: Dict[str, Dict[str, Any]] = {
 }
 
 _COMPILED_CATS: Dict[str, List[re.Pattern]] = {}
+_COMPILED_EXCLUSIONS: Dict[str, List[re.Pattern]] = {}
 for _cat, _cfg in EVIDENCE_CATEGORIES.items():
     _COMPILED_CATS[_cat] = [re.compile(kw, re.IGNORECASE) for kw in _cfg["keywords"]]
+    _COMPILED_EXCLUSIONS[_cat] = [
+        re.compile(ex, re.IGNORECASE) for ex in _cfg.get("exclusions", [])
+    ]
 
 # Mapping from domain file names to category sets for faster lookup
 _DOMAIN_TO_CATS: Dict[str, List[str]] = defaultdict(list)
@@ -277,6 +284,9 @@ def _classify_parquet_lines(cpe_dir: Path) -> Dict[str, Dict[str, Any]]:
             combined = f"{text} {tmpl}"
 
             for cat in cats_for_domain:
+                excluded = any(ex.search(combined) for ex in _COMPILED_EXCLUSIONS.get(cat, []))
+                if excluded:
+                    continue
                 for pat in _COMPILED_CATS[cat]:
                     if pat.search(combined):
                         ev = evidence[cat]
@@ -285,7 +295,7 @@ def _classify_parquet_lines(cpe_dir: Path) -> Dict[str, Dict[str, Any]]:
                             ev["timestamps"].append(ts)
                         if len(ev["sample_lines"]) < 3:
                             ev["sample_lines"].append(text[:300])
-                        break  # one category match per line is enough
+                        break
 
     # Post-process: first/last ts, rate
     for cat, ev in evidence.items():
@@ -366,15 +376,10 @@ def _collect_telemetry_context(
     t2_path = cpe_dir / "telemetry2_0.txt"
     dcm_path = cpe_dir / "dcmscript.log"
 
-    reports, merged, summary = parse_telemetry_file(t2_path, dcmscript_path=dcm_path)
+    reports, merged, summary, source = parse_telemetry_file(t2_path, dcmscript_path=dcm_path)
 
     if not reports:
         return _build_marker_fallback_context(cpe_dir), "parodus_marker_fallback"
-
-    # Determine source
-    source = "telemetry2_0"
-    if reports and reports[0].get("profile") == "dcmscript":
-        source = "dcmscript"
 
     context: Dict[str, Any] = {
         "report_count": len(reports),
@@ -642,16 +647,21 @@ def _determine_top_cause(
     }
 
 
-def _get_device_identity(cpe_dir: Path, serial: str) -> Dict[str, Any]:
-    """Extract device identity info from version.txt and fallback sources."""
+def _get_device_identity(
+    cpe_dir: Path,
+    serial: str,
+    telemetry_reports: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Extract device identity info from version.txt, PARODUS, and telemetry."""
     identity: Dict[str, Any] = {"cpe_serial": serial}
 
     try:
         version_info = find_and_parse_version_txt(cpe_dir)
         if version_info:
-            identity["firmware"] = version_info.get("imagename", "")
-            identity["kernel_version"] = version_info.get("kernel_version", "")
-            identity["model"] = version_info.get("model", "")
+            fw_list = version_info.get("firmware_versions", [])
+            if fw_list:
+                identity["firmware"] = fw_list[-1].get("image_name", "")
+            identity["model"] = version_info.get("machine_name", "")
     except Exception:
         pass
 
@@ -659,9 +669,32 @@ def _get_device_identity(cpe_dir: Path, serial: str) -> Dict[str, Any]:
         fallback = find_and_build_fallback_device_info(cpe_dir)
         if fallback:
             identity.setdefault("mac", fallback.get("mac", ""))
-            identity.setdefault("model", fallback.get("model", ""))
+            if not identity.get("model"):
+                identity["model"] = fallback.get("model", "")
+            if not identity.get("firmware"):
+                identity.setdefault("firmware", fallback.get("version", ""))
     except Exception:
         pass
+
+    # Fallback: extract MAC from telemetry reports (dcmscript / T2)
+    if not identity.get("mac") and telemetry_reports:
+        for r in telemetry_reports:
+            mac = r.get("mac", "")
+            if mac:
+                identity["mac"] = mac.replace(":", "").lower()
+                break
+
+    # Fallback: extract MAC from directory name pattern (MAC appears in tgz filenames)
+    if not identity.get("mac"):
+        try:
+            for f in cpe_dir.iterdir():
+                if f.suffix in (".tgz", ".tar.gz"):
+                    parts = f.stem.split("_")
+                    if len(parts) >= 2 and len(parts[1]) == 12:
+                        identity["mac"] = parts[1].lower()
+                        break
+        except Exception:
+            pass
 
     return identity
 
@@ -704,7 +737,15 @@ def build_per_cpe_summary(
     Returns:
         Dict suitable for writing as a single JSONL line.
     """
-    identity = _get_device_identity(cpe_dir, serial)
+    # Telemetry context (collected first so reports are available for identity)
+    telemetry_context, telemetry_source = _collect_telemetry_context(cpe_dir)
+
+    # Parse telemetry reports for identity fallback (MAC from dcmscript)
+    t2_path = cpe_dir / "telemetry2_0.txt"
+    dcm_path = cpe_dir / "dcmscript.log"
+    tel_reports, _, _, _ = parse_telemetry_file(t2_path, dcmscript_path=dcm_path)
+
+    identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports)
     identity["project_id"] = project_id
     identity["job_id"] = job_id
 
@@ -714,7 +755,6 @@ def build_per_cpe_summary(
     # Evidence from parquets
     evidence = _classify_parquet_lines(cpe_dir)
 
-    # Add rate_per_hour to each category
     for cat, ev in evidence.items():
         ev["rate_per_hour"] = _compute_rate_per_hour(
             ev["count"], ev.get("first_ts"), ev.get("last_ts")
@@ -724,9 +764,6 @@ def build_per_cpe_summary(
     storm = _detect_disconnect_storm(evidence, cpe_dir)
     evidence["wifi_disconnect_storm"]["peak_rate_per_min"] = storm["peak_rate_per_min"]
     evidence["wifi_disconnect_storm"]["sustained_storm"] = storm["sustained"]
-
-    # Telemetry context
-    telemetry_context, telemetry_source = _collect_telemetry_context(cpe_dir)
 
     # Memory trend
     memory_trend = _compute_memory_trend(telemetry_context)

@@ -1,0 +1,1128 @@
+"""
+Knowledge-Graph-Driven Issue Analyzer
+======================================
+
+Generic analysis engine that reads a user-defined knowledge graph
+(nodes + causal edges stored in SQLite) and evaluates CPE log data
+against it.  Replaces the hardcoded category lists in the former
+legacy reboot analysis modules.
+
+Algorithm
+---------
+For each CPE:
+
+1. Load ``*_rg.parquet`` + telemetry (reuses existing parsers).
+2. Build a networkx DiGraph from the knowledge graph definition.
+3. For every EVENT node, match its ``detection_config`` against log
+   lines in the relevant parquet domains.
+4. Evaluate edges: if an EVENT's evidence meets the edge's conditions
+   (e.g. count >= threshold), propagate activation through the graph.
+5. Collect activated ISSUE and ROOT_CAUSE nodes with evidence chains.
+6. Score root causes by confidence weights and evidence strength.
+
+The output format is consumed by ``IssueAnalysisPage.tsx``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+
+try:
+    import networkx as nx
+except ImportError:
+    nx = None  # type: ignore[assignment]
+
+from logai.info_extractor import (
+    find_and_extract_reboots,
+    find_and_parse_version_txt,
+    find_and_build_fallback_device_info,
+)
+from logai.telemetry_parser import parse_telemetry_file
+
+logger = logging.getLogger(__name__)
+
+REBOOT_WINDOW_BEFORE_MIN = 60
+REBOOT_WINDOW_AFTER_MIN = 10
+OUTPUT_DIR_NAME = "issue_analysis"
+PER_CPE_FILE = "issue_analysis_per_cpe.json"
+FLEET_FILE = "fleet_issue_analysis.json"
+
+_TS_FMTS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f")
+
+# RX/TX telemetry field aliases
+_RXTX_FIELDS = {
+    "wan": {
+        "rx_bytes": ["wan_bytesReceived", "Device.WAN.BytesReceived"],
+        "tx_bytes": ["wan_bytesSent", "Device.WAN.BytesSent"],
+        "rx_packets": ["wan_packetsReceived", "Device.WAN.PacketsReceived"],
+        "tx_packets": ["wan_packetsSent", "Device.WAN.PacketsSent"],
+        "rx_errors": ["wan_errorsReceived", "Device.WAN.ErrorsReceived"],
+        "tx_errors": ["wan_errorsSent", "Device.WAN.ErrorsSent"],
+    },
+    "wifi_ssid1": {
+        "rx_bytes": ["wifi_ssid_1_stats_bytesreceived"],
+        "tx_bytes": ["wifi_ssid_1_stats_bytessent"],
+        "rx_errors": ["wifi_ssid_1_stats_errorsreceived"],
+        "tx_errors": ["wifi_ssid_1_stats_errorssent"],
+    },
+    "wifi_ssid2": {
+        "rx_bytes": ["wifi_ssid_2_stats_bytesreceived"],
+        "tx_bytes": ["wifi_ssid_2_stats_bytessent"],
+    },
+    "ethernet": {
+        "rx_bytes": ["ethernet_link_1_stats_bytesreceived"],
+        "tx_bytes": ["ethernet_link_1_stats_bytessent"],
+    },
+    "ppp": {
+        "rx_bytes": ["ppp_interface_1_stats_bytesreceived"],
+        "tx_bytes": ["ppp_interface_1_stats_bytessent"],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_ts(s: str) -> Optional[datetime]:
+    if not s:
+        return None
+    for fmt in _TS_FMTS:
+        try:
+            return datetime.strptime(s[:26], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _safe_int(v: Any) -> Optional[int]:
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Graph loading
+# ---------------------------------------------------------------------------
+
+def load_graph_definition(
+    graph_id: str,
+    _visited: Optional[set] = None,
+) -> Dict[str, Any]:
+    """Load a knowledge graph from SQLite and return nodes + edges as dicts.
+
+    For SUBGRAPH nodes the referenced graph is loaded recursively and
+    attached under ``node["_resolved_subgraph"]``.  Circular references
+    are detected via *_visited*.
+    """
+    from api.user_db_mngr import KnowledgeGraph, KnowledgeNode, KnowledgeEdge, db
+
+    if _visited is None:
+        _visited = set()
+    if graph_id in _visited:
+        raise ValueError(
+            f"Circular subgraph reference detected: graph '{graph_id}' "
+            "is already in the evaluation chain"
+        )
+    _visited.add(graph_id)
+
+    graph = db.session.get(KnowledgeGraph, graph_id)
+    if not graph:
+        raise ValueError(f"Knowledge graph '{graph_id}' not found")
+
+    nodes = []
+    for n in db.session.query(KnowledgeNode).filter_by(graph_id=graph_id).all():
+        node_dict: Dict[str, Any] = {
+            "id": n.id,
+            "node_type": n.node_type,
+            "name": n.name,
+            "label": n.label,
+            "domain": n.domain,
+            "detection_config": json.loads(n.detection_config) if n.detection_config else None,
+            "description": n.description,
+        }
+        if n.node_type == "SUBGRAPH":
+            dc = node_dict.get("detection_config") or {}
+            ref_id = dc.get("referenced_graph_id")
+            if ref_id and ref_id not in _visited:
+                try:
+                    node_dict["_resolved_subgraph"] = load_graph_definition(
+                        ref_id, _visited=set(_visited),
+                    )
+                except Exception as exc:
+                    logger.warning("Could not resolve subgraph %s: %s", ref_id, exc)
+        nodes.append(node_dict)
+
+    edges = []
+    for e in db.session.query(KnowledgeEdge).filter_by(graph_id=graph_id).all():
+        edges.append({
+            "id": e.id,
+            "source_node_id": e.source_node_id,
+            "target_node_id": e.target_node_id,
+            "relationship_type": e.relationship_type,
+            "conditions": json.loads(e.conditions) if e.conditions else {},
+            "label": e.label,
+            "description": e.description,
+        })
+
+    return {"id": graph_id, "name": graph.name, "nodes": nodes, "edges": edges}
+
+
+def build_networkx_graph(graph_def: Dict[str, Any]):
+    """Build a networkx DiGraph from the graph definition dict."""
+    if nx is None:
+        raise ImportError("networkx is required for graph analysis. pip install networkx")
+
+    G = nx.DiGraph()
+    for n in graph_def["nodes"]:
+        G.add_node(n["id"], **n)
+    for e in graph_def["edges"]:
+        G.add_edge(
+            e["source_node_id"], e["target_node_id"],
+            edge_id=e["id"], **e,
+        )
+    return G
+
+
+def _compile_node_patterns(node: Dict) -> Tuple[List[re.Pattern], List[re.Pattern]]:
+    """Compile regex/keyword patterns from a node's detection_config."""
+    dc = node.get("detection_config") or {}
+    patterns: List[re.Pattern] = []
+    exclusions: List[re.Pattern] = []
+
+    for kw in dc.get("keywords", []):
+        try:
+            patterns.append(re.compile(kw, re.IGNORECASE))
+        except re.error:
+            logger.warning(f"Bad regex in node {node['name']}: {kw}")
+
+    for rx in dc.get("patterns", []):
+        try:
+            patterns.append(re.compile(rx, re.IGNORECASE))
+        except re.error:
+            logger.warning(f"Bad regex in node {node['name']}: {rx}")
+
+    for ex in dc.get("exclusions", []):
+        try:
+            exclusions.append(re.compile(ex, re.IGNORECASE))
+        except re.error:
+            pass
+
+    return patterns, exclusions
+
+
+# ---------------------------------------------------------------------------
+# Parquet loading
+# ---------------------------------------------------------------------------
+
+def _load_all_parquet_events(cpe_dir: Path) -> pd.DataFrame:
+    """Load all *_rg.parquet files into one DataFrame."""
+    frames = []
+    for pq_path in sorted(cpe_dir.glob("*_rg.parquet")):
+        domain = pq_path.stem.replace("_rg", "")
+        try:
+            df = pd.read_parquet(pq_path)
+            if df.empty:
+                continue
+            df = df.copy()
+            df["_domain"] = domain
+            frames.append(df)
+        except Exception as exc:
+            logger.warning(f"Could not read {pq_path}: {exc}")
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+    if "loglines" not in combined.columns:
+        return pd.DataFrame()
+
+    if "timestamp" in combined.columns:
+        combined["_ts"] = combined["timestamp"].apply(
+            lambda x: _parse_ts(str(x)) if pd.notna(x) else None
+        )
+    else:
+        combined["_ts"] = None
+
+    return combined
+
+
+# ---------------------------------------------------------------------------
+# Evidence detection
+# ---------------------------------------------------------------------------
+
+def _detect_events_for_node(
+    node: Dict,
+    df: pd.DataFrame,
+    compiled_patterns: List[re.Pattern],
+    compiled_exclusions: List[re.Pattern],
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Match a single node's patterns against a (windowed) DataFrame."""
+    dc = node.get("detection_config") or {}
+    source_domains = set(dc.get("source_domains", []))
+
+    evidence = {"count": 0, "sample_lines": [], "timestamps": []}
+
+    if df.empty or not compiled_patterns:
+        return evidence
+
+    mask = pd.Series(True, index=df.index)
+    if source_domains:
+        mask &= df["_domain"].isin(source_domains)
+    if window_start is not None and "_ts" in df.columns:
+        mask &= df["_ts"].notna() & (df["_ts"] >= window_start)
+    if window_end is not None and "_ts" in df.columns:
+        mask &= df["_ts"].notna() & (df["_ts"] <= window_end)
+
+    subset = df[mask]
+    if subset.empty:
+        return evidence
+
+    for _, row in subset.iterrows():
+        text = str(row.get("loglines", ""))
+        if not text:
+            continue
+
+        if compiled_exclusions and any(ex.search(text) for ex in compiled_exclusions):
+            continue
+
+        for pat in compiled_patterns:
+            if pat.search(text):
+                evidence["count"] += 1
+                ts = row.get("_ts")
+                if ts:
+                    evidence["timestamps"].append(ts.isoformat())
+                if len(evidence["sample_lines"]) < 5:
+                    evidence["sample_lines"].append(text[:400])
+                break
+
+    return evidence
+
+
+# ---------------------------------------------------------------------------
+# Graph evaluation (edge condition checking + activation propagation)
+# ---------------------------------------------------------------------------
+
+def _evaluate_graph(
+    G,
+    node_evidence: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Walk the graph and activate edges whose conditions are met.
+
+    Returns:
+        activated_edges: list of edge dicts that fired
+        activated_issues: dict of issue/root_cause node_id -> activation info
+        causal_chains: list of paths from EVENT -> ISSUE/ROOT_CAUSE
+    """
+    activated_edges = []
+    activated_nodes = {}
+
+    for src_id, tgt_id, edata in G.edges(data=True):
+        src_ev = node_evidence.get(src_id, {})
+        count = src_ev.get("count", 0)
+        conditions = edata.get("conditions", {})
+        min_count = conditions.get("source_min_count", 0)
+        confidence = conditions.get("confidence", 0.5)
+
+        if count >= min_count and count > 0:
+            activated_edges.append({
+                "edge_id": edata.get("edge_id"),
+                "source": src_id,
+                "target": tgt_id,
+                "relationship_type": edata.get("relationship_type"),
+                "confidence": confidence,
+                "source_count": count,
+                "label": edata.get("label"),
+            })
+
+            tgt_node = G.nodes.get(tgt_id, {})
+            tgt_type = tgt_node.get("node_type", "")
+            if tgt_type in ("ISSUE", "ROOT_CAUSE"):
+                if tgt_id not in activated_nodes:
+                    activated_nodes[tgt_id] = {
+                        "name": tgt_node.get("name"),
+                        "label": tgt_node.get("label"),
+                        "node_type": tgt_type,
+                        "contributing_events": [],
+                        "max_confidence": 0,
+                        "total_evidence_count": 0,
+                    }
+                info = activated_nodes[tgt_id]
+                info["contributing_events"].append({
+                    "node_id": src_id,
+                    "name": G.nodes[src_id].get("name"),
+                    "count": count,
+                    "confidence": confidence,
+                })
+                info["max_confidence"] = max(info["max_confidence"], confidence)
+                info["total_evidence_count"] += count
+
+    causal_chains = []
+    event_ids = [
+        nid for nid, ndata in G.nodes(data=True)
+        if ndata.get("node_type") == "EVENT"
+        and node_evidence.get(nid, {}).get("count", 0) > 0
+    ]
+    issue_ids = [
+        nid for nid, ndata in G.nodes(data=True)
+        if ndata.get("node_type") in ("ISSUE", "ROOT_CAUSE")
+    ]
+
+    for eid in event_ids:
+        for iid in issue_ids:
+            if iid in activated_nodes:
+                try:
+                    for path in nx.all_simple_paths(G, eid, iid, cutoff=5):
+                        chain_active = True
+                        for i in range(len(path) - 1):
+                            edge_data = G.edges[path[i], path[i + 1]]
+                            conds = edge_data.get("conditions", {})
+                            needed = conds.get("source_min_count", 0)
+                            have = node_evidence.get(path[i], {}).get("count", 0)
+                            if have < needed:
+                                chain_active = False
+                                break
+                        if chain_active:
+                            causal_chains.append({
+                                "path": [G.nodes[n].get("name") for n in path],
+                                "path_ids": path,
+                                "length": len(path),
+                            })
+                except nx.NetworkXNoPath:
+                    pass
+
+    return {
+        "activated_edges": activated_edges,
+        "activated_issues": activated_nodes,
+        "causal_chains": causal_chains,
+    }
+
+
+def _determine_likely_trigger(
+    node_evidence: Dict[str, Dict[str, Any]],
+    graph_eval: Dict[str, Any],
+    G,
+) -> Tuple[str, str]:
+    """Determine the most likely reboot trigger using graph-based scoring."""
+    issues = graph_eval.get("activated_issues", {})
+    if not issues:
+        max_node = None
+        max_count = 0
+        for nid, ev in node_evidence.items():
+            if ev.get("count", 0) > max_count:
+                max_count = ev["count"]
+                max_node = nid
+        if max_node:
+            name = G.nodes[max_node].get("name", max_node)
+            return name, f"Highest activity: {name}"
+        return "unknown", "No significant events detected in reboot window"
+
+    best_id = max(issues, key=lambda k: (
+        issues[k]["max_confidence"],
+        issues[k]["total_evidence_count"],
+    ))
+    best = issues[best_id]
+    top_contributor = max(
+        best["contributing_events"],
+        key=lambda c: c["confidence"] * c["count"],
+    )
+    return top_contributor["name"], f"{best['label']} (via {top_contributor['name']})"
+
+
+# ---------------------------------------------------------------------------
+# Device identity
+# ---------------------------------------------------------------------------
+
+def _get_device_identity(
+    cpe_dir: Path,
+    serial: str,
+    telemetry_reports: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    identity: Dict[str, Any] = {"cpe_serial": serial}
+    try:
+        version_info = find_and_parse_version_txt(cpe_dir)
+        if version_info:
+            fw_list = version_info.get("firmware_versions", [])
+            if fw_list:
+                identity["firmware"] = fw_list[-1].get("image_name", "")
+            identity["model"] = version_info.get("machine_name", "")
+    except Exception:
+        pass
+    try:
+        fallback = find_and_build_fallback_device_info(cpe_dir)
+        if fallback:
+            identity.setdefault("mac", fallback.get("mac", ""))
+            if not identity.get("model"):
+                identity["model"] = fallback.get("model", "")
+            if not identity.get("firmware"):
+                identity.setdefault("firmware", fallback.get("version", ""))
+    except Exception:
+        pass
+    if not identity.get("mac") and telemetry_reports:
+        for r in telemetry_reports:
+            mac = r.get("mac", "")
+            if mac:
+                identity["mac"] = mac.replace(":", "").lower()
+                break
+    return identity
+
+
+def _detect_uptime_resets(reports: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    if len(reports) < 2:
+        return []
+    resets = []
+    prev = reports[0]
+    for cur in reports[1:]:
+        prev_up = prev.get("uptime", 0) or 0
+        cur_up = cur.get("uptime", 0) or 0
+        if isinstance(prev_up, (int, float)) and isinstance(cur_up, (int, float)):
+            if cur_up < prev_up and prev_up > 300:
+                ts = cur.get("time")
+                ts_str = ts.isoformat() if ts else cur.get("log_timestamp", "")
+                resets.append({"timestamp": ts_str, "reason": "uptime_reset_detected"})
+        prev = cur
+    return resets
+
+
+# ---------------------------------------------------------------------------
+# Telemetry time-series extraction
+# ---------------------------------------------------------------------------
+
+def _extract_telemetry_timeseries(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    ts_data: Dict[str, List] = {
+        "timestamps": [],
+        "cpu": [], "memory_pct": [], "memory_free": [],
+        "temperature": [], "uptime": [], "connected_devices": [],
+    }
+    for iface, fields in _RXTX_FIELDS.items():
+        for metric in fields:
+            ts_data[f"{iface}_{metric}"] = []
+
+    for r in reports:
+        fields = r.get("fields", {})
+        ts = r.get("time")
+        ts_str = ts.isoformat() if ts else r.get("log_timestamp", "")
+        ts_data["timestamps"].append(ts_str)
+
+        cpu_raw = fields.get("Device.DeviceInfo.ProcessStatus.CPUUsage",
+                             fields.get("CPUUsage"))
+        ts_data["cpu"].append(_safe_int(cpu_raw))
+
+        mem_free = _safe_int(fields.get("Device.DeviceInfo.MemoryStatus.Free",
+                                        fields.get("MemInfoFree")))
+        mem_total = _safe_int(fields.get("Device.DeviceInfo.MemoryStatus.Total",
+                                         fields.get("MemInfoTotal")))
+        ts_data["memory_free"].append(mem_free)
+        if mem_free is not None and mem_total and mem_total > 0:
+            ts_data["memory_pct"].append(round((mem_total - mem_free) / mem_total * 100, 1))
+        else:
+            ts_data["memory_pct"].append(None)
+
+        ts_data["temperature"].append(_safe_float(fields.get("cpu_temp_split")))
+        ts_data["uptime"].append(r.get("uptime") or None)
+
+        cd = fields.get("Device.Hosts.X_CISCO_COM_ConnectedDeviceNumber",
+                        fields.get("hosts_connected_device_number"))
+        ts_data["connected_devices"].append(_safe_int(cd))
+
+        for iface, metrics in _RXTX_FIELDS.items():
+            for metric, key_aliases in metrics.items():
+                val = None
+                for alias in key_aliases:
+                    v = fields.get(alias)
+                    if v is not None:
+                        val = _safe_int(v)
+                        break
+                ts_data[f"{iface}_{metric}"].append(val)
+
+    # Delta rates for RX/TX
+    rate_data: Dict[str, List] = {}
+    for iface, metrics in _RXTX_FIELDS.items():
+        for metric in metrics:
+            series_key = f"{iface}_{metric}"
+            rate_key = f"{iface}_{metric}_rate"
+            values = ts_data[series_key]
+            timestamps = ts_data["timestamps"]
+            rates: List[Optional[float]] = [None]
+            for i in range(1, len(values)):
+                if values[i] is not None and values[i - 1] is not None:
+                    dt_prev = _parse_ts(timestamps[i - 1])
+                    dt_curr = _parse_ts(timestamps[i])
+                    if dt_prev and dt_curr:
+                        delta_sec = (dt_curr - dt_prev).total_seconds()
+                        if delta_sec > 0:
+                            delta_val = values[i] - values[i - 1]
+                            rates.append(round(delta_val / delta_sec, 1) if delta_val >= 0 else None)
+                        else:
+                            rates.append(None)
+                    else:
+                        rates.append(None)
+                else:
+                    rates.append(None)
+            rate_data[rate_key] = rates
+
+    ts_data.update(rate_data)
+
+    snapshot = {}
+    if reports:
+        last_fields = reports[-1].get("fields", {})
+        snapshot["gpon"] = _extract_snapshot(last_fields, [
+            "gpon_connectionStatus", "gpon_rxSignalLevel", "gpon_txSignalLevel",
+            "gpon_signalDegrade", "gpon_signalFail", "gpon_framesLost",
+            "gpon_downstreamSpeed", "gpon_upstreamSpeed",
+        ])
+        snapshot["wan"] = _extract_snapshot(last_fields, [
+            "wanoe_connectionStatus", "wanoe_lastConnError",
+            "wanoe_downstreamSpeed", "wanoe_upstreamSpeed",
+            "ppp_interface_1_status", "wan_access_mode_split",
+        ])
+        snapshot["wifi"] = _extract_snapshot(last_fields, [
+            "wifi_radio_1_channel", "wifi_radio_2_channel",
+            "wifi_radio_1_stats_noise", "wifi_radio_2_stats_noise",
+            "wifi_radio_1_transmitpower", "wifi_radio_2_transmitpower",
+            "wifi_radio_1_status", "wifi_radio_2_status",
+            "wifi_radio_1_operatingfrequencyband", "wifi_radio_2_operatingfrequencyband",
+        ])
+    ts_data["snapshot"] = snapshot
+    return ts_data
+
+
+def _extract_snapshot(fields: Dict, keys: List[str]) -> Dict[str, Any]:
+    return {k: fields[k] for k in keys if fields.get(k) is not None}
+
+
+# ---------------------------------------------------------------------------
+# Subgraph resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_subgraph_nodes(
+    graph_def: Dict[str, Any],
+    all_events: Dict[str, pd.DataFrame],
+    node_evidence: Dict[str, Dict[str, Any]],
+    evaluation_stack: Optional[set] = None,
+) -> None:
+    """Recursively evaluate SUBGRAPH nodes and populate *node_evidence*.
+
+    For each SUBGRAPH node whose referenced graph was resolved at load
+    time (``_resolved_subgraph``), run the full detection + evaluation
+    pipeline on the referenced graph using the *same* CPE log data.
+    The resulting activation is injected into *node_evidence* so the
+    parent graph's edge evaluation sees the SUBGRAPH node as if it were
+    a regular EVENT node.
+    """
+    if evaluation_stack is None:
+        evaluation_stack = set()
+    parent_id = graph_def.get("id", "")
+    evaluation_stack = evaluation_stack | {parent_id}
+
+    for node in graph_def["nodes"]:
+        if node["node_type"] != "SUBGRAPH":
+            continue
+        cfg = node.get("detection_config") or {}
+        ref_id = cfg.get("referenced_graph_id")
+        if not ref_id or ref_id in evaluation_stack:
+            continue
+        sub_def = node.get("_resolved_subgraph")
+        if not sub_def:
+            continue
+
+        sub_event_nodes = [n for n in sub_def["nodes"] if n["node_type"] == "EVENT"]
+        sub_compiled: Dict[str, Tuple[List[re.Pattern], List[re.Pattern]]] = {}
+        for sn in sub_event_nodes:
+            sub_compiled[sn["id"]] = _compile_node_patterns(sn)
+
+        sub_evidence: Dict[str, Dict[str, Any]] = {}
+        for sn in sub_event_nodes:
+            pats, excl = sub_compiled[sn["id"]]
+            sub_evidence[sn["id"]] = _detect_events_for_node(sn, all_events, pats, excl)
+
+        _resolve_subgraph_nodes(sub_def, all_events, sub_evidence, evaluation_stack)
+
+        sub_G = build_networkx_graph(sub_def)
+        sub_result = _evaluate_graph(sub_G, sub_evidence)
+
+        activated = sub_result.get("activated_issues") or {}
+        activation_mode = cfg.get("activation_mode", "any_issue")
+
+        if activation_mode == "all_issues":
+            issue_ids = [
+                nid for nid, ndata in sub_G.nodes(data=True)
+                if ndata.get("node_type") in ("ISSUE", "ROOT_CAUSE")
+            ]
+            all_fired = issue_ids and all(i in activated for i in issue_ids)
+            if not all_fired:
+                activated = {}
+
+        if activated:
+            total_count = sum(
+                a.get("total_evidence_count", 0) for a in activated.values()
+            )
+            max_conf = max(
+                a.get("max_confidence", 0) for a in activated.values()
+            )
+            sample_lines: List[str] = []
+            for a in activated.values():
+                for ce in a.get("contributing_events", []):
+                    sample_lines.append(
+                        f"[subgraph:{sub_def['name']}] {ce.get('name','')}: "
+                        f"count={ce.get('count',0)}"
+                    )
+            node_evidence[node["id"]] = {
+                "count": total_count,
+                "confidence": max_conf,
+                "sample_lines": sample_lines[:10],
+                "timestamps": [],
+                "subgraph_name": sub_def.get("name", ""),
+                "subgraph_result": sub_result,
+            }
+
+
+# ---------------------------------------------------------------------------
+# Per-CPE analysis
+# ---------------------------------------------------------------------------
+
+def analyze_cpe(
+    cpe_dir: Path,
+    serial: str,
+    graph_def: Dict[str, Any],
+    project_id: str = "",
+    job_id: str = "",
+) -> Dict[str, Any]:
+    """
+    Graph-driven per-CPE analysis.
+
+    Detects events from parquet data, evaluates causal edges from the
+    knowledge graph, and produces a result structure for the
+    IssueAnalysisPage frontend.
+    """
+    t0 = time.time()
+
+    G = build_networkx_graph(graph_def)
+
+    # Pre-compile patterns for every EVENT node
+    event_nodes = [n for n in graph_def["nodes"] if n["node_type"] == "EVENT"]
+    compiled_map: Dict[str, Tuple[List[re.Pattern], List[re.Pattern]]] = {}
+    for n in event_nodes:
+        compiled_map[n["id"]] = _compile_node_patterns(n)
+
+    # Telemetry
+    t2_path = cpe_dir / "telemetry2_0.txt"
+    dcm_path = cpe_dir / "dcmscript.log"
+    tel_reports, _, _, tel_source = parse_telemetry_file(t2_path, dcmscript_path=dcm_path)
+
+    # Identity
+    identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports)
+    identity["project_id"] = project_id
+    identity["job_id"] = job_id
+
+    # Reboot events
+    reboots = find_and_extract_reboots(cpe_dir)
+    uptime_reboots = _detect_uptime_resets(tel_reports)
+    existing_ts = {r["timestamp"][:16] for r in reboots}
+    for ur in uptime_reboots:
+        if ur["timestamp"][:16] not in existing_ts:
+            reboots.append({"timestamp": ur["timestamp"], "reason": ur["reason"]})
+    reboots.sort(key=lambda r: r.get("timestamp", ""))
+
+    # Load all parquet events
+    all_events = _load_all_parquet_events(cpe_dir)
+
+    # -- Global evidence (across all time) --
+    global_evidence: Dict[str, Dict[str, Any]] = {}
+    for n in event_nodes:
+        pats, excl = compiled_map[n["id"]]
+        global_evidence[n["id"]] = _detect_events_for_node(
+            n, all_events, pats, excl,
+        )
+
+    # Resolve SUBGRAPH nodes (recursive evaluation of referenced graphs)
+    _resolve_subgraph_nodes(graph_def, all_events, global_evidence)
+
+    # Global graph evaluation
+    global_graph_eval = _evaluate_graph(G, global_evidence)
+
+    # -- Per-reboot windowed analysis --
+    reboot_analyses = []
+    for rb in reboots:
+        rb_ts = _parse_ts(rb.get("timestamp", ""))
+        if not rb_ts:
+            reboot_analyses.append({
+                "timestamp": rb.get("timestamp", ""),
+                "reason": rb.get("reason", ""),
+                "window_events": {},
+                "likely_trigger": "unknown",
+                "trigger_description": "Could not parse reboot timestamp",
+                "total_events_in_window": 0,
+            })
+            continue
+
+        win_start = rb_ts - timedelta(minutes=REBOOT_WINDOW_BEFORE_MIN)
+        win_end = rb_ts + timedelta(minutes=REBOOT_WINDOW_AFTER_MIN)
+
+        window_evidence: Dict[str, Dict[str, Any]] = {}
+        for n in event_nodes:
+            pats, excl = compiled_map[n["id"]]
+            window_evidence[n["id"]] = _detect_events_for_node(
+                n, all_events, pats, excl, win_start, win_end,
+            )
+
+        _resolve_subgraph_nodes(graph_def, all_events, window_evidence)
+
+        # Convert to name-keyed dict for backward compat with frontend
+        window_events: Dict[str, Dict[str, Any]] = {}
+        for n in event_nodes:
+            ev = window_evidence[n["id"]]
+            window_events[n["name"]] = {
+                "count": ev["count"],
+                "sample_lines": ev["sample_lines"],
+                "timestamps": ev["timestamps"],
+            }
+        for n in graph_def["nodes"]:
+            if n["node_type"] == "SUBGRAPH" and n["id"] in window_evidence:
+                ev = window_evidence[n["id"]]
+                window_events[n["name"]] = {
+                    "count": ev["count"],
+                    "sample_lines": ev.get("sample_lines", []),
+                    "timestamps": ev.get("timestamps", []),
+                }
+
+        window_graph_eval = _evaluate_graph(G, window_evidence)
+        trigger, trigger_desc = _determine_likely_trigger(
+            window_evidence, window_graph_eval, G,
+        )
+
+        reboot_analyses.append({
+            "timestamp": rb.get("timestamp", ""),
+            "reason": rb.get("reason", ""),
+            "window": {"start": win_start.isoformat(), "end": win_end.isoformat()},
+            "window_events": window_events,
+            "likely_trigger": trigger,
+            "trigger_description": trigger_desc,
+            "total_events_in_window": sum(
+                ev.get("count", 0) for ev in window_events.values()
+            ),
+        })
+
+    # Telemetry time-series
+    telemetry_ts = _extract_telemetry_timeseries(tel_reports) if tel_reports else {}
+
+    # Memory summary
+    mem_pcts = [v for v in telemetry_ts.get("memory_pct", []) if v is not None]
+    memory_summary = {}
+    if mem_pcts:
+        memory_summary = {
+            "avg_pct": round(sum(mem_pcts) / len(mem_pcts), 1),
+            "peak_pct": round(max(mem_pcts), 1),
+            "min_pct": round(min(mem_pcts), 1),
+            "samples": len(mem_pcts),
+        }
+
+    # Aggregate issues
+    aggregate_issues: Dict[str, int] = defaultdict(int)
+    for ra in reboot_analyses:
+        for cat, ev in ra.get("window_events", {}).items():
+            aggregate_issues[cat] += ev.get("count", 0)
+
+    # Causal chains from global analysis
+    chains = global_graph_eval.get("causal_chains", [])
+    activated_issues = global_graph_eval.get("activated_issues", {})
+
+    # Root cause ranking
+    root_causes = []
+    for nid, info in activated_issues.items():
+        score = info["max_confidence"] * min(info["total_evidence_count"], 100) / 100
+        root_causes.append({
+            "node_id": nid,
+            "name": info["name"],
+            "label": info["label"],
+            "node_type": info["node_type"],
+            "confidence": info["max_confidence"],
+            "evidence_count": info["total_evidence_count"],
+            "score": round(score, 3),
+            "contributing_events": info["contributing_events"],
+        })
+    root_causes.sort(key=lambda x: x["score"], reverse=True)
+
+    elapsed_ms = round((time.time() - t0) * 1000)
+
+    return {
+        "identity": identity,
+        "telemetry_source": tel_source,
+        "total_reboots": len(reboots),
+        "reboots": reboot_analyses,
+        "telemetry_timeseries": telemetry_ts,
+        "memory_summary": memory_summary,
+        "aggregate_issues": dict(aggregate_issues),
+        "causal_chains": chains,
+        "root_causes": root_causes,
+        "graph_name": graph_def.get("name", ""),
+        "analysis_elapsed_ms": elapsed_ms,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fleet aggregate
+# ---------------------------------------------------------------------------
+
+def build_fleet_report(
+    per_cpe_records: List[Dict[str, Any]],
+    graph_def: Dict[str, Any],
+    project_id: str = "",
+    job_id: str = "",
+) -> Dict[str, Any]:
+    total_cpes = len(per_cpe_records)
+    if total_cpes == 0:
+        return {"error": "No CPE records", "total_cpes": 0}
+
+    models: Counter = Counter()
+    firmwares: Counter = Counter()
+    total_reboots = 0
+    cpes_with_reboots = 0
+    trigger_dist: Counter = Counter()
+    telemetry_sources: Counter = Counter()
+    category_cpe_counts: Dict[str, int] = defaultdict(int)
+    category_event_counts: Dict[str, int] = defaultdict(int)
+    worst_wifi: List[Dict] = []
+    worst_wan: List[Dict] = []
+    worst_memory: List[Dict] = []
+    root_cause_dist: Counter = Counter()
+
+    wifi_cats = {"wifi_disconnect_storm", "btm_steering", "dfs_channel_switch", "wifi_driver_errors"}
+    wan_cats = {"wan_disconnections"}
+
+    for rec in per_cpe_records:
+        ident = rec.get("identity", {})
+        serial = ident.get("cpe_serial", "")
+        model = ident.get("model", "unknown") or "unknown"
+        fw = ident.get("firmware", "unknown") or "unknown"
+        models[model] += 1
+        firmwares[fw] += 1
+        telemetry_sources[rec.get("telemetry_source", "unknown")] += 1
+
+        n_reboots = rec.get("total_reboots", 0)
+        total_reboots += n_reboots
+        if n_reboots > 0:
+            cpes_with_reboots += 1
+
+        for ra in rec.get("reboots", []):
+            trigger_dist[ra.get("likely_trigger", "unknown")] += 1
+
+        agg = rec.get("aggregate_issues", {})
+        for cat, count in agg.items():
+            if count > 0:
+                category_cpe_counts[cat] += 1
+                category_event_counts[cat] += count
+
+        wifi_total = sum(agg.get(c, 0) for c in wifi_cats)
+        if wifi_total > 0:
+            worst_wifi.append({"serial": serial, "total_events": wifi_total})
+
+        wan_total = sum(agg.get(c, 0) for c in wan_cats)
+        if wan_total > 0:
+            worst_wan.append({"serial": serial, "total_events": wan_total})
+
+        mem = rec.get("memory_summary", {})
+        if mem.get("peak_pct", 0) > 85:
+            worst_memory.append({
+                "serial": serial,
+                "avg_pct": mem.get("avg_pct"),
+                "peak_pct": mem.get("peak_pct"),
+            })
+
+        for rc in rec.get("root_causes", []):
+            root_cause_dist[rc["name"]] += 1
+
+    worst_wifi.sort(key=lambda x: x["total_events"], reverse=True)
+    worst_wan.sort(key=lambda x: x["total_events"], reverse=True)
+    worst_memory.sort(key=lambda x: x.get("peak_pct", 0), reverse=True)
+
+    pct = lambda n: round(n / total_cpes * 100, 1) if total_cpes else 0
+
+    event_nodes = [
+        n for n in graph_def.get("nodes", [])
+        if n["node_type"] in ("EVENT", "SUBGRAPH")
+    ]
+
+    return {
+        "project_id": project_id,
+        "job_id": job_id,
+        "graph_name": graph_def.get("name", ""),
+        "generated_at": datetime.utcnow().isoformat(),
+        "total_cpes": total_cpes,
+        "hardware_breakdown": dict(models),
+        "firmware_breakdown": dict(firmwares),
+        "reboot_overview": {
+            "total_reboots": total_reboots,
+            "cpes_with_reboots": cpes_with_reboots,
+            "pct_with_reboots": pct(cpes_with_reboots),
+            "avg_reboots_per_cpe": round(total_reboots / max(cpes_with_reboots, 1), 1),
+        },
+        "trigger_distribution": dict(trigger_dist.most_common()),
+        "issue_categories": {
+            n["name"]: {
+                "cpes_affected": category_cpe_counts.get(n["name"], 0),
+                "pct_affected": pct(category_cpe_counts.get(n["name"], 0)),
+                "total_events": category_event_counts.get(n["name"], 0),
+            }
+            for n in event_nodes
+        },
+        "problem_areas": {
+            "wifi": {
+                "cpes_affected": len(worst_wifi),
+                "pct_affected": pct(len(worst_wifi)),
+                "worst_case": worst_wifi[:5],
+            },
+            "wan": {
+                "cpes_affected": len(worst_wan),
+                "pct_affected": pct(len(worst_wan)),
+                "worst_case": worst_wan[:5],
+            },
+            "memory": {
+                "cpes_above_85pct": len(worst_memory),
+                "pct_above_85pct": pct(len(worst_memory)),
+                "worst_case": worst_memory[:5],
+            },
+        },
+        "root_cause_distribution": dict(root_cause_dist.most_common()),
+        "telemetry_source_distribution": dict(telemetry_sources),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
+def generate_batch_analysis(
+    project_dir: Path,
+    project_id: str,
+    job_id: str,
+    graph_id: str = "",
+    graph_def: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Generate analysis for a batch job using the specified knowledge graph.
+
+    Accepts either a pre-loaded ``graph_def`` dict (preferred when called
+    from Celery where the caller already has an app context) or a
+    ``graph_id`` to load from the database (requires Flask app context).
+    """
+    t0 = time.time()
+    if graph_def is None:
+        graph_def = load_graph_definition(graph_id)
+
+    output_dir = project_dir / OUTPUT_DIR_NAME
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cpe_dirs = sorted([
+        d for d in project_dir.iterdir()
+        if d.is_dir()
+        and d.name not in (OUTPUT_DIR_NAME, "llm_reboot_summary")
+        and not d.name.startswith(".")
+    ])
+
+    per_cpe_records = []
+    for cpe_dir in cpe_dirs:
+        serial = cpe_dir.name
+        if not any(cpe_dir.glob("*_rg.parquet")):
+            continue
+
+        try:
+            record = analyze_cpe(
+                cpe_dir, serial, graph_def, project_id, job_id,
+            )
+            per_cpe_records.append(record)
+            logger.info(
+                f"[GraphAnalyzer] {serial}: "
+                f"{record['total_reboots']} reboots, "
+                f"source={record['telemetry_source']}, "
+                f"{record['analysis_elapsed_ms']}ms"
+            )
+        except Exception as exc:
+            logger.error(f"[GraphAnalyzer] Error analyzing {serial}: {exc}", exc_info=True)
+
+    per_cpe_path = output_dir / PER_CPE_FILE
+    with open(per_cpe_path, "w") as f:
+        json.dump(per_cpe_records, f, default=str)
+
+    fleet = build_fleet_report(per_cpe_records, graph_def, project_id, job_id)
+    fleet_path = output_dir / FLEET_FILE
+    with open(fleet_path, "w") as f:
+        json.dump(fleet, f, indent=2, default=str)
+
+    elapsed = round(time.time() - t0, 1)
+    logger.info(
+        f"[GraphAnalyzer] Batch analysis complete: "
+        f"{len(per_cpe_records)} CPEs in {elapsed}s"
+    )
+
+    return {
+        "per_cpe_path": str(per_cpe_path),
+        "fleet_path": str(fleet_path),
+        "total_cpes": len(per_cpe_records),
+        "elapsed_sec": elapsed,
+        "graph_name": graph_def.get("name", ""),
+    }
+
+
+def load_analysis_outputs(project_dir: Path) -> Dict[str, Any]:
+    """Load previously generated analysis files."""
+    output_dir = project_dir / OUTPUT_DIR_NAME
+    result: Dict[str, Any] = {"available": False}
+
+    fleet_path = output_dir / FLEET_FILE
+    per_cpe_path = output_dir / PER_CPE_FILE
+
+    if fleet_path.exists():
+        with open(fleet_path) as f:
+            result["fleet_report"] = json.load(f)
+        result["available"] = True
+
+    if per_cpe_path.exists():
+        with open(per_cpe_path) as f:
+            per_cpe_list = json.load(f)
+        result["per_cpe_count"] = len(per_cpe_list)
+        result["per_cpe_serials"] = [
+            r.get("identity", {}).get("cpe_serial", "")
+            for r in per_cpe_list
+        ]
+
+    return result
+
+
+def load_cpe_analysis(project_dir: Path, cpe_serial: str) -> Optional[Dict[str, Any]]:
+    """Load a single CPE's analysis data."""
+    per_cpe_path = project_dir / OUTPUT_DIR_NAME / PER_CPE_FILE
+    if not per_cpe_path.exists():
+        return None
+
+    with open(per_cpe_path) as f:
+        records = json.load(f)
+
+    for rec in records:
+        if rec.get("identity", {}).get("cpe_serial", "") == cpe_serial:
+            return rec
+    return None

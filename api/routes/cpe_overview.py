@@ -100,7 +100,7 @@ def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
             )
 
             primary = telemetry_file or dcmscript_file
-            reports, merged, summary = parse_telemetry_file(
+            reports, merged, summary, _src = parse_telemetry_file(
                 primary, dcmscript_path=dcmscript_file,
             )
 

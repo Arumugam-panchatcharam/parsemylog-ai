@@ -919,7 +919,7 @@ def extract_configured_fields(
 def parse_telemetry_file(
     file_path: Path,
     dcmscript_path: Optional[Path] = None,
-) -> Tuple[List[Dict], Dict, Dict]:
+) -> Tuple[List[Dict], Dict, Dict, str]:
     """
     Convenience function: parse a telemetry file end-to-end.
 
@@ -935,25 +935,29 @@ def parse_telemetry_file(
             when T2 is disabled or yields no parsable reports.
 
     Returns:
-        Tuple of (reports, merged, summary).
+        Tuple of (reports, merged, summary, source) where *source* is one
+        of ``"telemetry2_0"``, ``"legacy"``, ``"dcmscript"``, or ``"none"``.
     """
     reports: List[Dict[str, Any]] = []
+    source = "none"
 
     if file_path.exists():
         content = file_path.read_text(encoding="utf-8", errors="replace")
 
-        # Try T2 format first
         reports = parse_telemetry_reports(content)
+        if reports:
+            source = "telemetry2_0"
 
-        # Fallback to legacy parser if no reports found
         if not reports:
             reports = parse_telemetry_legacy(content)
+            if reports:
+                source = "legacy"
 
-    # Final fallback: parse dcmscript.log CURL_CMD payloads
     if not reports and dcmscript_path and dcmscript_path.exists():
         dcm_content = dcmscript_path.read_text(encoding="utf-8", errors="replace")
         reports = parse_dcmscript_curl_reports(dcm_content)
         if reports:
+            source = "dcmscript"
             logger.info(
                 f"[TelemetryParser] Using dcmscript fallback: "
                 f"{len(reports)} reports from {dcmscript_path.name}"
@@ -962,13 +966,12 @@ def parse_telemetry_file(
     merged = merge_telemetry_reports(reports)
     summary = extract_telemetry_summary(reports)
 
-    source = file_path.name if reports else "none"
     logger.info(
-        f"[TelemetryParser] Parsed {source}: "
+        f"[TelemetryParser] Parsed source={source}: "
         f"{summary.get('parsed', 0)}/{summary.get('total', 0)} reports OK"
     )
 
-    return reports, merged, summary
+    return reports, merged, summary, source
 
 
 # ---------------------------------------------------------------------------

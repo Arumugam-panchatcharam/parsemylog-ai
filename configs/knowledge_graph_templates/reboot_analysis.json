@@ -1,0 +1,390 @@
+{
+  "name": "Reboot Root-Cause Analysis",
+  "description": "Detects common causes of CPE reboots: WiFi storms, WAN failures, memory crises, kernel panics, and cascading failures. Derived from the built-in reboot_analyzer issue categories.",
+  "is_template": true,
+  "nodes": [
+    {
+      "id": "evt_wifi_disconnect_storm",
+      "node_type": "EVENT",
+      "name": "wifi_disconnect_storm",
+      "label": "WiFi Disconnect Storm",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "\\bdisassoc",
+          "\\bdeauth",
+          "disconnected\\s+event",
+          "STA\\s+(left|removed|kicked|rejected)",
+          "wifi_hal_cb_assoc_dev_evt_handler",
+          "invoke\\s+disassoc\\s+callback"
+        ],
+        "source_domains": ["wireless"]
+      },
+      "description": "High rate of WiFi client disconnections (disassoc/deauth events)",
+      "position_x": 0,
+      "position_y": 0
+    },
+    {
+      "id": "evt_btm_steering",
+      "node_type": "EVENT",
+      "name": "btm_steering",
+      "label": "BTM Steering",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "\\bBTM\\b",
+          "BSS\\s+transition",
+          "\\b11v\\b",
+          "steer(ing)?\\s+(fail|reject|timeout|abort)",
+          "band\\s*steering"
+        ],
+        "source_domains": ["wireless", "mesh"]
+      },
+      "description": "802.11v BSS Transition Management steering events",
+      "position_x": 200,
+      "position_y": 0
+    },
+    {
+      "id": "evt_dfs_channel_switch",
+      "node_type": "EVENT",
+      "name": "dfs_channel_switch",
+      "label": "DFS Channel Switch",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "\\bDFS\\b",
+          "\\bradar\\b",
+          "\\bCAC\\b",
+          "channel\\s+(switch|change|dfs)"
+        ],
+        "source_domains": ["wireless"]
+      },
+      "description": "DFS radar detection and channel switch / CAC events",
+      "position_x": 400,
+      "position_y": 0
+    },
+    {
+      "id": "evt_wifi_driver_errors",
+      "node_type": "EVENT",
+      "name": "wifi_driver_errors",
+      "label": "WiFi Driver Errors",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "dhd_prot_ioctl",
+          "STA\\s+INFO\\s+failed",
+          "driver\\s+(crash|recovery|reset|stuck|hang)",
+          "radio\\s+(reset|restart|down|fail)",
+          "VAP\\s+(down|fail|destroy)"
+        ],
+        "source_domains": ["wireless", "platform", "common"]
+      },
+      "description": "WiFi driver crashes, radio resets, and VAP failures",
+      "position_x": 0,
+      "position_y": 200
+    },
+    {
+      "id": "evt_wan_disconnections",
+      "node_type": "EVENT",
+      "name": "wan_disconnections",
+      "label": "WAN Disconnections",
+      "domain": "core_router",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "PPP.*(down|fail|terminated)",
+          "DSL\\s*(retrain|sync.?loss|down|drop)",
+          "GPON\\s*(deactivat|alarm|down)",
+          "WAN\\s*(down|lost|disconnect|fail|flap)",
+          "IPv[46]\\s*(unreachable|lost|timeout)",
+          "CONNECTION_LOST",
+          "PppMgr_Process.*Failed",
+          "pppmanager.*error"
+        ],
+        "source_domains": ["core_router"]
+      },
+      "description": "WAN/PPP/GPON/DSL link failures and disconnections",
+      "position_x": 200,
+      "position_y": 200
+    },
+    {
+      "id": "evt_memory_issues",
+      "node_type": "EVENT",
+      "name": "memory_issues",
+      "label": "Memory Crisis",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Out\\s+of\\s+memory",
+          "\\bOOM\\b",
+          "memory\\s*(leak|exhausted|low|pressure)",
+          "Mem\\s*critical"
+        ],
+        "source_domains": ["platform", "common"]
+      },
+      "description": "Out-of-memory, OOM killer, and memory pressure events",
+      "position_x": 400,
+      "position_y": 200
+    },
+    {
+      "id": "evt_kernel_crash",
+      "node_type": "EVENT",
+      "name": "kernel_crash",
+      "label": "Kernel Crash",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "kernel\\s+panic",
+          "\\boops\\b",
+          "\\bBUG\\b",
+          "Segmentation\\s+fault",
+          "unexpected\\s+fatal\\s+signal",
+          "\\bwatchdog\\b",
+          "hung_task",
+          "soft\\s+lockup",
+          "core\\s+dump"
+        ],
+        "source_domains": ["platform", "common"]
+      },
+      "description": "Kernel panics, oops, watchdog timeouts, and lockups",
+      "position_x": 600,
+      "position_y": 200
+    },
+    {
+      "id": "evt_selfheal_actions",
+      "node_type": "EVENT",
+      "name": "selfheal_actions",
+      "label": "SelfHeal Actions",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "\\bselfheal\\b",
+          "self_heal"
+        ],
+        "source_domains": ["platform", "common"]
+      },
+      "description": "SelfHeal daemon triggered restarts or reboots",
+      "position_x": 0,
+      "position_y": 400
+    },
+    {
+      "id": "evt_ccsp_process_crash",
+      "node_type": "EVENT",
+      "name": "ccsp_process_crash",
+      "label": "CCSP Process Crash",
+      "domain": "core_router",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "CCSP_ERR",
+          "CCSP_CRASH",
+          "CcspCcMbi_GetParameterValues.*Failure\\s+status",
+          "SSP\\s+(restart|crash|exit)",
+          "(process|daemon|service)\\s+(crash|exit|killed|died|terminated)"
+        ],
+        "exclusions": [
+          "getDHCPv4ServerPoolParametersFromPSM"
+        ],
+        "source_domains": ["core_router", "platform", "common"]
+      },
+      "description": "CCSP component crashes and SSP process restarts",
+      "position_x": 200,
+      "position_y": 400
+    },
+    {
+      "id": "issue_frequent_reboots",
+      "node_type": "ISSUE",
+      "name": "frequent_reboots",
+      "label": "Frequent Reboots",
+      "domain": null,
+      "detection_config": null,
+      "description": "CPE is experiencing frequent unexpected reboots",
+      "position_x": 400,
+      "position_y": 500
+    },
+    {
+      "id": "rc_wifi_cascade",
+      "node_type": "ROOT_CAUSE",
+      "name": "wifi_cascade_failure",
+      "label": "WiFi Cascade Failure",
+      "domain": "wireless",
+      "detection_config": null,
+      "description": "WiFi driver errors cascade into disconnect storms, WAN loss, and eventual kernel crash",
+      "position_x": 600,
+      "position_y": 400
+    },
+    {
+      "id": "rc_memory_cascade",
+      "node_type": "ROOT_CAUSE",
+      "name": "memory_cascade_failure",
+      "label": "Memory Cascade Failure",
+      "domain": "platform",
+      "detection_config": null,
+      "description": "Memory exhaustion leads to kernel crash / OOM-triggered reboot",
+      "position_x": 600,
+      "position_y": 500
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_wifi_storm_reboot",
+      "source_node_id": "evt_wifi_disconnect_storm",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 10, "time_window_minutes": 60, "confidence": 0.7 },
+      "label": "count >= 10",
+      "description": "Sustained WiFi disconnect storms can destabilize the system and trigger reboots"
+    },
+    {
+      "id": "e_btm_reboot",
+      "source_node_id": "evt_btm_steering",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 20, "time_window_minutes": 60, "confidence": 0.4 },
+      "label": "count >= 20",
+      "description": "Excessive BTM steering may indicate underlying connectivity issues"
+    },
+    {
+      "id": "e_dfs_reboot",
+      "source_node_id": "evt_dfs_channel_switch",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 5, "time_window_minutes": 60, "confidence": 0.5 },
+      "label": "count >= 5",
+      "description": "Frequent DFS channel switches may disrupt service and trigger cascading failures"
+    },
+    {
+      "id": "e_wifi_driver_reboot",
+      "source_node_id": "evt_wifi_driver_errors",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 1, "time_window_minutes": 60, "confidence": 0.85 },
+      "label": "count >= 1",
+      "description": "WiFi driver crashes are a strong indicator of reboot triggers"
+    },
+    {
+      "id": "e_wan_reboot",
+      "source_node_id": "evt_wan_disconnections",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 3, "time_window_minutes": 60, "confidence": 0.7 },
+      "label": "count >= 3",
+      "description": "WAN disconnections may trigger self-heal or indicate instability"
+    },
+    {
+      "id": "e_memory_reboot",
+      "source_node_id": "evt_memory_issues",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 1, "time_window_minutes": 60, "confidence": 0.9 },
+      "label": "count >= 1",
+      "description": "OOM events almost always precede a reboot"
+    },
+    {
+      "id": "e_kernel_reboot",
+      "source_node_id": "evt_kernel_crash",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 1, "time_window_minutes": 10, "confidence": 0.95 },
+      "label": "count >= 1",
+      "description": "Kernel panics / crashes directly cause reboots"
+    },
+    {
+      "id": "e_selfheal_reboot",
+      "source_node_id": "evt_selfheal_actions",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 1, "time_window_minutes": 10, "confidence": 0.8 },
+      "label": "count >= 1",
+      "description": "SelfHeal can trigger device reboots as a recovery mechanism"
+    },
+    {
+      "id": "e_ccsp_reboot",
+      "source_node_id": "evt_ccsp_process_crash",
+      "target_node_id": "issue_frequent_reboots",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": { "source_min_count": 2, "time_window_minutes": 60, "confidence": 0.6 },
+      "label": "count >= 2",
+      "description": "CCSP process crashes can trigger SSP restarts leading to reboots"
+    },
+    {
+      "id": "e_wifi_driver_to_storm",
+      "source_node_id": "evt_wifi_driver_errors",
+      "target_node_id": "evt_wifi_disconnect_storm",
+      "relationship_type": "LEADS_TO",
+      "conditions": { "source_min_count": 1, "confidence": 0.8 },
+      "label": "driver crash triggers disconnects",
+      "description": "WiFi driver crashes cause mass client disconnections"
+    },
+    {
+      "id": "e_storm_to_wan",
+      "source_node_id": "evt_wifi_disconnect_storm",
+      "target_node_id": "evt_wan_disconnections",
+      "relationship_type": "LEADS_TO",
+      "conditions": { "source_min_count": 20, "confidence": 0.5 },
+      "label": "storm may destabilize WAN",
+      "description": "Severe WiFi storms can cascade into WAN instability"
+    },
+    {
+      "id": "e_memory_to_kernel",
+      "source_node_id": "evt_memory_issues",
+      "target_node_id": "evt_kernel_crash",
+      "relationship_type": "LEADS_TO",
+      "conditions": { "source_min_count": 1, "confidence": 0.85 },
+      "label": "OOM triggers panic",
+      "description": "Memory exhaustion often leads to kernel panic / OOM killer"
+    },
+    {
+      "id": "e_wan_to_ccsp",
+      "source_node_id": "evt_wan_disconnections",
+      "target_node_id": "evt_ccsp_process_crash",
+      "relationship_type": "LEADS_TO",
+      "conditions": { "source_min_count": 3, "confidence": 0.5 },
+      "label": "WAN loss destabilizes CCSP",
+      "description": "WAN disconnections can cause CCSP bus failures"
+    },
+    {
+      "id": "e_dfs_to_storm",
+      "source_node_id": "evt_dfs_channel_switch",
+      "target_node_id": "evt_wifi_disconnect_storm",
+      "relationship_type": "LEADS_TO",
+      "conditions": { "source_min_count": 1, "confidence": 0.7 },
+      "label": "channel switch disconnects clients",
+      "description": "DFS channel switches force client disconnections"
+    },
+    {
+      "id": "e_btm_to_storm",
+      "source_node_id": "evt_btm_steering",
+      "target_node_id": "evt_wifi_disconnect_storm",
+      "relationship_type": "LEADS_TO",
+      "conditions": { "source_min_count": 10, "confidence": 0.5 },
+      "label": "aggressive steering causes disconnects",
+      "description": "Aggressive BTM steering can trigger disconnect storms"
+    },
+    {
+      "id": "e_wifi_driver_rc",
+      "source_node_id": "evt_wifi_driver_errors",
+      "target_node_id": "rc_wifi_cascade",
+      "relationship_type": "INDICATES",
+      "conditions": { "source_min_count": 1, "confidence": 0.8 },
+      "label": "root cause indicator",
+      "description": "WiFi driver errors indicate the WiFi cascade root cause"
+    },
+    {
+      "id": "e_memory_rc",
+      "source_node_id": "evt_memory_issues",
+      "target_node_id": "rc_memory_cascade",
+      "relationship_type": "INDICATES",
+      "conditions": { "source_min_count": 1, "confidence": 0.85 },
+      "label": "root cause indicator",
+      "description": "Memory issues indicate the memory cascade root cause"
+    }
+  ]
+}

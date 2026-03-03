@@ -151,6 +151,8 @@ def create_api_app():
     from api.routes.chat import chat_bp
     from api.routes.pcap import pcap_bp
     from api.routes.batch_jobs import batch_jobs_bp
+    from api.routes.knowledge_graph import knowledge_graph_bp
+    from api.routes.issue_analysis import issue_analysis_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
@@ -167,6 +169,8 @@ def create_api_app():
     app.register_blueprint(chat_bp, url_prefix="/api/projects")
     app.register_blueprint(pcap_bp, url_prefix="/api/pcap")
     app.register_blueprint(batch_jobs_bp, url_prefix="/api/projects")
+    app.register_blueprint(knowledge_graph_bp, url_prefix="/api/knowledge-graphs")
+    app.register_blueprint(issue_analysis_bp, url_prefix="/api/projects")
 
     # Health check
     @app.route("/api/health")

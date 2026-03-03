@@ -248,6 +248,95 @@ class CPEProcessRecord(db.Model):
     batch_job = db.relationship("BatchJob", back_populates="cpe_records")
 
 
+# --------------- Knowledge Graph Models ---------------
+
+class KnowledgeGraph(db.Model):
+    __tablename__ = "knowledge_graphs"
+
+    id = db.Column(db.String(36), primary_key=True)
+    name = db.Column(db.String(256), nullable=False)
+    natco_id = db.Column(db.Integer, db.ForeignKey("natcos.id", ondelete="SET NULL"), nullable=True)
+    description = db.Column(db.Text, nullable=True)
+    is_template = db.Column(db.Boolean, default=False)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    natco = db.relationship("Natco")
+    creator = db.relationship("User", foreign_keys=[created_by])
+    nodes = db.relationship(
+        "KnowledgeNode", back_populates="graph",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+    edges = db.relationship(
+        "KnowledgeEdge", back_populates="graph",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+
+class KnowledgeNode(db.Model):
+    """
+    Node types: EVENT (log pattern), CONDITION (derived threshold),
+    ISSUE (high-level problem), ROOT_CAUSE (identified cause),
+    SUBGRAPH (reference to another knowledge graph).
+
+    detection_config JSON:
+      method: "regex" | "keyword" | "threshold" | "telemetry" | "subgraph"
+      patterns: [str]          -- regex patterns for log matching
+      keywords: [str]          -- keyword patterns (compiled as regex)
+      source_domains: [str]    -- parquet domains to search
+      threshold: {metric, operator, value}
+      exclusions: [str]        -- regex exclusion patterns
+
+      For SUBGRAPH nodes:
+      referenced_graph_id: str -- UUID of the referenced knowledge graph
+      activation_mode: str     -- "any_issue" (default) or "all_issues"
+    """
+    __tablename__ = "knowledge_nodes"
+
+    id = db.Column(db.String(36), primary_key=True)
+    graph_id = db.Column(db.String(36), db.ForeignKey("knowledge_graphs.id", ondelete="CASCADE"), nullable=False)
+    node_type = db.Column(db.String(20), nullable=False)
+    name = db.Column(db.String(256), nullable=False)
+    label = db.Column(db.String(256), nullable=True)
+    domain = db.Column(db.String(64), nullable=True)
+    detection_config = db.Column(db.Text, nullable=True)
+    description = db.Column(db.Text, nullable=True)
+    position_x = db.Column(db.Float, default=0)
+    position_y = db.Column(db.Float, default=0)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    graph = db.relationship("KnowledgeGraph", back_populates="nodes")
+
+
+class KnowledgeEdge(db.Model):
+    """
+    Relationship types: COULD_CAUSE, LEADS_TO, INDICATES, CORRELATES_WITH.
+
+    conditions JSON:
+      source_min_count: int    -- minimum event count to activate edge
+      time_window_minutes: int -- temporal correlation window
+      confidence: float        -- 0-1 scoring weight
+    """
+    __tablename__ = "knowledge_edges"
+
+    id = db.Column(db.String(36), primary_key=True)
+    graph_id = db.Column(db.String(36), db.ForeignKey("knowledge_graphs.id", ondelete="CASCADE"), nullable=False)
+    source_node_id = db.Column(db.String(36), db.ForeignKey("knowledge_nodes.id", ondelete="CASCADE"), nullable=False)
+    target_node_id = db.Column(db.String(36), db.ForeignKey("knowledge_nodes.id", ondelete="CASCADE"), nullable=False)
+    relationship_type = db.Column(db.String(30), nullable=False)
+    conditions = db.Column(db.Text, nullable=True)
+    label = db.Column(db.String(256), nullable=True)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    graph = db.relationship("KnowledgeGraph", back_populates="edges")
+    source_node = db.relationship("KnowledgeNode", foreign_keys=[source_node_id])
+    target_node = db.relationship("KnowledgeNode", foreign_keys=[target_node_id])
+
+
 class DBManager:
     def __init__(self, upload_root: str = BASE_DIR):
         self.db = db
@@ -267,6 +356,9 @@ class DBManager:
         self.ChatMessage = ChatMessage
         self.BatchJob = BatchJob
         self.CPEProcessRecord = CPEProcessRecord
+        self.KnowledgeGraph = KnowledgeGraph
+        self.KnowledgeNode = KnowledgeNode
+        self.KnowledgeEdge = KnowledgeEdge
 
     # ---------------- Initialization ----------------
     def init_app(self, app):
