@@ -49,7 +49,6 @@ export default function PatternPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [timeInterval, setTimeInterval] = useState(0);
   const [viewMode, setViewMode] = useState<"single" | "aggregated">("single");
-  const [aggregatedPage, setAggregatedPage] = useState(1);
   const [selectedPatternDetails, setSelectedPatternDetails] = useState<AggregatedPattern | null>(null);
 
   // Fetch sample logs when pattern is selected
@@ -86,6 +85,9 @@ export default function PatternPage() {
   const [aggregatedSelectedFiles, setAggregatedSelectedFiles] = useState<string[]>([]);
   const [aggregatedAppliedFiles, setAggregatedAppliedFiles] = useState<string[]>([]);
   const [hiddenPatterns, setHiddenPatterns] = useState<Set<string>>(new Set());
+  const [patternFilter, setPatternFilter] = useState("");
+  const [searchAcrossDomains, setSearchAcrossDomains] = useState(false);
+  const [allDomainsPatterns, setAllDomainsPatterns] = useState<Array<AggregatedPattern & { domain: string }>>([]);
 
   const { data: domains } = useQuery({ queryKey: ["domains", projectId, cpeId], queryFn: async () => (await patternsApi.listDomains(projectId!, cpeId)).data, enabled: !!projectId });
   const { data: indexStatus } = useQuery({ queryKey: ["indexingStatus", projectId, cpeId], queryFn: async () => (await patternsApi.indexingStatus(projectId!, cpeId)).data, enabled: !!projectId, refetchInterval: (query) => (query.state.data?.all_done ? false : 5000) });
@@ -124,22 +126,79 @@ export default function PatternPage() {
   const { data: params } = useQuery({ queryKey: ["parameters", projectId, selectedDomain, selectedTemplate, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getParameters(projectId!, selectedDomain, selectedTemplate, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
   const { data: loglines } = useQuery({ queryKey: ["loglines", projectId, selectedDomain, selectedTemplate, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getLoglines(projectId!, selectedDomain, selectedTemplate, 1, 20, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
 
-  // Aggregated patterns query
+  // Aggregated patterns query - now fetches all patterns by default (for search)
   const { data: aggregatedData, isLoading: aggregatedLoading } = useQuery<AggregatedResponse>({
-    queryKey: ["aggregatedPatterns", projectId, selectedDomain, aggregatedPage, aggregatedAppliedFiles],
+    queryKey: ["aggregatedPatterns", projectId, selectedDomain, aggregatedAppliedFiles],
     queryFn: async () => {
       const response = await patternsApi.getAggregated(
         projectId!, 
         selectedDomain, 
-        aggregatedPage, 
-        50, 
+        1, 
+        10000, // Fetch all patterns by default
         "frequency",
         aggregatedAppliedFiles.length > 0 ? aggregatedAppliedFiles : undefined
       );
       return response.data;
     },
-    enabled: !!projectId && !!selectedDomain && viewMode === "aggregated",
+    enabled: !!projectId && !!selectedDomain && viewMode === "aggregated" && !searchAcrossDomains,
   });
+
+  // Fetch patterns from ALL domains when cross-domain search is enabled
+  const { data: allDomainsData, isLoading: allDomainsLoading } = useQuery<{
+    domains: Array<{
+      domain: string;
+      label: string;
+      patterns: AggregatedPattern[];
+      total_cpes: number;
+      total_unique_patterns: number;
+    }>;
+    total_patterns: number;
+  }>({
+    queryKey: ["allDomainsPatterns", projectId, aggregatedAppliedFiles],
+    queryFn: async () => {
+      // Fetch all indexed domains first
+      const domainsResponse = await patternsApi.listDomains(projectId!, undefined);
+      const indexedDomains = domainsResponse.data.filter((d: { indexed: boolean }) => d.indexed);
+      
+      // Fetch patterns from each domain
+      const domainPromises = indexedDomains.map(async (d: { domain: string; label: string }) => {
+        const response = await patternsApi.getAggregated(
+          projectId!,
+          d.domain,
+          1,
+          10000,
+          "frequency",
+          aggregatedAppliedFiles.length > 0 ? aggregatedAppliedFiles : undefined
+        );
+        return {
+          domain: d.domain,
+          label: d.label,
+          patterns: response.data.patterns,
+          total_cpes: response.data.total_cpes,
+          total_unique_patterns: response.data.total_unique_patterns,
+        };
+      });
+      
+      const domainsData = await Promise.all(domainPromises);
+      const totalPatterns = domainsData.reduce((sum, d) => sum + d.total_unique_patterns, 0);
+      
+      return {
+        domains: domainsData,
+        total_patterns: totalPatterns,
+      };
+    },
+    enabled: !!projectId && viewMode === "aggregated" && searchAcrossDomains,
+  });
+
+  // Update allDomainsPatterns when data loads (flatten patterns with domain info)
+  useEffect(() => {
+    if (allDomainsData?.domains) {
+      const flattenedPatterns = allDomainsData.domains.flatMap(d =>
+        d.patterns.map(p => ({ ...p, domain: d.domain }))
+      );
+      setAllDomainsPatterns(flattenedPatterns);
+    }
+  }, [allDomainsData]);
 
   // Update aggregated source files when data loads (without filter)
   useEffect(() => {
@@ -175,32 +234,55 @@ export default function PatternPage() {
 
   // Export ALL patterns to CSV (fetch all pages)
   const exportPatterns = async () => {
-    if (!aggregatedData || !projectId || !selectedDomain) return;
+    if ((!aggregatedData && !searchAcrossDomains) || !projectId) return;
     
     try {
-      // Fetch all patterns (use a large page size to get everything)
-      const response = await patternsApi.getAggregated(
-        projectId, 
-        selectedDomain, 
-        1, 
-        10000, // Large page size to get all patterns
-        "frequency",
-        aggregatedAppliedFiles.length > 0 ? aggregatedAppliedFiles : undefined
-      );
+      let allPatterns: (AggregatedPattern & { domain?: string })[] = [];
       
-      const allPatterns = response.data.patterns.filter((p: AggregatedPattern) => !hiddenPatterns.has(p.template));
+      if (searchAcrossDomains) {
+        // Export from all domains
+        allPatterns = allDomainsPatterns
+          .filter((p) => !hiddenPatterns.has(p.template))
+          .filter((p) => {
+            if (!patternFilter) return true;
+            return p.template.toLowerCase().includes(patternFilter.toLowerCase());
+          });
+      } else if (selectedDomain) {
+        // Export from current domain
+        allPatterns = (aggregatedData?.patterns || [])
+          .filter((p: AggregatedPattern) => !hiddenPatterns.has(p.template))
+          .filter((p: AggregatedPattern) => {
+            if (!patternFilter) return true;
+            return p.template.toLowerCase().includes(patternFilter.toLowerCase());
+          });
+      }
       
-      // Create CSV content (without CPE serials)
+      // Create CSV content
+      const headers = searchAcrossDomains 
+        ? ['#', 'Domain', 'Pattern Template', 'Frequency', 'CPE Count']
+        : ['#', 'Pattern Template', 'Frequency', 'CPE Count', 'Total CPEs'];
+      
       const csvRows = [
-        ['#', 'Pattern Template', 'Frequency', 'CPE Count', 'Total CPEs'].join(','),
-        ...allPatterns.map((pattern: AggregatedPattern, idx: number) => {
-          return [
-            idx + 1,
-            `"${pattern.template.replace(/"/g, '""')}"`,
-            pattern.occurrence_count,
-            pattern.cpe_count,
-            aggregatedData.total_cpes
-          ].join(',');
+        headers.join(','),
+        ...allPatterns.map((pattern, idx: number) => {
+          if (searchAcrossDomains) {
+            const domainLabel = domains?.find((d: { domain: string }) => d.domain === pattern.domain)?.label || pattern.domain;
+            return [
+              idx + 1,
+              `"${domainLabel}"`,
+              `"${pattern.template.replace(/"/g, '""')}"`,
+              pattern.occurrence_count,
+              pattern.cpe_count
+            ].join(',');
+          } else {
+            return [
+              idx + 1,
+              `"${pattern.template.replace(/"/g, '""')}"`,
+              pattern.occurrence_count,
+              pattern.cpe_count,
+              aggregatedData?.total_cpes || 0
+            ].join(',');
+          }
         })
       ];
       
@@ -209,9 +291,11 @@ export default function PatternPage() {
       const link = document.createElement('a');
       const url = URL.createObjectURL(blob);
       
+      const domainSuffix = searchAcrossDomains ? 'all_domains' : selectedDomain;
       const fileFilter = aggregatedAppliedFiles.length > 0 ? '_filtered' : '';
+      const searchFilter = patternFilter ? '_search' : '';
       link.setAttribute('href', url);
-      link.setAttribute('download', `aggregated_patterns_${selectedDomain}${fileFilter}.csv`);
+      link.setAttribute('download', `aggregated_patterns_${domainSuffix}${fileFilter}${searchFilter}.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
@@ -224,9 +308,10 @@ export default function PatternPage() {
   // Reset when switching view modes or changing domain in aggregated view
   useEffect(() => {
     if (viewMode === "aggregated") {
-      setAggregatedPage(1);
       setAggregatedSelectedFiles([]);
       setAggregatedAppliedFiles([]);
+      setPatternFilter("");
+      setSearchAcrossDomains(false);
     }
   }, [selectedDomain, viewMode]);
 
@@ -458,7 +543,6 @@ export default function PatternPage() {
                         <button
                           onClick={() => {
                             setAggregatedAppliedFiles([...aggregatedSelectedFiles]);
-                            setAggregatedPage(1);
                           }}
                           className="ml-1 px-2 py-0.5 text-[9px] bg-primary text-primary-foreground rounded-full font-bold shadow-sm hover:opacity-90 animate-in fade-in zoom-in duration-200"
                         >
@@ -545,25 +629,101 @@ export default function PatternPage() {
             </div>
           </div>
 
-          {!selectedDomain ? (
+          {/* Pattern Filter - Always visible */}
+          <div className="bg-card border border-border rounded-xl p-3">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <FilterListIcon style={{ fontSize: 18 }} className="text-muted-foreground" />
+                <input
+                  type="text"
+                  value={patternFilter}
+                  onChange={(e) => setPatternFilter(e.target.value)}
+                  placeholder="Search patterns across all CPEs..."
+                  className="flex-1 px-3 py-2 text-sm border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                />
+                {patternFilter && (
+                  <button
+                    onClick={() => {
+                      setPatternFilter("");
+                    }}
+                    className="px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2 pl-7">
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={searchAcrossDomains}
+                    onChange={(e) => setSearchAcrossDomains(e.target.checked)}
+                    className="accent-primary rounded"
+                  />
+                  <span className="text-muted-foreground">
+                    Search across ALL domains
+                    {searchAcrossDomains && allDomainsData && ` (${allDomainsData.total_patterns.toLocaleString()} total patterns)`}
+                  </span>
+                </label>
+                {searchAcrossDomains && allDomainsLoading && (
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <CircularProgress size={12} />
+                    Loading patterns from all domains...
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {!selectedDomain && !searchAcrossDomains ? (
             <div className="bg-card border border-border rounded-2xl p-12 text-center text-muted-foreground">
               <DevicesIcon style={{ fontSize: 48 }} className="mx-auto mb-4 opacity-50" />
               <p className="text-lg">Select a domain to view aggregated patterns across all CPEs</p>
+              <p className="text-sm mt-2">Or enable "Search across ALL domains" above</p>
+            </div>
+          ) : (!selectedDomain && searchAcrossDomains && !patternFilter) ? (
+            <div className="bg-card border border-border rounded-2xl p-12 text-center text-muted-foreground">
+              <FilterListIcon style={{ fontSize: 48 }} className="mx-auto mb-4 opacity-50" />
+              <p className="text-lg">Enter text in the search box to search across all domains</p>
             </div>
           ) : aggregatedLoading ? (
             <div className="bg-card border border-border rounded-2xl p-12 text-center">
               <CircularProgress />
               <p className="text-muted-foreground mt-4">Loading aggregated patterns...</p>
             </div>
-          ) : aggregatedData ? (
+          ) : null}
+
+          {/* Always show filter - works even without domain selected if cross-domain search is enabled */}
+          {((aggregatedData && selectedDomain) || (searchAcrossDomains && allDomainsPatterns.length > 0)) && (
             <>
+
               {/* Patterns Table */}
+              {(aggregatedData || (searchAcrossDomains && allDomainsPatterns.length > 0)) && (
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="p-3 border-b border-border flex items-center justify-between">
                   <div className="flex items-center gap-4">
                     <h3 className="text-sm font-semibold">
-                      Patterns (Page {aggregatedData.page} of {aggregatedData.total_pages})
+                      {searchAcrossDomains ? 'All Domains - Search Results' : 'Patterns'}
                     </h3>
+                    {patternFilter && (
+                      <span className="text-xs text-muted-foreground">
+                        {searchAcrossDomains && allDomainsPatterns.length > 0 ? (
+                          <>
+                            Showing {allDomainsPatterns.filter(p => 
+                              !hiddenPatterns.has(p.template) && 
+                              p.template.toLowerCase().includes(patternFilter.toLowerCase())
+                            ).length} of {allDomainsData?.total_patterns.toLocaleString()} patterns
+                          </>
+                        ) : aggregatedData ? (
+                          <>
+                            Showing {aggregatedData.patterns?.filter(p => 
+                              !hiddenPatterns.has(p.template) && 
+                              p.template.toLowerCase().includes(patternFilter.toLowerCase())
+                            ).length} of {aggregatedData.total_unique_patterns.toLocaleString()} patterns
+                          </>
+                        ) : null}
+                      </span>
+                    )}
                     {hiddenPatterns.size > 0 && (
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground">
@@ -587,20 +747,6 @@ export default function PatternPage() {
                       <DownloadIcon style={{ fontSize: 14 }} />
                       Export CSV
                     </button>
-                    <button
-                      onClick={() => setAggregatedPage(p => Math.max(1, p - 1))}
-                      disabled={aggregatedData.page <= 1}
-                      className="px-3 py-1 text-xs border border-border rounded disabled:opacity-30 hover:bg-muted"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={() => setAggregatedPage(p => Math.min(aggregatedData.total_pages, p + 1))}
-                      disabled={aggregatedData.page >= aggregatedData.total_pages}
-                      className="px-3 py-1 text-xs border border-border rounded disabled:opacity-30 hover:bg-muted"
-                    >
-                      Next
-                    </button>
                   </div>
                 </div>
                 <div className="overflow-x-auto">
@@ -608,6 +754,7 @@ export default function PatternPage() {
                     <thead className="bg-muted/50">
                       <tr>
                         <th className="text-left px-3 py-2 text-xs font-medium w-12">#</th>
+                        {searchAcrossDomains && <th className="text-left px-3 py-2 text-xs font-medium">Domain</th>}
                         <th className="text-left px-3 py-2 text-xs font-medium">Pattern Template</th>
                         <th className="text-right px-3 py-2 text-xs font-medium">Frequency</th>
                         <th className="text-right px-3 py-2 text-xs font-medium">CPEs</th>
@@ -615,57 +762,103 @@ export default function PatternPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {aggregatedData.patterns?.filter(p => !hiddenPatterns.has(p.template)).map((pattern: AggregatedPattern, idx: number) => {
-                        const globalIdx = (aggregatedData.page - 1) * aggregatedData.page_size + idx + 1;
-                        return (
-                          <tr
-                            key={pattern.template}
-                            className="border-t border-border hover:bg-muted/30"
-                          >
-                            <td className="px-3 py-2 text-xs text-muted-foreground">{globalIdx}</td>
-                            <td 
-                              className="px-3 py-2 font-mono text-[11px] cursor-pointer"
-                              onClick={() => setSelectedPatternDetails(pattern)}
+                      {(() => {
+                        // Use cross-domain patterns if enabled, otherwise use current domain patterns
+                        const patternsToFilter = searchAcrossDomains && allDomainsPatterns.length > 0
+                          ? allDomainsPatterns
+                          : aggregatedData?.patterns || [];
+                        
+                        const filteredPatterns = patternsToFilter
+                          .filter(p => !hiddenPatterns.has(p.template))
+                          .filter(p => {
+                            if (!patternFilter) return true;
+                            return p.template.toLowerCase().includes(patternFilter.toLowerCase());
+                          });
+                        
+                        if (filteredPatterns.length === 0 && patternFilter) {
+                          return (
+                            <tr>
+                              <td colSpan={searchAcrossDomains ? 6 : 5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                                <FilterListIcon style={{ fontSize: 24 }} className="mx-auto mb-2 opacity-50" />
+                                <div>No patterns match your filter "{patternFilter}"</div>
+                                <button
+                                  onClick={() => {
+                                    setPatternFilter("");
+                                  }}
+                                  className="mt-2 text-xs text-primary hover:underline"
+                                >
+                                  Clear filter
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        }
+                        
+                        return filteredPatterns.map((pattern: AggregatedPattern | (AggregatedPattern & { domain: string }), idx: number) => {
+                          const patternWithDomain = pattern as AggregatedPattern & { domain?: string };
+                          const displayDomain = patternWithDomain.domain || selectedDomain;
+                          const totalCpes = searchAcrossDomains 
+                            ? allDomainsData?.domains.find(d => d.domain === displayDomain)?.total_cpes || 0
+                            : aggregatedData?.total_cpes || 0;
+                          
+                          return (
+                            <tr
+                              key={`${displayDomain}-${pattern.template}`}
+                              className="border-t border-border hover:bg-muted/30"
                             >
-                              {pattern.template}
-                            </td>
-                            <td className="px-3 py-2 text-right text-xs font-semibold">
-                              {pattern.occurrence_count.toLocaleString()}
-                            </td>
-                            <td className="px-3 py-2 text-right text-xs">
-                              {pattern.cpe_count} / {aggregatedData.total_cpes}
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(pattern.template)}&domain=${encodeURIComponent(selectedDomain)}`);
-                                  }}
-                                  className="p-1 hover:bg-muted rounded"
-                                  title="Add to Pattern Analyzer"
-                                >
-                                  <ManageSearchIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleHidePattern(pattern.template);
-                                  }}
-                                  className="p-1 hover:bg-muted rounded"
-                                  title="Hide pattern"
-                                >
-                                  <VisibilityOffIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                              <td className="px-3 py-2 text-xs text-muted-foreground">{idx + 1}</td>
+                              {searchAcrossDomains && (
+                                <td className="px-3 py-2 text-xs">
+                                  <span className="px-2 py-0.5 bg-muted rounded text-[10px] font-medium">
+                                    {domains?.find((d: { domain: string }) => d.domain === displayDomain)?.label || displayDomain}
+                                  </span>
+                                </td>
+                              )}
+                              <td 
+                                className="px-3 py-2 font-mono text-[11px] cursor-pointer"
+                                onClick={() => setSelectedPatternDetails(pattern)}
+                              >
+                                {pattern.template}
+                              </td>
+                              <td className="px-3 py-2 text-right text-xs font-semibold">
+                                {pattern.occurrence_count.toLocaleString()}
+                              </td>
+                              <td className="px-3 py-2 text-right text-xs">
+                                {pattern.cpe_count} / {totalCpes}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(pattern.template)}&domain=${encodeURIComponent(displayDomain)}`);
+                                    }}
+                                    className="p-1 hover:bg-muted rounded"
+                                    title="Add to Pattern Analyzer"
+                                  >
+                                    <ManageSearchIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleHidePattern(pattern.template);
+                                    }}
+                                    className="p-1 hover:bg-muted rounded"
+                                    title="Hide pattern"
+                                  >
+                                    <VisibilityOffIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
                     </tbody>
                   </table>
                 </div>
               </div>
+              )}
 
               {/* CPE Details Modal */}
               {selectedPatternDetails && (
@@ -691,11 +884,16 @@ export default function PatternPage() {
                             </div>
                             <div>
                               <span className="text-muted-foreground">CPEs with pattern:</span>{" "}
-                              <strong>{selectedPatternDetails.cpe_count} / {aggregatedData.total_cpes}</strong>
+                              <strong>{selectedPatternDetails.cpe_count}</strong>
                             </div>
                           </div>
                           <button
-                            onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedPatternDetails.template)}&domain=${encodeURIComponent(selectedDomain)}`)}
+                            onClick={() => {
+                              const domain = searchAcrossDomains 
+                                ? (selectedPatternDetails as any).domain || selectedDomain
+                                : selectedDomain;
+                              navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedPatternDetails.template)}&domain=${encodeURIComponent(domain)}`);
+                            }}
                             className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
                           >
                             <ManageSearchIcon style={{ fontSize: 14 }} /> Add to Pattern Analyzer
@@ -762,7 +960,7 @@ export default function PatternPage() {
                 </div>
               )}
             </>
-          ) : null}
+          )}
         </div>
       )}
     </div>

@@ -132,24 +132,71 @@ def parse_version_txt(content: str) -> Dict[str, Any]:
     }
 
 
-def find_and_parse_version_txt(project_dir: Path) -> Dict[str, Any]:
+_VERSION_CACHE_FILE = ".version_cache.json"
+_DEVICE_INFO_CACHE_FILE = ".device_info_cache.json"
+
+
+def _cache_is_fresh(cache_path: Path, source_paths: List[Path]) -> bool:
+    """Return True if *cache_path* exists and is newer than all *source_paths*."""
+    if not cache_path.exists():
+        return False
+    cache_mtime = cache_path.stat().st_mtime
+    for src in source_paths:
+        if src.exists() and src.stat().st_mtime > cache_mtime:
+            return False
+    return True
+
+
+def _write_json_cache(cache_path: Path, data: Any) -> None:
+    try:
+        cache_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(f"[InfoExtractor] Failed to write cache {cache_path}: {exc}")
+
+
+def _read_json_cache(cache_path: Path) -> Optional[Any]:
+    try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"[InfoExtractor] Bad cache {cache_path}: {exc}")
+        return None
+
+
+def find_and_parse_version_txt(
+    project_dir: Path,
+    force: bool = False,
+) -> Dict[str, Any]:
     """
     Locate version.txt in the project's merged_logs directory and parse it.
 
     Searches in:
-        1. {project_dir}/merged_logs/version.txt
-        2. {project_dir}/version.txt (fallback)
+        1. {project_dir}/version.txt
+        2. {project_dir}/merged_logs/version.txt (fallback)
+
+    Results are cached to ``<project_dir>/.version_cache.json`` with
+    mtime-based invalidation.
 
     Args:
         project_dir: Path to the project directory.
+        force: Bypass cache and re-parse.
 
     Returns:
         Parsed version info dict, or empty dict if not found.
     """
+    cache_path = project_dir / _VERSION_CACHE_FILE
     search_paths = [
         project_dir / "version.txt",
         project_dir / "merged_logs" / "version.txt",
     ]
+
+    if not force and _cache_is_fresh(cache_path, search_paths):
+        cached = _read_json_cache(cache_path)
+        if cached is not None:
+            logger.debug(f"[InfoExtractor] version_txt cache hit for {project_dir}")
+            return cached
 
     for path in search_paths:
         if path.exists() and path.is_file():
@@ -162,10 +209,12 @@ def find_and_parse_version_txt(project_dir: Path) -> Dict[str, Any]:
                         f"SDK={result.get('sdk_version', 'N/A')}, "
                         f"upgrade={result.get('sw_upgrade_detected', False)}"
                     )
+                    _write_json_cache(cache_path, result)
                     return result
             except Exception as e:
                 logger.warning(f"[InfoExtractor] Error parsing {path}: {e}")
 
+    _write_json_cache(cache_path, {})
     return {}
 
 
@@ -725,7 +774,10 @@ def parse_telemetry_marker_extended(content: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def find_and_build_fallback_device_info(project_dir: Path) -> Dict[str, str]:
+def find_and_build_fallback_device_info(
+    project_dir: Path,
+    force: bool = False,
+) -> Dict[str, str]:
     """
     Build a ``device_info`` dict from non-telemetry sources.
 
@@ -742,15 +794,33 @@ def find_and_build_fallback_device_info(project_dir: Path) -> Dict[str, str]:
     :func:`~logai.telemetry_parser.extract_telemetry_summary` so that
     the CPE Overview and Telemetry pages can render it without changes.
 
+    Results are cached to ``<project_dir>/.device_info_cache.json`` with
+    mtime-based invalidation.
+
     Args:
-        project_dir: Path to the CPE directory (e.g.
-            ``UPLOAD_DIRECTORY/{user_id}/{project_id}/{cpe_serial}``).
+        project_dir: Path to the CPE directory.
+        force: Bypass cache and re-parse.
 
     Returns:
         A dict with keys like ``model``, ``serial``, ``manufacturer``,
         ``mac``, ``version``, ``wan_type``, ``sdk_version``, ``sw_upgrade``.
         Returns an empty dict if no fallback data can be found.
     """
+    cache_path = project_dir / _DEVICE_INFO_CACHE_FILE
+    source_files = [
+        project_dir / "PARODUSlog.txt",
+        project_dir / "parodusStart-log.txt",
+        project_dir / "telemetry_marker.txt",
+        project_dir / "version.txt",
+        project_dir / "merged_logs" / "version.txt",
+    ]
+
+    if not force and _cache_is_fresh(cache_path, source_files):
+        cached = _read_json_cache(cache_path)
+        if cached is not None:
+            logger.debug(f"[InfoExtractor] device_info cache hit for {project_dir}")
+            return cached
+
     device_info: Dict[str, str] = {}
 
     # --- 1. PARODUSlog.txt, then parodusStart-log.txt fallback ---
@@ -844,6 +914,7 @@ def find_and_build_fallback_device_info(project_dir: Path) -> Dict[str, str]:
             f"in {project_dir}: {e}"
         )
 
+    _write_json_cache(cache_path, device_info)
     return device_info
 
 

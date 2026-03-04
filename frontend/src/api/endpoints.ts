@@ -301,10 +301,10 @@ export interface IssueAnalysisCPEReport {
 
 export const issueAnalysisApi = {
   // Batch-job scoped
-  trigger: (projectId: string, jobId: string, graphId: string) =>
+  trigger: (projectId: string, jobId: string, graphId: string, forceReparse = false) =>
     api.post<{ message: string; celery_task_id: string; graph_name: string }>(
       `/projects/${projectId}/batch-jobs/${jobId}/issue-analysis`,
-      { graph_id: graphId },
+      { graph_id: graphId, ...(forceReparse ? { force_reparse: true } : {}) },
     ),
   get: (projectId: string, jobId: string) =>
     api.get<IssueAnalysisOverview>(
@@ -315,10 +315,10 @@ export const issueAnalysisApi = {
       `/projects/${projectId}/batch-jobs/${jobId}/issue-analysis/cpe/${encodeURIComponent(cpeSerial)}`,
     ),
   // Direct project-level (single/few CPEs, no batch job)
-  triggerDirect: (projectId: string, graphId: string) =>
+  triggerDirect: (projectId: string, graphId: string, forceReparse = false) =>
     api.post<{ message: string; celery_task_id: string; graph_name: string }>(
       `/projects/${projectId}/issue-analysis`,
-      { graph_id: graphId },
+      { graph_id: graphId, ...(forceReparse ? { force_reparse: true } : {}) },
     ),
   getDirect: (projectId: string) =>
     api.get<IssueAnalysisOverview>(
@@ -590,8 +590,13 @@ export const cpeOverviewApi = {
       model?: string;
       serial?: string;
       status?: "parsed" | "not_parsed" | "failed";
+      force?: boolean;
     }
-  ) => api.get<CPEOverviewResponse>(`/projects/${projectId}/cpe-overview`, { params }),
+  ) => {
+    const p = params ? { ...params } as Record<string, unknown> : {};
+    if (p.force) { p.force = "1"; } else { delete p.force; }
+    return api.get<CPEOverviewResponse>(`/projects/${projectId}/cpe-overview`, { params: p });
+  },
   getPatternScan: (projectId: string) =>
     api.get<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
   runPatternScan: (projectId: string) =>

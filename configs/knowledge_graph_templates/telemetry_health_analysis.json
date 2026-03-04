@@ -1,0 +1,790 @@
+{
+  "name": "Telemetry Health Analysis",
+  "description": "Comprehensive analysis of device health based on telemetry markers including WiFi issues, memory problems, connectivity failures, and system crashes",
+  "is_template": true,
+  "nodes": [
+    {
+      "id": "evt_wifi_disassoc_auth",
+      "node_type": "EVENT",
+      "name": "wifi_disassociation_auth_failure",
+      "label": "WiFi Disassociation - Auth Failure",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Disassociated.*INVALID AUTH",
+          "Authentication Failure: STA"
+        ],
+        "source_domains": ["wireless", "messages"],
+        "exclusions": []
+      },
+      "description": "WiFi disassociation triggered by authentication failures"
+    },
+    {
+      "id": "evt_wifi_disassoc_unknown",
+      "node_type": "EVENT",
+      "name": "wifi_disassociation_unknown",
+      "label": "WiFi Disassociation - Unknown Reason",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Disassociated.*unspecified reason"
+        ],
+        "source_domains": ["wireless"],
+        "exclusions": []
+      },
+      "description": "WiFi disassociation with unspecified reason"
+    },
+    {
+      "id": "evt_wifi_disassoc_leaving",
+      "node_type": "EVENT",
+      "name": "wifi_station_leaving",
+      "label": "WiFi Station Leaving AP",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "is leaving AP",
+          "Station is leaving BSS"
+        ],
+        "source_domains": ["wireless", "messages"],
+        "exclusions": []
+      },
+      "description": "Station initiated disconnection from AP"
+    },
+    {
+      "id": "evt_wifi_disassoc_bandwidth",
+      "node_type": "EVENT",
+      "name": "wifi_bandwidth_issue",
+      "label": "WiFi AP Disconnect - Bandwidth",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "AP Initiated Disconnection.*bandwidth"
+        ],
+        "source_domains": ["messages"],
+        "exclusions": []
+      },
+      "description": "AP initiated disconnection due to bandwidth issues"
+    },
+    {
+      "id": "evt_wifi_disassoc_channel",
+      "node_type": "EVENT",
+      "name": "wifi_channel_issue",
+      "label": "WiFi AP Disconnect - Channel",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Bad client/channel AP Initiated Disconnection"
+        ],
+        "source_domains": ["messages"],
+        "exclusions": []
+      },
+      "description": "AP initiated disconnection due to channel issues"
+    },
+    {
+      "id": "evt_wifi_channel_radar",
+      "node_type": "EVENT",
+      "name": "wifi_radar_detection",
+      "label": "WiFi Channel Switch - Radar",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "due to Radar Detection"
+        ],
+        "source_domains": ["wireless"],
+        "exclusions": []
+      },
+      "description": "WiFi channel switched due to radar detection (DFS)"
+    },
+    {
+      "id": "evt_wifi_compatibility",
+      "node_type": "EVENT",
+      "name": "wifi_compatibility_failure",
+      "label": "WiFi Compatibility Failure",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Compatibility Failure: STA"
+        ],
+        "source_domains": ["messages"],
+        "exclusions": []
+      },
+      "description": "Old or non-compatible device connection failure"
+    },
+    {
+      "id": "evt_wifi_dongle_trap",
+      "node_type": "EVENT",
+      "name": "wifi_dongle_trap",
+      "label": "WiFi Dongle Trap",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "debug_monitor: Detected firmware trap/assert"
+        ],
+        "source_domains": ["user"],
+        "exclusions": []
+      },
+      "description": "WiFi firmware trap detected - triggers auto-recovery"
+    },
+    {
+      "id": "evt_wifi_button",
+      "node_type": "EVENT",
+      "name": "wifi_button_pressed",
+      "label": "WiFi Button Pressed",
+      "domain": "wireless",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "WIFI_BUTTON is pressed"
+        ],
+        "source_domains": [],
+        "exclusions": []
+      },
+      "description": "Physical WiFi button pressed by user"
+    },
+    {
+      "id": "evt_pam_deadlock",
+      "node_type": "EVENT",
+      "name": "pam_deadlock",
+      "label": "PAM Deadlock",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "CCSP Deadlock happened",
+          "Ccsp deadlock"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "CCSP PAM process deadlock detected"
+    },
+    {
+      "id": "evt_memory_low",
+      "node_type": "EVENT",
+      "name": "memory_low",
+      "label": "Low Available Memory",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Available Memory:",
+          "Shmem:"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Low available memory or shared memory issues"
+    },
+    {
+      "id": "evt_crash",
+      "node_type": "EVENT",
+      "name": "process_crash",
+      "label": "Process Crash",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Success Compressing the files"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Process crash detected and core dump compressed"
+    },
+    {
+      "id": "evt_flash_full",
+      "node_type": "EVENT",
+      "name": "flash_storage_full",
+      "label": "Flash Storage Issues",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Flash Usage:Total:",
+          "Flash Usage:Free:"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Flash storage usage or shortage detected"
+    },
+    {
+      "id": "evt_cpu_temp_high",
+      "node_type": "EVENT",
+      "name": "cpu_temperature_high",
+      "label": "High CPU Temperature",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "cpu_temp_split",
+          "Processor temperature"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Elevated processor temperature detected"
+    },
+    {
+      "id": "evt_cujo_stop",
+      "node_type": "EVENT",
+      "name": "cujo_agent_stopped",
+      "label": "Cujo Agent Stopped",
+      "domain": "security",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "launch-cujo-agent stop",
+          "Cujo Agent Stopped",
+          "attempting to die gracefully"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Cujo security agent stopped or disabled"
+    },
+    {
+      "id": "evt_cujo_conn_err",
+      "node_type": "EVENT",
+      "name": "cujo_connection_error",
+      "label": "Cujo Connection Error",
+      "domain": "security",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "failed to connect WebSocket",
+          "Cloud connection error"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Cujo agent failed to connect to cloud"
+    },
+    {
+      "id": "evt_cujo_auth_err",
+      "node_type": "EVENT",
+      "name": "cujo_auth_error",
+      "label": "Cujo Auth Error",
+      "domain": "security",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Unauthorized",
+          "Cloud auth error"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "Cujo agent authentication failure"
+    },
+    {
+      "id": "evt_webpa_reconnect",
+      "node_type": "EVENT",
+      "name": "webpa_reconnect",
+      "label": "WebPA Reconnection",
+      "domain": "connectivity",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Terminating the connection with WebPA server and retrying"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "WebPA connection lost and attempting reconnect"
+    },
+    {
+      "id": "evt_webpa_pingmiss",
+      "node_type": "EVENT",
+      "name": "webpa_ping_miss",
+      "label": "WebPA Ping Miss",
+      "domain": "connectivity",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "setting Ping_Miss reason for Reconnect"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "WebPA keepalive ping missed"
+    },
+    {
+      "id": "evt_curl_timeout",
+      "node_type": "EVENT",
+      "name": "dcm_curl_timeout",
+      "label": "DCM Curl Timeout",
+      "domain": "connectivity",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "curl_code:28",
+          "Splunk Direct Connection curl error"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "DCM telemetry upload timeout (curl error 28)"
+    },
+    {
+      "id": "evt_dns_failure",
+      "node_type": "EVENT",
+      "name": "dcm_dns_failure",
+      "label": "DCM DNS Failure",
+      "domain": "connectivity",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "curl_code:6"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "DCM telemetry upload DNS resolution failure"
+    },
+    {
+      "id": "evt_telemetry_restart",
+      "node_type": "EVENT",
+      "name": "telemetry_script_restart",
+      "label": "Telemetry Script Restart",
+      "domain": "platform",
+      "detection_config": {
+        "method": "keyword",
+        "keywords": [
+          "Starting execution of DCMscript.sh"
+        ],
+        "source_domains": ["platform"],
+        "exclusions": []
+      },
+      "description": "DCM telemetry script restarted"
+    },
+    {
+      "id": "issue_wifi_stability",
+      "node_type": "ISSUE",
+      "name": "wifi_stability_problems",
+      "label": "WiFi Stability Problems",
+      "domain": "wireless",
+      "detection_config": null,
+      "description": "Repeated WiFi disconnections or authentication issues affecting user experience"
+    },
+    {
+      "id": "issue_wifi_hardware",
+      "node_type": "ISSUE",
+      "name": "wifi_hardware_issues",
+      "label": "WiFi Hardware Issues",
+      "domain": "wireless",
+      "detection_config": null,
+      "description": "WiFi hardware or firmware problems"
+    },
+    {
+      "id": "issue_system_instability",
+      "node_type": "ISSUE",
+      "name": "system_instability",
+      "label": "System Instability",
+      "domain": "platform",
+      "detection_config": null,
+      "description": "System crashes, deadlocks, or resource exhaustion"
+    },
+    {
+      "id": "issue_cloud_connectivity",
+      "node_type": "ISSUE",
+      "name": "cloud_connectivity_problems",
+      "label": "Cloud Connectivity Problems",
+      "domain": "connectivity",
+      "detection_config": null,
+      "description": "Repeated failures to maintain cloud connections (WebPA, Cujo, DCM)"
+    },
+    {
+      "id": "rc_wifi_driver_failure",
+      "node_type": "ROOT_CAUSE",
+      "name": "wifi_driver_failure",
+      "label": "WiFi Driver Failure",
+      "domain": "wireless",
+      "detection_config": null,
+      "description": "WiFi driver crash or firmware trap causing radio instability"
+    },
+    {
+      "id": "rc_wifi_config_mismatch",
+      "node_type": "ROOT_CAUSE",
+      "name": "wifi_config_mismatch",
+      "label": "WiFi Config/Compatibility Issue",
+      "domain": "wireless",
+      "detection_config": null,
+      "description": "WiFi configuration issues or device compatibility problems"
+    },
+    {
+      "id": "rc_memory_exhaustion",
+      "node_type": "ROOT_CAUSE",
+      "name": "memory_exhaustion",
+      "label": "Memory Exhaustion",
+      "domain": "platform",
+      "detection_config": null,
+      "description": "Insufficient memory causing crashes and deadlocks"
+    },
+    {
+      "id": "rc_storage_exhaustion",
+      "node_type": "ROOT_CAUSE",
+      "name": "storage_exhaustion",
+      "label": "Storage Exhaustion",
+      "domain": "platform",
+      "detection_config": null,
+      "description": "Flash storage full or nearly full"
+    },
+    {
+      "id": "rc_network_upstream",
+      "node_type": "ROOT_CAUSE",
+      "name": "upstream_network_issue",
+      "label": "Upstream Network Issue",
+      "domain": "connectivity",
+      "detection_config": null,
+      "description": "ISP or upstream network problems affecting cloud connectivity"
+    },
+    {
+      "id": "rc_thermal_problem",
+      "node_type": "ROOT_CAUSE",
+      "name": "thermal_throttling",
+      "label": "Thermal Throttling/Overheating",
+      "domain": "platform",
+      "detection_config": null,
+      "description": "High CPU temperature causing system instability"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source_node_id": "evt_wifi_disassoc_auth",
+      "target_node_id": "issue_wifi_stability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 5,
+        "time_window_minutes": 60,
+        "confidence": 0.7
+      },
+      "label": "Multiple auth failures",
+      "description": "Repeated authentication failures indicate WiFi stability problems"
+    },
+    {
+      "id": "e2",
+      "source_node_id": "evt_wifi_disassoc_unknown",
+      "target_node_id": "issue_wifi_stability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 10,
+        "time_window_minutes": 60,
+        "confidence": 0.6
+      },
+      "label": "Frequent unknown disconnects",
+      "description": "High rate of unspecified disconnections"
+    },
+    {
+      "id": "e3",
+      "source_node_id": "evt_wifi_disassoc_bandwidth",
+      "target_node_id": "issue_wifi_stability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 3,
+        "time_window_minutes": 60,
+        "confidence": 0.75
+      },
+      "label": "Bandwidth issues",
+      "description": "AP kicking clients due to bandwidth problems"
+    },
+    {
+      "id": "e4",
+      "source_node_id": "evt_wifi_disassoc_channel",
+      "target_node_id": "issue_wifi_stability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 3,
+        "time_window_minutes": 60,
+        "confidence": 0.75
+      },
+      "label": "Channel issues",
+      "description": "AP kicking clients due to channel problems"
+    },
+    {
+      "id": "e5",
+      "source_node_id": "evt_wifi_dongle_trap",
+      "target_node_id": "issue_wifi_hardware",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 1,
+        "time_window_minutes": 60,
+        "confidence": 0.9
+      },
+      "label": "Firmware trap",
+      "description": "WiFi firmware crash indicates hardware/driver issue"
+    },
+    {
+      "id": "e6",
+      "source_node_id": "evt_wifi_dongle_trap",
+      "target_node_id": "rc_wifi_driver_failure",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 1,
+        "confidence": 0.95
+      },
+      "label": "Direct indicator",
+      "description": "Firmware trap directly indicates driver failure"
+    },
+    {
+      "id": "e7",
+      "source_node_id": "evt_wifi_compatibility",
+      "target_node_id": "rc_wifi_config_mismatch",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 2,
+        "confidence": 0.85
+      },
+      "label": "Compatibility issues",
+      "description": "Repeated compatibility failures indicate config/compatibility problems"
+    },
+    {
+      "id": "e8",
+      "source_node_id": "evt_wifi_channel_radar",
+      "target_node_id": "issue_wifi_stability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 3,
+        "time_window_minutes": 60,
+        "confidence": 0.5
+      },
+      "label": "Frequent DFS events",
+      "description": "Repeated radar detections cause channel switches and client disconnections"
+    },
+    {
+      "id": "e9",
+      "source_node_id": "evt_pam_deadlock",
+      "target_node_id": "issue_system_instability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 1,
+        "time_window_minutes": 60,
+        "confidence": 0.9
+      },
+      "label": "Process deadlock",
+      "description": "PAM deadlock causes system instability"
+    },
+    {
+      "id": "e10",
+      "source_node_id": "evt_memory_low",
+      "target_node_id": "issue_system_instability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 5,
+        "time_window_minutes": 60,
+        "confidence": 0.85
+      },
+      "label": "Sustained low memory",
+      "description": "Persistent low memory causes instability"
+    },
+    {
+      "id": "e11",
+      "source_node_id": "evt_memory_low",
+      "target_node_id": "rc_memory_exhaustion",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 5,
+        "confidence": 0.9
+      },
+      "label": "Direct indicator",
+      "description": "Low memory directly indicates exhaustion"
+    },
+    {
+      "id": "e12",
+      "source_node_id": "evt_crash",
+      "target_node_id": "issue_system_instability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 1,
+        "time_window_minutes": 60,
+        "confidence": 0.95
+      },
+      "label": "Process crash",
+      "description": "Process crashes directly cause system instability"
+    },
+    {
+      "id": "e13",
+      "source_node_id": "evt_flash_full",
+      "target_node_id": "issue_system_instability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 3,
+        "time_window_minutes": 120,
+        "confidence": 0.75
+      },
+      "label": "Storage issues",
+      "description": "Flash storage issues can cause system problems"
+    },
+    {
+      "id": "e14",
+      "source_node_id": "evt_flash_full",
+      "target_node_id": "rc_storage_exhaustion",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 3,
+        "confidence": 0.9
+      },
+      "label": "Direct indicator",
+      "description": "Flash usage alerts indicate storage exhaustion"
+    },
+    {
+      "id": "e15",
+      "source_node_id": "evt_cpu_temp_high",
+      "target_node_id": "issue_system_instability",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 5,
+        "time_window_minutes": 60,
+        "confidence": 0.7
+      },
+      "label": "Thermal stress",
+      "description": "Sustained high temperature causes instability"
+    },
+    {
+      "id": "e16",
+      "source_node_id": "evt_cpu_temp_high",
+      "target_node_id": "rc_thermal_problem",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 5,
+        "confidence": 0.85
+      },
+      "label": "Direct indicator",
+      "description": "High CPU temp indicates thermal issues"
+    },
+    {
+      "id": "e17",
+      "source_node_id": "evt_memory_low",
+      "target_node_id": "evt_pam_deadlock",
+      "relationship_type": "LEADS_TO",
+      "conditions": {
+        "source_min_count": 3,
+        "confidence": 0.7
+      },
+      "label": "Memory pressure causes deadlock",
+      "description": "Low memory can lead to process deadlocks"
+    },
+    {
+      "id": "e18",
+      "source_node_id": "evt_memory_low",
+      "target_node_id": "evt_crash",
+      "relationship_type": "LEADS_TO",
+      "conditions": {
+        "source_min_count": 3,
+        "confidence": 0.75
+      },
+      "label": "Memory pressure causes crashes",
+      "description": "Memory exhaustion leads to process crashes"
+    },
+    {
+      "id": "e19",
+      "source_node_id": "evt_cujo_conn_err",
+      "target_node_id": "issue_cloud_connectivity",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 3,
+        "time_window_minutes": 60,
+        "confidence": 0.7
+      },
+      "label": "Cujo connection failures",
+      "description": "Repeated Cujo connection failures indicate cloud connectivity issues"
+    },
+    {
+      "id": "e20",
+      "source_node_id": "evt_cujo_auth_err",
+      "target_node_id": "issue_cloud_connectivity",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 2,
+        "time_window_minutes": 60,
+        "confidence": 0.6
+      },
+      "label": "Cujo auth failures",
+      "description": "Authentication failures may indicate connectivity or config issues"
+    },
+    {
+      "id": "e21",
+      "source_node_id": "evt_webpa_reconnect",
+      "target_node_id": "issue_cloud_connectivity",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 5,
+        "time_window_minutes": 60,
+        "confidence": 0.8
+      },
+      "label": "WebPA reconnections",
+      "description": "Frequent WebPA reconnections indicate cloud connectivity problems"
+    },
+    {
+      "id": "e22",
+      "source_node_id": "evt_webpa_pingmiss",
+      "target_node_id": "evt_webpa_reconnect",
+      "relationship_type": "LEADS_TO",
+      "conditions": {
+        "source_min_count": 3,
+        "confidence": 0.9
+      },
+      "label": "Ping miss triggers reconnect",
+      "description": "Ping misses lead to WebPA reconnection attempts"
+    },
+    {
+      "id": "e23",
+      "source_node_id": "evt_curl_timeout",
+      "target_node_id": "issue_cloud_connectivity",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 3,
+        "time_window_minutes": 120,
+        "confidence": 0.7
+      },
+      "label": "DCM timeouts",
+      "description": "DCM upload timeouts indicate network issues"
+    },
+    {
+      "id": "e24",
+      "source_node_id": "evt_dns_failure",
+      "target_node_id": "issue_cloud_connectivity",
+      "relationship_type": "COULD_CAUSE",
+      "conditions": {
+        "source_min_count": 2,
+        "time_window_minutes": 120,
+        "confidence": 0.85
+      },
+      "label": "DNS failures",
+      "description": "DNS resolution failures indicate network problems"
+    },
+    {
+      "id": "e25",
+      "source_node_id": "evt_dns_failure",
+      "target_node_id": "rc_network_upstream",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 2,
+        "confidence": 0.8
+      },
+      "label": "Upstream network issue",
+      "description": "DNS failures often indicate upstream ISP problems"
+    },
+    {
+      "id": "e26",
+      "source_node_id": "evt_curl_timeout",
+      "target_node_id": "rc_network_upstream",
+      "relationship_type": "INDICATES",
+      "conditions": {
+        "source_min_count": 5,
+        "confidence": 0.75
+      },
+      "label": "Network latency",
+      "description": "Repeated timeouts suggest upstream network latency"
+    }
+  ]
+}

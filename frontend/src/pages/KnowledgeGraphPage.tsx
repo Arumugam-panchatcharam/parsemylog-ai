@@ -346,7 +346,11 @@ export default function KnowledgeGraphPage() {
   });
 
   const importMut = useMutation({
-    mutationFn: (template: string) => knowledgeGraphApi.importGraph({ template }),
+    mutationFn: (template: string) =>
+      knowledgeGraphApi.importGraph({
+        template,
+        ...(filterNatcoId ? { natco_id: filterNatcoId } : {}),
+      }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["knowledgeGraphs"] });
       setSelectedGraphId(res.data.id);
@@ -355,7 +359,10 @@ export default function KnowledgeGraphPage() {
 
   const importJsonMut = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
-      knowledgeGraphApi.importGraph(payload as { template?: string; natco_id?: number } & Record<string, unknown>),
+      knowledgeGraphApi.importGraph({
+        ...payload,
+        ...(filterNatcoId ? { natco_id: filterNatcoId } : {}),
+      } as { template?: string; natco_id?: number } & Record<string, unknown>),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["knowledgeGraphs"] });
       setSelectedGraphId(res.data.id);

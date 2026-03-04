@@ -78,7 +78,10 @@ def _find_dcmscript_file(project_dir: Path) -> Optional[Path]:
     return None
 
 
-def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
+def _collect_device_info(
+    project_dir: Path,
+    force: bool = False,
+) -> Dict[str, Any]:
     """Parse telemetry and version.txt to collect device info and key metrics.
 
     When telemetry2_0 is missing or has no parsable reports, falls back to
@@ -102,6 +105,7 @@ def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
             primary = telemetry_file or dcmscript_file
             reports, merged, summary, _src = parse_telemetry_file(
                 primary, dcmscript_path=dcmscript_file,
+                cpe_dir=project_dir, force=force,
             )
 
             if reports and summary.get("parsed", 0) > 0:
@@ -113,7 +117,7 @@ def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
                 # Enrich with version.txt
                 try:
                     from logai.info_extractor import find_and_parse_version_txt
-                    version_info = find_and_parse_version_txt(project_dir)
+                    version_info = find_and_parse_version_txt(project_dir, force=force)
                     if version_info:
                         if version_info.get("sdk_version"):
                             device_info["sdk_version"] = version_info["sdk_version"]
@@ -144,7 +148,7 @@ def _collect_device_info(project_dir: Path) -> Dict[str, Any]:
     if not telemetry_ok:
         try:
             from logai.info_extractor import find_and_build_fallback_device_info
-            fallback_info = find_and_build_fallback_device_info(project_dir)
+            fallback_info = find_and_build_fallback_device_info(project_dir, force=force)
             if fallback_info:
                 result["device_info"] = fallback_info
                 logger.info(
@@ -360,6 +364,7 @@ def get_cpe_overview(project_id):
     filter_model = request.args.get("model")
     filter_serial = request.args.get("serial")
     filter_status = request.args.get("status")
+    force = request.args.get("force", "0") in ("1", "true")
 
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
 
@@ -368,7 +373,7 @@ def get_cpe_overview(project_id):
 
     if not cpes:
         # Legacy project (no CPEs) -- treat the base dir as a single CPE
-        info = _collect_device_info(base_dir)
+        info = _collect_device_info(base_dir, force=force)
         reboot_summary = _collect_reboot_summary(base_dir)
         pattern_summary = _collect_pattern_summary(base_dir)
         log_stats = _collect_log_stats(base_dir)
@@ -402,7 +407,7 @@ def get_cpe_overview(project_id):
         cpe_dir = base_dir / cpe.serial
         logger.info(f"[CPEOverview] Processing CPE {cpe.serial} at {cpe_dir}")
 
-        info = _collect_device_info(cpe_dir)
+        info = _collect_device_info(cpe_dir, force=force)
         reboot_summary = _collect_reboot_summary(cpe_dir)
         pattern_summary = _collect_pattern_summary(cpe_dir)
         log_stats = _collect_log_stats(cpe_dir)

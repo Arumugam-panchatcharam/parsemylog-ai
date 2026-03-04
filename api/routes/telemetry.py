@@ -210,7 +210,7 @@ def _build_fallback_charts(marker_data):
 # Core: parse fresh, build response, cache the result
 # ---------------------------------------------------------------------------
 
-def _parse_and_build(project_dir: Path):
+def _parse_and_build(project_dir: Path, force: bool = False):
     """
     Parse the telemetry file, build the full API response, and cache it.
 
@@ -232,6 +232,7 @@ def _parse_and_build(project_dir: Path):
         primary = telemetry_file or dcmscript_file
         reports, _merged, summary, _src = parse_telemetry_file(
             primary, dcmscript_path=dcmscript_file,
+            cpe_dir=project_dir, force=force,
         )
         if reports and summary.get("parsed", 0) > 0:
             telemetry_ok = True
@@ -371,7 +372,7 @@ def parse_telemetry(project_id):
                 return jsonify(cached), 200
 
         # Parse fresh, build response, and cache
-        response, _avail, error_msg = _parse_and_build(pdir)
+        response, _avail, error_msg = _parse_and_build(pdir, force=force)
         if response is None:
             return jsonify({"error": error_msg}), 404
 

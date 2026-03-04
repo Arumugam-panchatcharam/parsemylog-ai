@@ -74,7 +74,12 @@ class Pattern:
         """
         self.project_dir = project_dir
         config = TemplateMinerConfig()
-        config.load("drain3.ini")  # load from external ini file
+        # Use absolute path to drain3.ini to work from any working directory
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "drain3.ini")
+        if os.path.exists(config_path):
+            config.load(config_path)
+        else:
+            logger.warning(f"config file not found: {config_path}, using defaults")
         self.preprocess_regex = re.compile(
                 r"^(?P<timestamp>("
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"          # 2023-10-02T12:34:56
@@ -461,7 +466,10 @@ def extract_parameters(
     # If a saved state exists for the domain, load it for accuracy.
     try:
         config = TemplateMinerConfig()
-        config.load("drain3.ini")
+        # Use absolute path to drain3.ini to work from any working directory
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "drain3.ini")
+        if os.path.exists(config_path):
+            config.load(config_path)
 
         persistence = None
         if project_dir and domain:

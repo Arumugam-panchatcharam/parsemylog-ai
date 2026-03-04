@@ -697,8 +697,8 @@ def extract_telemetry_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
         profile_stats[profile] = {
             "count": len(reps),
             "time_range": {
-                "first": times[0].isoformat() if times else None,
-                "last": times[-1].isoformat() if times else None,
+                "first": times[0].isoformat() if times and isinstance(times[0], datetime) else (times[0] if times else None),
+                "last": times[-1].isoformat() if times and isinstance(times[-1], datetime) else (times[-1] if times else None),
             },
             "interval_stats": {
                 "avg_seconds": round(avg_interval, 1),
@@ -709,8 +709,8 @@ def extract_telemetry_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Overall time range
     all_times = sorted([r["time"] for r in ok_reports if r["time"]])
     overall_range = {
-        "first": all_times[0].isoformat() if all_times else None,
-        "last": all_times[-1].isoformat() if all_times else None,
+        "first": all_times[0].isoformat() if all_times and isinstance(all_times[0], datetime) else (all_times[0] if all_times else None),
+        "last": all_times[-1].isoformat() if all_times and isinstance(all_times[-1], datetime) else (all_times[-1] if all_times else None),
     }
 
     # Device identity (from first OK report)
@@ -871,7 +871,7 @@ def extract_configured_fields(
                 if raw is None:
                     continue
 
-                ts_str = r["time"].isoformat() if r["time"] else r["log_timestamp"]
+                ts_str = r["time"].isoformat() if isinstance(r["time"], datetime) else (r["time"] or r["log_timestamp"])
                 resolved = _resolve_sample(str(raw), fsample)
 
                 # Numeric conversion
@@ -916,9 +916,97 @@ def extract_configured_fields(
 # Convenience: parse from file path
 # ---------------------------------------------------------------------------
 
+_TELEMETRY_CACHE_DIR = "telemetry"
+_CACHE_RESPONSE = "response.json"
+_CACHE_AVAILABLE = "available_fields.json"
+_RAW_CACHE_FILE = "raw_telemetry_cache.json"
+
+
+def _raw_cache_path(cpe_dir: Path) -> Path:
+    return cpe_dir / _RAW_CACHE_FILE
+
+
+def _raw_cache_is_fresh(cpe_dir: Path) -> bool:
+    """Return True if raw cache exists and is newer than source files."""
+    cache = _raw_cache_path(cpe_dir)
+    if not cache.exists():
+        return False
+    cache_mtime = cache.stat().st_mtime
+    for name in ("telemetry2_0.txt", "dcmscript.log"):
+        src = cpe_dir / name
+        if src.exists() and src.stat().st_mtime > cache_mtime:
+            return False
+    return True
+
+
+def _save_raw_telemetry_cache(
+    cpe_dir: Path,
+    reports: List[Dict[str, Any]],
+    merged: Dict[str, Any],
+    summary: Dict[str, Any],
+    source: str,
+) -> None:
+    try:
+        payload = {
+            "reports": reports,
+            "merged": merged,
+            "summary": summary,
+            "source": source,
+        }
+        _raw_cache_path(cpe_dir).write_text(
+            json.dumps(payload, default=_serialise_datetime, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        logger.debug(f"[TelemetryParser] Raw cache saved to {cpe_dir}")
+    except Exception as exc:
+        logger.warning(f"[TelemetryParser] Failed to save raw cache: {exc}")
+
+
+def _load_raw_telemetry_cache(
+    cpe_dir: Path,
+) -> Optional[Tuple[List[Dict], Dict, Dict, str]]:
+    try:
+        data = json.loads(
+            _raw_cache_path(cpe_dir).read_text(encoding="utf-8")
+        )
+        reports = data["reports"]
+        merged = data["merged"]
+        summary = data["summary"]
+        source = data["source"]
+        logger.info(
+            f"[TelemetryParser] Loaded raw cache ({len(reports)} reports, "
+            f"source={source}) from {cpe_dir}"
+        )
+        return reports, merged, summary, source
+    except Exception as exc:
+        logger.warning(f"[TelemetryParser] Bad raw cache in {cpe_dir}: {exc}")
+        return None
+
+
+def _invalidate_api_response_cache(cpe_dir: Path) -> None:
+    """Delete the Telemetry page's API response cache so it gets rebuilt.
+
+    Called when ``force=True`` re-parses raw telemetry to ensure the
+    higher-level API response cache (``telemetry/response.json``) does
+    not serve stale data.
+    """
+    cache = cpe_dir / _TELEMETRY_CACHE_DIR
+    for name in (_CACHE_RESPONSE, _CACHE_AVAILABLE):
+        p = cache / name
+        if p.exists():
+            try:
+                p.unlink()
+                logger.debug(f"[TelemetryParser] Invalidated {p}")
+            except Exception as exc:
+                logger.warning(f"[TelemetryParser] Could not delete {p}: {exc}")
+
+
 def parse_telemetry_file(
     file_path: Path,
     dcmscript_path: Optional[Path] = None,
+    *,
+    cpe_dir: Optional[Path] = None,
+    force: bool = False,
 ) -> Tuple[List[Dict], Dict, Dict, str]:
     """
     Convenience function: parse a telemetry file end-to-end.
@@ -933,11 +1021,22 @@ def parse_telemetry_file(
         file_path: Path to the primary telemetry file (telemetry2_0.txt).
         dcmscript_path: Optional path to dcmscript.log used as a fallback
             when T2 is disabled or yields no parsable reports.
+        cpe_dir: CPE directory for raw-cache read/write. When given the
+            result is cached to ``<cpe_dir>/raw_telemetry_cache.json``.
+        force: When True, bypass any cached result and re-parse.
 
     Returns:
         Tuple of (reports, merged, summary, source) where *source* is one
         of ``"telemetry2_0"``, ``"legacy"``, ``"dcmscript"``, or ``"none"``.
     """
+    if cpe_dir and not force and _raw_cache_is_fresh(cpe_dir):
+        cached = _load_raw_telemetry_cache(cpe_dir)
+        if cached is not None:
+            return cached
+
+    if cpe_dir and force:
+        _invalidate_api_response_cache(cpe_dir)
+
     reports: List[Dict[str, Any]] = []
     source = "none"
 
@@ -971,16 +1070,15 @@ def parse_telemetry_file(
         f"{summary.get('parsed', 0)}/{summary.get('total', 0)} reports OK"
     )
 
+    if cpe_dir:
+        _save_raw_telemetry_cache(cpe_dir, reports, merged, summary, source)
+
     return reports, merged, summary, source
 
 
 # ---------------------------------------------------------------------------
 # Cache: save / load the final API response
 # ---------------------------------------------------------------------------
-
-_TELEMETRY_CACHE_DIR = "telemetry"
-_CACHE_RESPONSE = "response.json"
-_CACHE_AVAILABLE = "available_fields.json"
 
 # Legacy cache filenames (removed on next save)
 _LEGACY_CACHE_FILES = ("reports.json", "summary.json", "configured_fields.json")

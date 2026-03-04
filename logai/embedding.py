@@ -275,7 +275,11 @@ class QdrantEmbeddingStore:
             else:
                 logger.info(f"[QdrantEmbeddingStore] Loading model from HuggingFace: {model_location}")
 
-            self.model = SentenceTransformer(model_location)
+            # Force CPU device to prevent MPS crashes in forked processes (Celery workers on macOS)
+            # MPS (Metal Performance Shaders) doesn't work with fork-based multiprocessing
+            device = "cpu"
+            logger.info(f"[QdrantEmbeddingStore] Loading model with device={device}")
+            self.model = SentenceTransformer(model_location, device=device)
             self.dim = self.model.get_sentence_embedding_dimension()
 
             # Warmup: Force model to fully load by encoding a dummy string

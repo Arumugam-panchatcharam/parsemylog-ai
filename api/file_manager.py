@@ -304,6 +304,7 @@ class FileManager:
                 os.makedirs(self.telemetry_path, exist_ok=True)
                 reports, merged, summary, _src = parse_telemetry_file(
                     primary, dcmscript_path=dcmscript_file,
+                    cpe_dir=Path(self.directory),
                 )
                 print(f"Telemetry: {summary.get('parsed', 0)}/{summary.get('total', 0)} reports parsed")
             except Exception as e:

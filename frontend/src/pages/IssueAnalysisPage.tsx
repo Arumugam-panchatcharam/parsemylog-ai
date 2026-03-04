@@ -28,7 +28,9 @@ export default function IssueAnalysisPage() {
   const [selectedGraphId, setSelectedGraphId] = useState<string>("");
   const [selectedCPE, setSelectedCPE] = useState<string | null>(null);
   const [analysisRunning, setAnalysisRunning] = useState(false);
+  const [forceReparse, setForceReparse] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const justStartedPollingRef = useRef<boolean>(false);
 
   // Detect project type: check if batch jobs exist
   const { data: jobsData } = useQuery({
@@ -113,14 +115,19 @@ export default function IssueAnalysisPage() {
 
   // Polling: stop when results become available
   useEffect(() => {
-    if (analysisRunning && overview?.available) {
+    // Only stop if we're running AND have results AND didn't just start
+    if (analysisRunning && overview?.available && !justStartedPollingRef.current) {
       setAnalysisRunning(false);
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
       }
     }
-  }, [analysisRunning, overview?.available]);
+    // Reset the flag after first effect run
+    if (justStartedPollingRef.current) {
+      justStartedPollingRef.current = false;
+    }
+  }, [analysisRunning, overview]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -131,7 +138,13 @@ export default function IssueAnalysisPage() {
 
   const startPolling = useCallback(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    // Set flag to prevent immediate stop
+    justStartedPollingRef.current = true;
+    // Stop polling effect from immediately canceling by setting running first
     setAnalysisRunning(true);
+    // Then flush stale results - this won't trigger immediate re-render but will update cache
+    qc.setQueryData(["issueAnalysis", projectId, effectiveJobId], undefined);
+    setSelectedCPE(null);
     pollTimerRef.current = setInterval(() => {
       qc.invalidateQueries({
         queryKey: ["issueAnalysis", projectId, effectiveJobId],
@@ -143,11 +156,13 @@ export default function IssueAnalysisPage() {
   const triggerMut = useMutation({
     mutationFn: () => {
       if (!isBatchProject) {
-        return issueAnalysisApi.triggerDirect(projectId!, selectedGraphId);
+        return issueAnalysisApi.triggerDirect(projectId!, selectedGraphId, forceReparse);
       }
-      return issueAnalysisApi.trigger(projectId!, selectedJobId, selectedGraphId);
+      return issueAnalysisApi.trigger(projectId!, selectedJobId, selectedGraphId, forceReparse);
     },
-    onSuccess: () => startPolling(),
+    onSuccess: () => {
+      startPolling();
+    },
   });
 
   if (!projectId) {
@@ -195,7 +210,10 @@ export default function IssueAnalysisPage() {
             <label className="block text-xs text-muted-foreground mb-1">Knowledge Graph</label>
             <select
               value={selectedGraphId}
-              onChange={(e) => setSelectedGraphId(e.target.value)}
+              onChange={(e) => {
+                setSelectedGraphId(e.target.value);
+                setSelectedCPE(null);
+              }}
               className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background"
             >
               <option value="">Select graph...</option>
@@ -207,7 +225,16 @@ export default function IssueAnalysisPage() {
             </select>
           </div>
 
-          <div className="flex items-end gap-2">
+          <div className="flex items-end gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={forceReparse}
+                onChange={(e) => setForceReparse(e.target.checked)}
+                className="rounded border-border"
+              />
+              Re-parse telemetry
+            </label>
             <button
               onClick={() => triggerMut.mutate()}
               disabled={
@@ -228,25 +255,22 @@ export default function IssueAnalysisPage() {
             </button>
           </div>
         </div>
-
-        {analysisRunning && (
-          <div className="mt-3 flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
-            <CircularProgress size={14} />
-            Analysis running... refreshing every 5 seconds.
-          </div>
-        )}
       </div>
 
-      {/* Loading state */}
-      {overviewLoading && (
-        <div className="flex items-center justify-center py-16">
+      {/* Loading / Running state */}
+      {(overviewLoading || analysisRunning) && (
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <CircularProgress size={32} />
-          <span className="ml-3 text-muted-foreground">Loading analysis...</span>
+          <span className="mt-3 text-sm">
+            {analysisRunning
+              ? "Analysis in progress\u2026 refreshing every 5 seconds."
+              : "Loading analysis\u2026"}
+          </span>
         </div>
       )}
 
       {/* No results */}
-      {!overviewLoading && !overview?.available && (
+      {!overviewLoading && !analysisRunning && !overview?.available && (
         <div className="text-center py-12 text-muted-foreground">
           <HubIcon sx={{ fontSize: 48 }} className="text-muted-foreground/30 mb-3" />
           <p className="mb-2">No analysis results available yet.</p>
@@ -255,7 +279,7 @@ export default function IssueAnalysisPage() {
       )}
 
       {/* Results */}
-      {overview?.available && fleet && (
+      {!analysisRunning && overview?.available && fleet && (
         <>
           <FleetOverview fleet={fleet} />
 

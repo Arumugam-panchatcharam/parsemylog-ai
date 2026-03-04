@@ -18,8 +18,7 @@
           "STA\\s+(left|removed|kicked|rejected)",
           "wifi_hal_cb_assoc_dev_evt_handler",
           "invoke\\s+disassoc\\s+callback"
-        ],
-        "source_domains": ["wireless"]
+        ]
       },
       "description": "High rate of WiFi client disconnections (disassoc/deauth events)",
       "position_x": 0,
@@ -39,8 +38,7 @@
           "\\b11v\\b",
           "steer(ing)?\\s+(fail|reject|timeout|abort)",
           "band\\s*steering"
-        ],
-        "source_domains": ["wireless", "mesh"]
+        ]
       },
       "description": "802.11v BSS Transition Management steering events",
       "position_x": 200,
@@ -59,8 +57,7 @@
           "\\bradar\\b",
           "\\bCAC\\b",
           "channel\\s+(switch|change|dfs)"
-        ],
-        "source_domains": ["wireless"]
+        ]
       },
       "description": "DFS radar detection and channel switch / CAC events",
       "position_x": 400,
@@ -80,8 +77,7 @@
           "driver\\s+(crash|recovery|reset|stuck|hang)",
           "radio\\s+(reset|restart|down|fail)",
           "VAP\\s+(down|fail|destroy)"
-        ],
-        "source_domains": ["wireless", "platform", "common"]
+        ]
       },
       "description": "WiFi driver crashes, radio resets, and VAP failures",
       "position_x": 0,
@@ -104,8 +100,7 @@
           "CONNECTION_LOST",
           "PppMgr_Process.*Failed",
           "pppmanager.*error"
-        ],
-        "source_domains": ["core_router"]
+        ]
       },
       "description": "WAN/PPP/GPON/DSL link failures and disconnections",
       "position_x": 200,
@@ -124,8 +119,7 @@
           "\\bOOM\\b",
           "memory\\s*(leak|exhausted|low|pressure)",
           "Mem\\s*critical"
-        ],
-        "source_domains": ["platform", "common"]
+        ]
       },
       "description": "Out-of-memory, OOM killer, and memory pressure events",
       "position_x": 400,
@@ -149,8 +143,7 @@
           "hung_task",
           "soft\\s+lockup",
           "core\\s+dump"
-        ],
-        "source_domains": ["platform", "common"]
+        ]
       },
       "description": "Kernel panics, oops, watchdog timeouts, and lockups",
       "position_x": 600,
@@ -167,8 +160,7 @@
         "keywords": [
           "\\bselfheal\\b",
           "self_heal"
-        ],
-        "source_domains": ["platform", "common"]
+        ]
       },
       "description": "SelfHeal daemon triggered restarts or reboots",
       "position_x": 0,
@@ -191,8 +183,7 @@
         ],
         "exclusions": [
           "getDHCPv4ServerPoolParametersFromPSM"
-        ],
-        "source_domains": ["core_router", "platform", "common"]
+        ]
       },
       "description": "CCSP component crashes and SSP process restarts",
       "position_x": 200,

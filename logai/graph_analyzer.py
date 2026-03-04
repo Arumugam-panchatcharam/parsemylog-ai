@@ -4,8 +4,7 @@ Knowledge-Graph-Driven Issue Analyzer
 
 Generic analysis engine that reads a user-defined knowledge graph
 (nodes + causal edges stored in SQLite) and evaluates CPE log data
-against it.  Replaces the hardcoded category lists in the former
-legacy reboot analysis modules.
+against it.
 
 Algorithm
 ---------
@@ -28,6 +27,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
+import subprocess
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -233,7 +234,135 @@ def _compile_node_patterns(node: Dict) -> Tuple[List[re.Pattern], List[re.Patter
 
 
 # ---------------------------------------------------------------------------
-# Parquet loading
+# Ripgrep-based detection
+# ---------------------------------------------------------------------------
+
+_RG_BIN: Optional[str] = shutil.which("rg")
+_TS_RX = re.compile(r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})")
+
+_RG_SKIP_DIRS = frozenset({
+    "raw", "staging", "issue_analysis", "telemetry",
+    ".git", "__pycache__",
+})
+
+_RG_SKIP_FILES = frozenset({
+    "raw_telemetry_cache.json", ".version_cache.json",
+    ".device_info_cache.json", ".reboots_cache.json",
+})
+
+
+def _run_rg_for_node(
+    node: Dict,
+    cpe_dir: Path,
+) -> List[Dict[str, Any]]:
+    """Run ripgrep for a single EVENT node and return structured matches.
+
+    Each match dict contains ``text`` (the matched line, up to 400 chars),
+    ``file`` (relative filename), and ``timestamp`` (ISO string or ``""``).
+    """
+    if not _RG_BIN:
+        return []
+
+    dc = node.get("detection_config") or {}
+    raw_patterns = list(dc.get("keywords", [])) + list(dc.get("patterns", []))
+    if not raw_patterns:
+        return []
+
+    combined = "|".join(f"({p})" for p in raw_patterns)
+
+    cmd = [
+        _RG_BIN, "--json", "-i", "-e", combined,
+        "--max-filesize", "50M",
+    ]
+    for skip in _RG_SKIP_DIRS:
+        cmd.extend(["--glob", f"!{skip}/"])
+    for skip in _RG_SKIP_FILES:
+        cmd.extend(["--glob", f"!{skip}"])
+    cmd.append(str(cpe_dir))
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"[GraphAnalyzer] rg timeout for node {node.get('name')}")
+        return []
+    except Exception as exc:
+        logger.warning(f"[GraphAnalyzer] rg error for node {node.get('name')}: {exc}")
+        return []
+
+    matches: List[Dict[str, Any]] = []
+    for line in proc.stdout.splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") != "match":
+            continue
+        data = obj.get("data", {})
+        text = data.get("lines", {}).get("text", "").strip()
+        if not text:
+            continue
+
+        fpath = data.get("path", {}).get("text", "")
+        rel = fpath.replace(str(cpe_dir) + "/", "", 1) if fpath else ""
+
+        ts_match = _TS_RX.search(text)
+        ts_str = ts_match.group(1).replace("T", " ") if ts_match else ""
+
+        matches.append({
+            "text": text[:400],
+            "file": rel,
+            "timestamp": ts_str,
+        })
+
+    return matches
+
+
+def _detect_events_via_rg(
+    node: Dict,
+    cpe_dir: Path,
+    compiled_exclusions: List[re.Pattern],
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Detect events for a node using ripgrep on the raw CPE directory.
+
+    This replaces the parquet-based ``_detect_events_for_node`` and
+    eliminates the need for ``source_domains``.
+    """
+    evidence: Dict[str, Any] = {"count": 0, "sample_lines": [], "timestamps": []}
+
+    rg_matches = _run_rg_for_node(node, cpe_dir)
+    if not rg_matches:
+        return evidence
+
+    for m in rg_matches:
+        text = m["text"]
+
+        if compiled_exclusions and any(ex.search(text) for ex in compiled_exclusions):
+            continue
+
+        ts = _parse_ts(m["timestamp"]) if m["timestamp"] else None
+        if window_start is not None and (ts is None or ts < window_start):
+            continue
+        if window_end is not None and (ts is None or ts > window_end):
+            continue
+
+        evidence["count"] += 1
+        if ts:
+            evidence["timestamps"].append(ts.isoformat())
+        if len(evidence["sample_lines"]) < 5:
+            evidence["sample_lines"].append(text)
+
+    return evidence
+
+
+# ---------------------------------------------------------------------------
+# Parquet loading (kept as fallback when rg is unavailable)
 # ---------------------------------------------------------------------------
 
 def _load_all_parquet_events(cpe_dir: Path) -> pd.DataFrame:
@@ -461,10 +590,11 @@ def _get_device_identity(
     cpe_dir: Path,
     serial: str,
     telemetry_reports: Optional[List[Dict[str, Any]]] = None,
+    force: bool = False,
 ) -> Dict[str, Any]:
     identity: Dict[str, Any] = {"cpe_serial": serial}
     try:
-        version_info = find_and_parse_version_txt(cpe_dir)
+        version_info = find_and_parse_version_txt(cpe_dir, force=force)
         if version_info:
             fw_list = version_info.get("firmware_versions", [])
             if fw_list:
@@ -473,7 +603,7 @@ def _get_device_identity(
     except Exception:
         pass
     try:
-        fallback = find_and_build_fallback_device_info(cpe_dir)
+        fallback = find_and_build_fallback_device_info(cpe_dir, force=force)
         if fallback:
             identity.setdefault("mac", fallback.get("mac", ""))
             if not identity.get("model"):
@@ -491,6 +621,17 @@ def _get_device_identity(
     return identity
 
 
+def _ts_to_str(ts: Any, fallback: str = "") -> str:
+    """Convert a time value to an ISO string, handling both datetime and str."""
+    if ts is None:
+        return fallback
+    if isinstance(ts, str):
+        return ts
+    if isinstance(ts, datetime):
+        return ts.isoformat()
+    return str(ts)
+
+
 def _detect_uptime_resets(reports: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     if len(reports) < 2:
         return []
@@ -501,8 +642,7 @@ def _detect_uptime_resets(reports: List[Dict[str, Any]]) -> List[Dict[str, str]]
         cur_up = cur.get("uptime", 0) or 0
         if isinstance(prev_up, (int, float)) and isinstance(cur_up, (int, float)):
             if cur_up < prev_up and prev_up > 300:
-                ts = cur.get("time")
-                ts_str = ts.isoformat() if ts else cur.get("log_timestamp", "")
+                ts_str = _ts_to_str(cur.get("time"), cur.get("log_timestamp", ""))
                 resets.append({"timestamp": ts_str, "reason": "uptime_reset_detected"})
         prev = cur
     return resets
@@ -524,8 +664,7 @@ def _extract_telemetry_timeseries(reports: List[Dict[str, Any]]) -> Dict[str, An
 
     for r in reports:
         fields = r.get("fields", {})
-        ts = r.get("time")
-        ts_str = ts.isoformat() if ts else r.get("log_timestamp", "")
+        ts_str = _ts_to_str(r.get("time"), r.get("log_timestamp", ""))
         ts_data["timestamps"].append(ts_str)
 
         cpu_raw = fields.get("Device.DeviceInfo.ProcessStatus.CPUUsage",
@@ -621,8 +760,11 @@ def _extract_snapshot(fields: Dict, keys: List[str]) -> Dict[str, Any]:
 
 def _resolve_subgraph_nodes(
     graph_def: Dict[str, Any],
-    all_events: Dict[str, pd.DataFrame],
     node_evidence: Dict[str, Dict[str, Any]],
+    cpe_dir: Optional[Path] = None,
+    all_events: Optional[pd.DataFrame] = None,
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
     evaluation_stack: Optional[set] = None,
 ) -> None:
     """Recursively evaluate SUBGRAPH nodes and populate *node_evidence*.
@@ -634,6 +776,8 @@ def _resolve_subgraph_nodes(
     parent graph's edge evaluation sees the SUBGRAPH node as if it were
     a regular EVENT node.
     """
+    use_rg = _RG_BIN and cpe_dir
+
     if evaluation_stack is None:
         evaluation_stack = set()
     parent_id = graph_def.get("id", "")
@@ -656,11 +800,26 @@ def _resolve_subgraph_nodes(
             sub_compiled[sn["id"]] = _compile_node_patterns(sn)
 
         sub_evidence: Dict[str, Dict[str, Any]] = {}
-        for sn in sub_event_nodes:
-            pats, excl = sub_compiled[sn["id"]]
-            sub_evidence[sn["id"]] = _detect_events_for_node(sn, all_events, pats, excl)
+        if use_rg:
+            for sn in sub_event_nodes:
+                _, excl = sub_compiled[sn["id"]]
+                sub_evidence[sn["id"]] = _detect_events_via_rg(
+                    sn, cpe_dir, excl, window_start, window_end,
+                )
+        else:
+            for sn in sub_event_nodes:
+                pats, excl = sub_compiled[sn["id"]]
+                sub_evidence[sn["id"]] = _detect_events_for_node(
+                    sn, all_events if all_events is not None else pd.DataFrame(),
+                    pats, excl, window_start, window_end,
+                )
 
-        _resolve_subgraph_nodes(sub_def, all_events, sub_evidence, evaluation_stack)
+        _resolve_subgraph_nodes(
+            sub_def, sub_evidence, cpe_dir=cpe_dir,
+            all_events=all_events,
+            window_start=window_start, window_end=window_end,
+            evaluation_stack=evaluation_stack,
+        )
 
         sub_G = build_networkx_graph(sub_def)
         sub_result = _evaluate_graph(sub_G, sub_evidence)
@@ -711,31 +870,38 @@ def analyze_cpe(
     graph_def: Dict[str, Any],
     project_id: str = "",
     job_id: str = "",
+    force: bool = False,
 ) -> Dict[str, Any]:
     """
     Graph-driven per-CPE analysis.
 
-    Detects events from parquet data, evaluates causal edges from the
-    knowledge graph, and produces a result structure for the
-    IssueAnalysisPage frontend.
+    Detects events using ripgrep (preferred) or parquet fallback,
+    evaluates causal edges from the knowledge graph, and produces a
+    result structure for the IssueAnalysisPage frontend.
+
+    Args:
+        force: When True, bypass telemetry / device-info caches and
+            re-parse from raw files.
     """
     t0 = time.time()
+    use_rg = bool(_RG_BIN)
 
     G = build_networkx_graph(graph_def)
 
-    # Pre-compile patterns for every EVENT node
     event_nodes = [n for n in graph_def["nodes"] if n["node_type"] == "EVENT"]
     compiled_map: Dict[str, Tuple[List[re.Pattern], List[re.Pattern]]] = {}
     for n in event_nodes:
         compiled_map[n["id"]] = _compile_node_patterns(n)
 
-    # Telemetry
+    # Telemetry (uses raw cache when available)
     t2_path = cpe_dir / "telemetry2_0.txt"
     dcm_path = cpe_dir / "dcmscript.log"
-    tel_reports, _, _, tel_source = parse_telemetry_file(t2_path, dcmscript_path=dcm_path)
+    tel_reports, _, _, tel_source = parse_telemetry_file(
+        t2_path, dcmscript_path=dcm_path, cpe_dir=cpe_dir, force=force,
+    )
 
-    # Identity
-    identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports)
+    # Identity (uses caches when available)
+    identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports, force=force)
     identity["project_id"] = project_id
     identity["job_id"] = job_id
 
@@ -748,19 +914,28 @@ def analyze_cpe(
             reboots.append({"timestamp": ur["timestamp"], "reason": ur["reason"]})
     reboots.sort(key=lambda r: r.get("timestamp", ""))
 
-    # Load all parquet events
-    all_events = _load_all_parquet_events(cpe_dir)
+    # Load parquet events as fallback when rg is unavailable
+    all_events: Optional[pd.DataFrame] = None
+    if not use_rg:
+        all_events = _load_all_parquet_events(cpe_dir)
 
     # -- Global evidence (across all time) --
     global_evidence: Dict[str, Dict[str, Any]] = {}
-    for n in event_nodes:
-        pats, excl = compiled_map[n["id"]]
-        global_evidence[n["id"]] = _detect_events_for_node(
-            n, all_events, pats, excl,
-        )
+    if use_rg:
+        for n in event_nodes:
+            _, excl = compiled_map[n["id"]]
+            global_evidence[n["id"]] = _detect_events_via_rg(n, cpe_dir, excl)
+    else:
+        for n in event_nodes:
+            pats, excl = compiled_map[n["id"]]
+            global_evidence[n["id"]] = _detect_events_for_node(
+                n, all_events, pats, excl,
+            )
 
     # Resolve SUBGRAPH nodes (recursive evaluation of referenced graphs)
-    _resolve_subgraph_nodes(graph_def, all_events, global_evidence)
+    _resolve_subgraph_nodes(
+        graph_def, global_evidence, cpe_dir=cpe_dir, all_events=all_events,
+    )
 
     # Global graph evaluation
     global_graph_eval = _evaluate_graph(G, global_evidence)
@@ -784,13 +959,24 @@ def analyze_cpe(
         win_end = rb_ts + timedelta(minutes=REBOOT_WINDOW_AFTER_MIN)
 
         window_evidence: Dict[str, Dict[str, Any]] = {}
-        for n in event_nodes:
-            pats, excl = compiled_map[n["id"]]
-            window_evidence[n["id"]] = _detect_events_for_node(
-                n, all_events, pats, excl, win_start, win_end,
-            )
+        if use_rg:
+            for n in event_nodes:
+                _, excl = compiled_map[n["id"]]
+                window_evidence[n["id"]] = _detect_events_via_rg(
+                    n, cpe_dir, excl, win_start, win_end,
+                )
+        else:
+            for n in event_nodes:
+                pats, excl = compiled_map[n["id"]]
+                window_evidence[n["id"]] = _detect_events_for_node(
+                    n, all_events, pats, excl, win_start, win_end,
+                )
 
-        _resolve_subgraph_nodes(graph_def, all_events, window_evidence)
+        _resolve_subgraph_nodes(
+            graph_def, window_evidence, cpe_dir=cpe_dir,
+            all_events=all_events,
+            window_start=win_start, window_end=win_end,
+        )
 
         # Convert to name-keyed dict for backward compat with frontend
         window_events: Dict[str, Dict[str, Any]] = {}
@@ -1022,6 +1208,7 @@ def generate_batch_analysis(
     job_id: str,
     graph_id: str = "",
     graph_def: Optional[Dict[str, Any]] = None,
+    force: bool = False,
 ) -> Dict[str, Any]:
     """
     Generate analysis for a batch job using the specified knowledge graph.
@@ -1034,25 +1221,28 @@ def generate_batch_analysis(
     if graph_def is None:
         graph_def = load_graph_definition(graph_id)
 
+    use_rg = bool(_RG_BIN)
+
     output_dir = project_dir / OUTPUT_DIR_NAME
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cpe_dirs = sorted([
         d for d in project_dir.iterdir()
         if d.is_dir()
-        and d.name not in (OUTPUT_DIR_NAME, "llm_reboot_summary")
+        and d.name != OUTPUT_DIR_NAME
         and not d.name.startswith(".")
     ])
 
     per_cpe_records = []
     for cpe_dir in cpe_dirs:
         serial = cpe_dir.name
-        if not any(cpe_dir.glob("*_rg.parquet")):
+        if not use_rg and not any(cpe_dir.glob("*_rg.parquet")):
             continue
 
         try:
             record = analyze_cpe(
                 cpe_dir, serial, graph_def, project_id, job_id,
+                force=force,
             )
             per_cpe_records.append(record)
             logger.info(

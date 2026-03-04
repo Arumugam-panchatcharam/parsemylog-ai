@@ -65,6 +65,7 @@ def trigger_issue_analysis(project_id, job_id):
     graph_id = data.get("graph_id")
     if not graph_id:
         return jsonify({"error": "graph_id is required"}), 400
+    force_reparse = bool(data.get("force_reparse", False))
 
     graph = dbm.db.session.get(dbm.KnowledgeGraph, graph_id)
     if not graph:
@@ -74,6 +75,7 @@ def trigger_issue_analysis(project_id, job_id):
 
     task = run_issue_analysis.apply_async(
         args=(job_id, user_id, project_id, graph_id),
+        kwargs={"force": force_reparse},
         priority=5,
     )
 
@@ -159,6 +161,7 @@ def trigger_direct_analysis(project_id):
     graph_id = data.get("graph_id")
     if not graph_id:
         return jsonify({"error": "graph_id is required"}), 400
+    force_reparse = bool(data.get("force_reparse", False))
 
     graph = dbm.db.session.get(dbm.KnowledgeGraph, graph_id)
     if not graph:
@@ -168,6 +171,7 @@ def trigger_direct_analysis(project_id):
 
     task = run_issue_analysis.apply_async(
         args=("__direct__", user_id, project_id, graph_id),
+        kwargs={"force": force_reparse},
         priority=5,
     )
 

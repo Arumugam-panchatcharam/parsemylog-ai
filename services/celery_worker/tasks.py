@@ -176,6 +176,7 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
         from api.user_db_mngr import DBManager
         from api.file_manager import merge_cpe_logs, register_cpe_files
         from logai.info_extractor import find_and_parse_version_txt, find_and_build_fallback_device_info
+        from logai.telemetry_parser import parse_telemetry_file
         from logai.utils.constants import UPLOAD_DIRECTORY
         from flask import Flask
         
@@ -237,26 +238,43 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             logger.info(f"[CPE {serial}] Merging logs...")
             merge_cpe_logs(staging_dir, cpe_dir)
             
-            # Step 4: Quick metadata scan
+            # Step 4: Info extraction (cached to disk)
             mac = None
             date_from = None
             date_to = None
-            
+
             try:
-                version_info = find_and_parse_version_txt(cpe_dir)
-                if version_info:
-                    pass
-            except:
+                find_and_parse_version_txt(cpe_dir)
+            except Exception:
                 pass
-            
+
             try:
                 fallback_info = find_and_build_fallback_device_info(cpe_dir)
                 if fallback_info:
                     mac = fallback_info.get("mac")
-            except:
+            except Exception:
                 pass
-            
-            # Step 5: Save CPE + register files (shared with normal upload path)
+
+            # Step 5: Telemetry parsing (cached to disk)
+            try:
+                t2_path = cpe_dir / "telemetry2_0.txt"
+                dcm_path = cpe_dir / "dcmscript.log"
+                tel_reports, _, tel_summary, _ = parse_telemetry_file(
+                    t2_path, dcmscript_path=dcm_path, cpe_dir=cpe_dir,
+                )
+                if tel_summary:
+                    date_from = tel_summary.get("date_range", {}).get("from")
+                    date_to = tel_summary.get("date_range", {}).get("to")
+                if not mac and tel_reports:
+                    for r in tel_reports:
+                        m = r.get("mac", "")
+                        if m:
+                            mac = m.replace(":", "").lower()
+                            break
+            except Exception:
+                pass
+
+            # Step 6: Save CPE + register files (shared with normal upload path)
             dbm.save_cpe(project_id, serial, mac, date_from, date_to)
             log_files = register_cpe_files(cpe_dir, project_id, serial, dbm)
             logger.info(f"[CPE {serial}] Registered {len(log_files)} files")
@@ -264,7 +282,7 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             # Check cancellation before the most expensive step
             _check_job_cancelled(dbm, job_id)
             
-            # Step 6: Index patterns (uses shared Qdrant collection with CPE metadata)
+            # Step 7: Index patterns (uses shared Qdrant collection with CPE metadata)
             patterns_indexed = 0
             try:
                 from api.indexer import run_indexer_async
@@ -294,7 +312,7 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             except Exception as e:
                 logger.warning(f"[CPE {serial}] Cleanup error: {e}")
             
-            # Step 7: Mark as completed
+            # Step 8: Mark as completed
             elapsed = time.time() - start_time
             dbm.update_cpe_record_status(
                 record_id, 
@@ -311,7 +329,6 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             if job and (job.processed_cpes + job.failed_cpes) >= job.total_cpes:
                 dbm.update_batch_job_status(job_id, "completed")
                 logger.info(f"[BatchJob {job_id}] All CPEs processed!")
-                _trigger_reboot_summary(job_id, user_id, project_id)
             
             logger.info(f"[CPE {serial}] Completed in {elapsed:.1f}s - {len(log_files)} logs, {patterns_indexed} patterns")
             
@@ -350,63 +367,15 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
                         dbm.update_batch_job_status(job_id, "failed", "All CPEs failed")
                     else:
                         dbm.update_batch_job_status(job_id, "completed")
-                        _trigger_reboot_summary(job_id, user_id, project_id)
         except:
             pass
         
         raise
 
 
-def _trigger_reboot_summary(job_id: str, user_id: int, project_id: str):
-    """Dispatch reboot summary after batch completion."""
-    try:
-        generate_reboot_summary.apply_async(
-            args=(job_id, user_id, project_id),
-            priority=3,
-        )
-        logger.info(f"[BatchJob {job_id}] Dispatched reboot summary generation")
-    except Exception as exc:
-        logger.warning(f"[BatchJob {job_id}] Failed to dispatch reboot summary: {exc}")
-
-
-@celery.task(bind=True, name="generate_reboot_summary")
-def generate_reboot_summary(self, job_id: str, user_id: int, project_id: str):
-    """
-    Generate LLM-ready reboot root-cause summary for a completed batch job.
-
-    Produces:
-    - reboot_summary_per_cpe.jsonl (one JSON line per CPE)
-    - fleet_reboot_summary.json (fleet-wide aggregate)
-    """
-    logger.info(f"[RebootSummary] Task started for job={job_id}, project={project_id}")
-    try:
-        from logai.utils.constants import UPLOAD_DIRECTORY
-        from logai.reboot_llm_summary import generate_batch_reboot_summary
-
-        project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
-        if not project_dir.exists():
-            logger.error(f"[RebootSummary] Project dir not found: {project_dir}")
-            return {"status": "error", "message": "Project directory not found"}
-
-        result = generate_batch_reboot_summary(
-            project_dir=project_dir,
-            project_id=project_id,
-            job_id=job_id,
-        )
-
-        logger.info(
-            f"[RebootSummary] Completed for job={job_id}: "
-            f"{result['per_cpe_count']} CPEs in {result['elapsed_sec']}s"
-        )
-        return {"status": "completed", **result}
-
-    except Exception as exc:
-        logger.error(f"[RebootSummary] Error for job={job_id}: {exc}", exc_info=True)
-        return {"status": "error", "message": str(exc)}
-
-
 @celery.task(bind=True, name="run_issue_analysis")
-def run_issue_analysis(self, job_id: str, user_id: int, project_id: str, graph_id: str):
+def run_issue_analysis(self, job_id: str, user_id: int, project_id: str,
+                       graph_id: str, force: bool = False):
     """
     Run graph-driven issue analysis for a completed batch job.
     Uses the specified knowledge graph to detect patterns and causal chains.
@@ -440,6 +409,7 @@ def run_issue_analysis(self, job_id: str, user_id: int, project_id: str, graph_i
             project_id=project_id,
             job_id=job_id,
             graph_def=graph_def,
+            force=force,
         )
 
         logger.info(

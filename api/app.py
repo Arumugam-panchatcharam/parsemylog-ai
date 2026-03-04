@@ -69,9 +69,13 @@ def get_embedding_model():
 
         model_path = os.path.join(BASE_DIR, SENTENCE_TRANSFORMER_MODE_NAME)
 
+        # Force CPU device to prevent MPS crashes in forked processes (Celery workers on macOS)
+        device = "cpu"
+        logging.info(f"Loading embedding model with device={device}")
+
         if os.path.exists(model_path):
             try:
-                _embedding_model = SentenceTransformer(model_path)
+                _embedding_model = SentenceTransformer(model_path, device=device)
                 logging.info(f"Loaded embedding model from {model_path}")
                 return _embedding_model
             except Exception as exc:
@@ -80,7 +84,7 @@ def get_embedding_model():
                 shutil.rmtree(model_path, ignore_errors=True)
 
         logging.info("Downloading BGE embedding model (BAAI/bge-small-en-v1.5)...")
-        _embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        _embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
         _embedding_model.save(model_path)
         logging.info(f"Saved embedding model to {model_path}")
         return _embedding_model

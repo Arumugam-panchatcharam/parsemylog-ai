@@ -15,20 +15,20 @@ context_lines: 3
 case_insensitive: true
 
 literals:
-  - "T2"
-  - "Telemetry"
-  - "Report"
-  - "cJSON"
   - "WEBPA_ERR"
   - "PARODUS_DISCONNECT"
-  - "WEBPA"
-  - "PARODUS"
-  - "RTMessage"
-  - "xconf"
-  - "XDNS"
-  - "TlsVerify"
+  - "PARODUS_ERR"
+  - "PARODUS.ERR"
+  - "WEBPA.ERR"
+  - "XCONF.ERR"
+  - "RTMessage_ERR"
+  - "XDNS_ERR"
 
 regex:
-  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|disconnect(ed)?)\\b"
-  - "\\b(telemetry|telemetry_marker|webpa|parodus|xconf|rtmessage|rbus|xdns|tls)\\b"
-  - "\\b(token|auth|certificate|cloud|upstream|downstream)\\s*(fail|error|expired|invalid|reject|disconnect|lost)?\\b"
+  # Match error/warning/failure patterns
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|timeout|invalid|disconnect(ed)?|reject(ed)?|denied|lost|expired|corrupt)\\b"
+  # Match ERROR/WARN log levels
+  - "\\.(ERR|ERROR|WARN|WARNING|FATAL|CRITICAL)\\b"
+  # Match connection/auth failures in telemetry context
+  - "\\b(telemetry|webpa|parodus|xconf|rtmessage|rbus|xdns|tls)\\s+(err|error|fail|disconnect|timeout|reject)"
+  - "\\b(token|auth|certificate|cloud|upstream|downstream|connection)\\s*(fail|error|expired|invalid|reject|disconnect|lost|denied)"
