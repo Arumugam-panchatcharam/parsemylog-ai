@@ -28,6 +28,7 @@ import json
 import logging
 import re
 import shutil
+from datetime import datetime
 import subprocess
 import time
 from collections import Counter, defaultdict
@@ -93,6 +94,15 @@ _RXTX_FIELDS = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _json_serial(obj):
+    """JSON serializer for objects not serializable by default json code."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if hasattr(obj, '__dict__'):
+        return str(obj)
+    return str(obj)
+
 
 def _parse_ts(s: str) -> Optional[datetime]:
     if not s:
@@ -1280,12 +1290,12 @@ def generate_batch_analysis(
 
     per_cpe_path = output_dir / PER_CPE_FILE
     with open(per_cpe_path, "w") as f:
-        json.dump(per_cpe_records, f, default=str)
+        json.dump(per_cpe_records, f, default=_json_serial)
 
     fleet = build_fleet_report(per_cpe_records, graph_def, project_id, job_id)
     fleet_path = output_dir / FLEET_FILE
     with open(fleet_path, "w") as f:
-        json.dump(fleet, f, indent=2, default=str)
+        json.dump(fleet, f, indent=2, default=_json_serial)
 
     elapsed = round(time.time() - t0, 1)
     logger.info(
@@ -1311,18 +1321,33 @@ def load_analysis_outputs(project_dir: Path) -> Dict[str, Any]:
     per_cpe_path = output_dir / PER_CPE_FILE
 
     if fleet_path.exists():
-        with open(fleet_path) as f:
-            result["fleet_report"] = json.load(f)
-        result["available"] = True
+        try:
+            with open(fleet_path) as f:
+                result["fleet_report"] = json.load(f)
+            result["available"] = True
+        except json.JSONDecodeError as exc:
+            logger.error(f"[GraphAnalyzer] Failed to load fleet report: {exc}")
+            # Try to recover by returning partial data
+            result["available"] = False
 
     if per_cpe_path.exists():
-        with open(per_cpe_path) as f:
-            per_cpe_list = json.load(f)
-        result["per_cpe_count"] = len(per_cpe_list)
-        result["per_cpe_serials"] = [
-            r.get("identity", {}).get("cpe_serial", "")
-            for r in per_cpe_list
-        ]
+        try:
+            with open(per_cpe_path) as f:
+                per_cpe_list = json.load(f)
+            result["per_cpe_count"] = len(per_cpe_list)
+            result["per_cpe_serials"] = [
+                r.get("identity", {}).get("cpe_serial", "")
+                for r in per_cpe_list
+            ]
+        except json.JSONDecodeError as exc:
+            logger.error(
+                f"[GraphAnalyzer] Failed to load per-CPE analysis at "
+                f"position {exc.pos}: {exc.msg}"
+            )
+            # If per-CPE fails but fleet exists, still mark as available
+            if result.get("fleet_report"):
+                result["per_cpe_count"] = 0
+                result["per_cpe_serials"] = []
 
     return result
 
