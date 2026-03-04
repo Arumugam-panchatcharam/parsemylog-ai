@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
+import tempfile
 from datetime import datetime
 import subprocess
 import time
@@ -1233,6 +1235,35 @@ def build_fleet_report(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _atomic_json_write(
+    path: Path, data: Any, indent: Optional[int] = None,
+) -> None:
+    """Write JSON to *path* atomically via a temp file + rename.
+
+    This prevents readers from seeing a half-written file when the writer
+    is still serialising (the race condition that causes JSONDecodeError
+    when the API reads while Celery is writing).
+    """
+    fd, tmp = tempfile.mkstemp(
+        dir=str(path.parent), suffix=".tmp", prefix=path.stem + "_",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=indent, default=_json_serial)
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -1289,13 +1320,11 @@ def generate_batch_analysis(
             logger.error(f"[GraphAnalyzer] Error analyzing {serial}: {exc}", exc_info=True)
 
     per_cpe_path = output_dir / PER_CPE_FILE
-    with open(per_cpe_path, "w") as f:
-        json.dump(per_cpe_records, f, default=_json_serial)
+    _atomic_json_write(per_cpe_path, per_cpe_records)
 
     fleet = build_fleet_report(per_cpe_records, graph_def, project_id, job_id)
     fleet_path = output_dir / FLEET_FILE
-    with open(fleet_path, "w") as f:
-        json.dump(fleet, f, indent=2, default=_json_serial)
+    _atomic_json_write(fleet_path, fleet, indent=2)
 
     elapsed = round(time.time() - t0, 1)
     logger.info(
@@ -1358,8 +1387,14 @@ def load_cpe_analysis(project_dir: Path, cpe_serial: str) -> Optional[Dict[str, 
     if not per_cpe_path.exists():
         return None
 
-    with open(per_cpe_path) as f:
-        records = json.load(f)
+    try:
+        with open(per_cpe_path) as f:
+            records = json.load(f)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.error(
+            f"[GraphAnalyzer] Corrupt per-CPE JSON at {per_cpe_path}: {exc}"
+        )
+        return None
 
     for rec in records:
         if rec.get("identity", {}).get("cpe_serial", "") == cpe_serial:
