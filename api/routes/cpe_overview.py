@@ -13,7 +13,8 @@ import shutil
 import subprocess
 import time
 from collections import Counter
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -526,6 +527,66 @@ def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
     return total
 
 
+def _run_rg_count_all_cpes(
+    rg_binary: str,
+    regex: str,
+    base_dir: Path,
+    cpe_serials: List[str],
+) -> Dict[str, int]:
+    """Run a single ``rg -c`` over the whole project dir and attribute counts
+    to individual CPEs by parsing the file paths.
+
+    Returns a dict mapping ``serial -> total_match_count``.
+    For 500 CPEs this is ~500x faster than one subprocess per CPE.
+    """
+    counts: Dict[str, int] = {s: 0 for s in cpe_serials}
+
+    cmd = [
+        rg_binary,
+        "-c",
+        "-i",
+        "--max-filesize", "500M",
+        "-e", regex,
+        str(base_dir),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"[CPEOverview] rg -c (all CPEs) timed out for: {regex[:80]}")
+        return counts
+    except Exception as e:
+        logger.warning(f"[CPEOverview] rg -c (all CPEs) error: {e}")
+        return counts
+
+    if result.returncode not in (0, 1):
+        return counts
+
+    base_str = str(base_dir)
+    for line in result.stdout.strip().splitlines():
+        # Output format: /path/to/base_dir/SERIAL/file.log:42
+        sep = line.rfind(":")
+        if sep == -1:
+            continue
+        fpath = line[:sep]
+        try:
+            cnt = int(line[sep + 1:])
+        except ValueError:
+            continue
+        # Extract relative path and grab first component (the CPE serial)
+        if fpath.startswith(base_str):
+            rel = fpath[len(base_str):].lstrip("/\\")
+            serial = rel.split("/", 1)[0].split("\\", 1)[0]
+            if serial in counts:
+                counts[serial] += cnt
+
+    return counts
+
+
 @cpe_overview_bp.route("/<project_id>/cpe-overview/pattern-scan", methods=["GET"])
 @jwt_required()
 def get_pattern_scan_cache(project_id):
@@ -600,20 +661,24 @@ def run_pattern_scan(project_id):
     cpes = dbm.list_project_cpes(project_id)
 
     cpe_dirs: List[Dict[str, Any]] = []
+    is_multi_cpe = bool(cpes)
     if cpes:
         for cpe in cpes:
             cpe_dir = base_dir / cpe.serial
             if cpe_dir.exists():
                 cpe_dirs.append({"serial": cpe.serial, "dir": cpe_dir})
     else:
-        # Legacy single-CPE project
         cpe_dirs.append({"serial": "default", "dir": base_dir})
 
     if not cpe_dirs:
         return jsonify({"error": "No CPE directories found"}), 404
 
+    cpe_serials = [c["serial"] for c in cpe_dirs]
+
     start_time = time.perf_counter()
 
+    # Collect all (domain, pattern_index, pattern) tuples for parallel dispatch
+    all_tasks: List[Dict[str, Any]] = []
     result_domains: Dict[str, Any] = {}
 
     for domain_name, patterns in all_domains.items():
@@ -626,34 +691,65 @@ def run_pattern_scan(project_id):
         if not enabled:
             continue
 
-        pattern_names = [p["name"] for p in enabled]
-        cpe_results = []
-
-        for cpe_info in cpe_dirs:
-            counts = []
-            for pat in enabled:
-                count = _run_rg_count(rg_binary, pat["regex"], cpe_info["dir"])
-                counts.append(count)
-            cpe_results.append({
-                "serial": cpe_info["serial"],
-                "counts": counts,
+        result_domains[domain_name] = {
+            "patterns": [p["name"] for p in enabled],
+            "cpes": [],
+        }
+        for idx, pat in enumerate(enabled):
+            all_tasks.append({
+                "domain": domain_name,
+                "idx": idx,
+                "regex": pat["regex"],
             })
 
-        result_domains[domain_name] = {
-            "patterns": pattern_names,
-            "cpes": cpe_results,
-        }
+    if is_multi_cpe and len(cpe_dirs) > 1:
+        # Fast path: one rg call per pattern over the whole project dir,
+        # then split counts by CPE serial from file paths.
+        per_pattern_counts: Dict[str, Dict[str, int]] = {}
+
+        def _scan_pattern(task: Dict[str, Any]) -> tuple:
+            key = f"{task['domain']}::{task['idx']}"
+            counts = _run_rg_count_all_cpes(
+                rg_binary, task["regex"], base_dir, cpe_serials,
+            )
+            return key, counts
+
+        with ThreadPoolExecutor(max_workers=min(8, len(all_tasks))) as pool:
+            futures = {pool.submit(_scan_pattern, t): t for t in all_tasks}
+            for future in as_completed(futures):
+                key, counts = future.result()
+                per_pattern_counts[key] = counts
+
+        for domain_name, dom_data in result_domains.items():
+            n_patterns = len(dom_data["patterns"])
+            cpe_results = []
+            for serial in cpe_serials:
+                counts = []
+                for idx in range(n_patterns):
+                    key = f"{domain_name}::{idx}"
+                    counts.append(per_pattern_counts.get(key, {}).get(serial, 0))
+                cpe_results.append({"serial": serial, "counts": counts})
+            dom_data["cpes"] = cpe_results
+    else:
+        # Legacy single-CPE fallback
+        for domain_name, dom_data in result_domains.items():
+            cpe_info = cpe_dirs[0]
+            counts = []
+            for task in all_tasks:
+                if task["domain"] == domain_name:
+                    count = _run_rg_count(rg_binary, task["regex"], cpe_info["dir"])
+                    counts.append(count)
+            dom_data["cpes"] = [{"serial": cpe_info["serial"], "counts": counts}]
 
     elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
     payload = {
         "cached": True,
-        "scanned_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "scanned_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
         "elapsed_ms": elapsed_ms,
         "domains": result_domains,
     }
 
-    # Write cache
     cache_path = base_dir / _PATTERN_SCAN_CACHE
     cache_path.write_text(json.dumps(payload), encoding="utf-8")
 

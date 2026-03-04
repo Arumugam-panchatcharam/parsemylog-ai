@@ -24,6 +24,8 @@ import PublishIcon from "@mui/icons-material/Publish";
 import PublicIcon from "@mui/icons-material/Public";
 import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CircularProgress from "@mui/material/CircularProgress";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import PatternOverviewTab from "@/pages/PatternOverviewTab";
 
 /* ================================================================ Types */
 interface ScanResult {
@@ -151,6 +153,8 @@ export default function PatternAnalyzerPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
 
   // Domain-grouped pattern state
   const [domains, setDomains] = useState<DomainPatterns>({});
@@ -732,6 +736,38 @@ export default function PatternAnalyzerPage() {
           }}
         />
       </div>
+
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 border-b border-border">
+        <button
+          onClick={() => setActiveTab("cpe")}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "cpe"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+          }`}
+        >
+          <ManageSearchIcon style={{ fontSize: 16 }} />
+          CPE Analysis
+        </button>
+        <button
+          onClick={() => setActiveTab("overview")}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "overview"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+          }`}
+        >
+          <CompareArrowsIcon style={{ fontSize: 16 }} />
+          Cross-CPE Overview
+        </button>
+      </div>
+
+      {/* Cross-CPE Overview tab */}
+      {activeTab === "overview" && <PatternOverviewTab />}
+
+      {/* CPE Analysis tab (existing content) */}
+      {activeTab === "cpe" && <>
 
       {/* ====== PATTERN MANAGEMENT ====== */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -1487,6 +1523,8 @@ export default function PatternAnalyzerPage() {
           <span className="text-sm">{scanStatus || "Scanning log files with ripgrep..."}</span>
         </div>
       )}
+
+      </>}
     </div>
   );
 }
