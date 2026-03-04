@@ -117,6 +117,9 @@ export default function LogViewerPage() {
   const logContainerRef = useRef<HTMLDivElement>(null);
   const quickSearchConfigRef = useRef<HTMLDivElement>(null);
   const prevCpeId = useRef(cpeId);
+  const [searchPanelHeight, setSearchPanelHeight] = useState(220);
+  const resizingRef = useRef(false);
+  const resizeStartRef = useRef({ y: 0, h: 0 });
 
   const { data: filesRaw, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
   const files = Array.isArray(filesRaw) ? filesRaw : [];
@@ -364,6 +367,28 @@ export default function LogViewerPage() {
 
   const hasNotes = ((notesData?.content ?? "") as string).trim().length > 0;
   const hasUnsavedChanges = notesData && notes !== (notesData.content ?? "");
+
+  const onResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = true;
+    resizeStartRef.current = { y: e.clientY, h: searchPanelHeight };
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const delta = resizeStartRef.current.y - ev.clientY;
+      setSearchPanelHeight(Math.max(80, Math.min(window.innerHeight * 0.7, resizeStartRef.current.h + delta)));
+    };
+    const onUp = () => {
+      resizingRef.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [searchPanelHeight]);
 
   const searchResults = searchAllFiles ? searchAllMutation.data?.data : searchMutation.data?.data;
   const searchAllResult = searchAllMutation.data?.data;
@@ -617,6 +642,15 @@ export default function LogViewerPage() {
 
           {searchResults && (
             <div className="border-t border-border bg-card shrink-0">
+              {/* Resize handle */}
+              {showSearch && (
+                <div
+                  onMouseDown={onResizeStart}
+                  className="h-1.5 cursor-row-resize bg-border/50 hover:bg-primary/40 active:bg-primary/60 transition-colors flex items-center justify-center"
+                >
+                  <div className="w-8 h-0.5 rounded-full bg-muted-foreground/40" />
+                </div>
+              )}
               <button onClick={() => setShowSearch(!showSearch)} className="w-full flex items-center justify-between px-3 py-1 text-xs font-medium hover:bg-muted">
                 <span>
                   Search Results — {searchResults.total} match(es)
@@ -625,7 +659,7 @@ export default function LogViewerPage() {
                 {showSearch ? <KeyboardArrowDownIcon style={{ fontSize: 16 }} /> : <KeyboardArrowUpIcon style={{ fontSize: 16 }} />}
               </button>
               {showSearch && (
-                <div className="overflow-auto max-h-52 bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px` }}>
+                <div className="overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px`, height: `${searchPanelHeight}px` }}>
                   {isAllFilesSearch
                     ? (searchResults.matches as Array<{ filename: string; line_number: number; text: string }>).map((m, idx) => (
                         <div
