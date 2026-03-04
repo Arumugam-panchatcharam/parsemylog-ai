@@ -22,4 +22,25 @@ literals:
   - "core dump"
 
 regex:
-  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|crash|abort|panic)\\b"
+  # Generic error/failure indicators
+  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|incorrect|crash|abort|panic)\\b"
+  # Generic auth/disassociation keywords (position-independent)
+  - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?)\\b"
+  # Station events (client left/removed/kicked)
+  - "\\b(STA|station|client)\\s+(left|removed|kicked|rejected|denied)\\b"
+  # Signal quality issues
+  - "\\bsignal\\s+(lost|weak|degraded|low)\\b"
+  # Radio/HAL issues
+  - "\\b(radio|hal)\\s+(reset|restart|down|fail)\\b"
+  # VAP/SSID issues
+  - "\\b(VAP|vap|SSID|ssid)\\s+(down|fail|destroy|delete)\\b"
+  # DFS events
+  - "\\b(DFS|dfs|radar)\\s+(detect|switch|cac|nop)\\b"
+  # Channel switch
+  - "\\bchannel\\s+(switch|change|dfs)\\b"
+  # Authentication/association failures
+  - "\\b(auth|assoc|wps)\\s+(fail|reject|deny|disassoc|deauth|disconnect(ed)?)\\b"
+  # Driver crash/recovery
+  - "\\bdriver\\s+(crash|recovery|reset|stuck|hang)\\b"
+  # SSP restart
+  - "\\bSSP\\s+(restart|crash|exit)\\b"
