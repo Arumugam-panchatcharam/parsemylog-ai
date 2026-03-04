@@ -896,9 +896,33 @@ def analyze_cpe(
     # Telemetry (uses raw cache when available)
     t2_path = cpe_dir / "telemetry2_0.txt"
     dcm_path = cpe_dir / "dcmscript.log"
-    tel_reports, _, _, tel_source = parse_telemetry_file(
+    tel_reports, tel_merged, tel_summary, tel_source = parse_telemetry_file(
         t2_path, dcmscript_path=dcm_path, cpe_dir=cpe_dir, force=force,
     )
+    
+    # When force=True, also rebuild the API response cache so Telemetry page has fresh data
+    if force and tel_reports:
+        try:
+            from logai.telemetry_parser import (
+                load_report_field_config,
+                extract_configured_fields,
+                discover_available_fields,
+                save_telemetry_cache,
+            )
+            config = load_report_field_config()
+            configured = extract_configured_fields(tel_merged, config)
+            available = discover_available_fields(tel_merged, config)
+            
+            # Build a minimal API response (without charts/metrics which are expensive)
+            response = {
+                "device_info": {},  # Will be populated by Telemetry page if needed
+                "summary": tel_summary,
+                "configured_fields": configured,
+            }
+            save_telemetry_cache(cpe_dir, response, available)
+            logger.debug(f"[GraphAnalyzer] Rebuilt API cache for {serial} after force re-parse")
+        except Exception as exc:
+            logger.warning(f"[GraphAnalyzer] Could not rebuild API cache for {serial}: {exc}")
 
     # Identity (uses caches when available)
     identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports, force=force)
