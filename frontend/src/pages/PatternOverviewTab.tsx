@@ -232,9 +232,9 @@ export default function PatternOverviewTab() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 max-w-5xl mx-auto">
       {/* Controls bar */}
-      <div className="bg-card border border-border rounded-xl px-4 py-3 flex items-center justify-between flex-wrap gap-3">
+      <div className="bg-card border border-border rounded-xl px-3 py-2 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <span>
             <strong className="text-foreground">{totalCpes}</strong> CPEs
@@ -280,12 +280,12 @@ export default function PatternOverviewTab() {
       {/* Summary bar chart */}
       {chartData && chartData.y.length > 0 && (
         <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <div className="px-4 py-2 border-b border-border bg-muted/30">
+          <div className="px-3 py-1.5 border-b border-border bg-muted/30">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Pattern Spread Across CPEs
             </h3>
           </div>
-          <div className="p-2">
+          <div className="px-2 py-1">
             <Plot
               data={[
                 {
@@ -304,8 +304,8 @@ export default function PatternOverviewTab() {
                 } as any,
               ]}
               layout={{
-                height: Math.max(180, chartData.y.length * 22 + 60),
-                margin: { l: 10, r: 30, t: 5, b: 30 },
+                height: Math.max(140, chartData.y.length * 20 + 50),
+                margin: { l: 10, r: 20, t: 5, b: 25 },
                 xaxis: {
                   title: { text: "% of CPEs Affected", font: { size: 10 } },
                   range: [0, 105],
@@ -319,10 +319,11 @@ export default function PatternOverviewTab() {
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
                 font: { color: "#888", size: 10 },
-                bargap: 0.15,
+                bargap: 0.12,
               }}
               config={NO_TOOLBAR}
-              style={{ width: "100%" }}
+              useResizeHandler
+              style={{ width: "100%", maxWidth: "900px" }}
             />
           </div>
         </div>
@@ -330,7 +331,7 @@ export default function PatternOverviewTab() {
 
       {/* Detail table */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="px-3 py-1.5 border-b border-border bg-muted/30">
+        <div className="px-3 py-1 border-b border-border bg-muted/30">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Pattern Distribution Detail
           </h3>
