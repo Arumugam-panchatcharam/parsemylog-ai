@@ -9,7 +9,8 @@ requests are served instantly without re-parsing.
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
+from datetime import datetime
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
@@ -45,6 +46,15 @@ _SKIP_CHART_GROUPS = {
     "WiFi Global", "CUJO Agent", "Airties Edge",
     "GPON", "PPP / WANoE",
 }
+
+
+def _ts_to_str(ts: Any, fallback: str = "") -> str:
+    """Convert timestamp to ISO string, handling both datetime and str."""
+    if isinstance(ts, datetime):
+        return ts.isoformat()
+    if isinstance(ts, str):
+        return ts
+    return fallback
 
 
 def _verify_project(project_id, user_id):
@@ -442,7 +452,7 @@ def _build_reboot_timeline(reports):
         except (ValueError, TypeError):
             continue
 
-        ts = r["time"].isoformat()
+        ts = _ts_to_str(r["time"])
 
         if prev_uptime is not None and uptime < prev_uptime:
             cumulative += 1
