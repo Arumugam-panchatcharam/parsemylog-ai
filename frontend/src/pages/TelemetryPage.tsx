@@ -4,7 +4,9 @@ import { telemetryApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
+import TelemetryOverviewTab from "@/pages/TelemetryOverviewTab";
 import TimelineIcon from "@mui/icons-material/Timeline";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import WifiIcon from "@mui/icons-material/Wifi";
 import SettingsInputAntennaIcon from "@mui/icons-material/SettingsInputAntenna";
 import RouterIcon from "@mui/icons-material/Router";
@@ -115,12 +117,31 @@ function isIssue(m: Record<string, unknown>): boolean {
   if (resets > 3) return true;
   return false;
 }
+function fmtVal(v: unknown, unit: string): string {
+  const n = Number(v);
+  if (isNaN(n)) return String(v);
+  const u = unit.toLowerCase();
+  if (u === "kb") {
+    if (n >= 1_000_000) return `${(n / (1024 * 1024)).toFixed(2)} GB`;
+    if (n >= 1024) return `${(n / 1024).toFixed(1)} MB`;
+    return `${n} KB`;
+  }
+  if (u === "sec" || u === "s") {
+    if (n >= 86400) return `${(n / 86400).toFixed(1)} days`;
+    if (n >= 3600) return `${(n / 3600).toFixed(1)} hours`;
+    if (n >= 120) return `${(n / 60).toFixed(0)} min`;
+  }
+  return `${n} ${unit}`;
+}
+
 function fmtMetric(m: Record<string, unknown>): string {
   const p: string[] = [];
+  const unit = String(m.unit || "");
   if (m.value !== undefined) p.push(String(m.value));
-  if (m.first !== undefined) p.push(`${m.first} ${m.unit || ""} → ${m.last} ${m.unit || ""}`);
-  if (m.avg !== undefined) p.push(`avg ${m.avg}${m.unit || ""}  peak ${m.peak}${m.unit || ""}`);
-  if (m.min !== undefined) p.push(`${m.min} – ${m.max} ${m.unit || ""}`);
+  if (m.first !== undefined) p.push(`${fmtVal(m.first, unit)} → ${fmtVal(m.last, unit)}`);
+  if (m.total !== undefined && m.total !== null) p.push(`(total: ${fmtVal(m.total, unit)})`);
+  if (m.avg !== undefined) p.push(`avg ${fmtVal(m.avg, unit)}  peak ${fmtVal(m.peak, unit)}`);
+  if (m.min !== undefined) p.push(`${fmtVal(m.min, unit)} – ${fmtVal(m.max, unit)}`);
   if (m.counts) p.push(Object.entries(m.counts as Record<string, number>).map(([k, v]) => `${k}: ${v}`).join(", "));
   if (m.time_range) p.push(`(${String(m.time_range)})`);
   return p.join("  ").trim();
@@ -141,6 +162,7 @@ export default function TelemetryPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
   const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
   const [reparsing, setReparsing] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
 
@@ -192,19 +214,19 @@ export default function TelemetryPage() {
       <div className="flex items-center gap-2 flex-wrap">
         <TimelineIcon style={{ fontSize: 24, color: "#1a73e8" }} />
         <h2 className="text-lg font-semibold">Telemetry Dashboard</h2>
-        {data?.cached && (
+        {activeTab === "cpe" && data?.cached && (
           <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
             <CachedIcon style={{ fontSize: 12 }} /> cached
           </span>
         )}
-        {data?.summary && (
+        {activeTab === "cpe" && data?.summary && (
           <span className="text-[11px] text-muted-foreground">
             {data.summary.parsed}/{data.summary.total} parsed
             {data.summary.overall_time_range?.first && ` | ${data.summary.overall_time_range.first.slice(0, 19)} — ${data.summary.overall_time_range.last?.slice(0, 19)}`}
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
-          {data && (
+          {activeTab === "cpe" && data && (
             <button
               onClick={() => setShowDiscovery((v) => !v)}
               className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors"
@@ -216,18 +238,52 @@ export default function TelemetryPage() {
               )}
             </button>
           )}
-          <button
-            onClick={handleReparse}
-            disabled={reparsing || isLoading}
-            className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors disabled:opacity-50"
-            title="Re-parse from raw log file"
-          >
-            {reparsing ? <CircularProgress size={14} /> : <RefreshIcon style={{ fontSize: 15 }} />}
-            Re-parse
-          </button>
+          {activeTab === "cpe" && (
+            <button
+              onClick={handleReparse}
+              disabled={reparsing || isLoading}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors disabled:opacity-50"
+              title="Re-parse from raw log file"
+            >
+              {reparsing ? <CircularProgress size={14} /> : <RefreshIcon style={{ fontSize: 15 }} />}
+              Re-parse
+            </button>
+          )}
         </div>
       </div>
 
+      {/* ========== Tab bar ========== */}
+      <div className="flex items-center gap-1 border-b border-border">
+        <button
+          onClick={() => setActiveTab("cpe")}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "cpe"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+          }`}
+        >
+          <TimelineIcon style={{ fontSize: 16 }} />
+          CPE Analysis
+        </button>
+        <button
+          onClick={() => setActiveTab("overview")}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "overview"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+          }`}
+        >
+          <CompareArrowsIcon style={{ fontSize: 16 }} />
+          Cross-CPE Overview
+        </button>
+      </div>
+
+      {/* ========== Cross-CPE Overview tab ========== */}
+      {activeTab === "overview" && <TelemetryOverviewTab />}
+
+      {/* ========== CPE Analysis tab ========== */}
+      {activeTab === "cpe" && (
+        <>
       {isLoading && <div className="flex items-center gap-3 justify-center py-16 text-muted-foreground"><CircularProgress size={24} /><span className="text-sm">Parsing telemetry data...</span></div>}
       {isError && <div className="p-4 bg-destructive/10 text-destructive rounded-xl text-sm flex items-center gap-2"><ErrorIcon style={{ fontSize: 18 }} />{(error as { response?: { data?: { error?: string } } })?.response?.data?.error || "Error parsing telemetry"}</div>}
 
@@ -241,13 +297,13 @@ export default function TelemetryPage() {
           {/* ========== ROW 1: Device Info grouped cards ========== */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {DEV_GROUPS.map((group) => {
-              const entries = group.fields.filter((f) => data.device_info[f.key]);
+              const entries = group.fields.filter((f) => (data.device_info ?? {})[f.key]);
               if (entries.length === 0) return null;
               return (
                 <div key={group.title} className="bg-card border border-border rounded-xl p-3">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold mb-1.5">{group.title}</p>
                   {entries.map(({ key, label }) => {
-                    const val = data.device_info[key];
+                    const val = (data.device_info ?? {})[key];
                     return (
                       <div key={key} className="flex items-baseline gap-2 text-xs py-0.5">
                         <span className="text-muted-foreground font-medium shrink-0">{label}</span>
@@ -274,7 +330,7 @@ export default function TelemetryPage() {
           {/* ========== ROW 2: Radio/SSID + Key Metrics side by side ========== */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Radio / SSID Status */}
-            {data.status_labels.length > 0 && (
+            {(data.status_labels ?? []).length > 0 && (
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="px-4 py-2 border-b border-border bg-muted/30">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -282,7 +338,7 @@ export default function TelemetryPage() {
                   </h3>
                 </div>
                 <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {data.status_labels.map((s, idx) => {
+                  {(data.status_labels ?? []).map((s, idx) => {
                     const TypeIcon = statusTypeIcon(s.type);
                     const displayName = s.instance ? `${s.type} ${s.instance}` : s.type;
                     return (
@@ -308,7 +364,7 @@ export default function TelemetryPage() {
             )}
 
             {/* Key Metrics */}
-            {data.key_metrics.length > 0 && (
+            {(data.key_metrics ?? []).length > 0 && (
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="px-4 py-2 border-b border-border bg-muted/30">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -316,7 +372,7 @@ export default function TelemetryPage() {
                   </h3>
                 </div>
                 <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {data.key_metrics.map((m, idx) => {
+                  {(data.key_metrics ?? []).map((m, idx) => {
                     const bad = isIssue(m);
                     const MI = metricIcon(String(m.label));
                     return (
@@ -394,15 +450,15 @@ export default function TelemetryPage() {
           )}
 
           {/* ========== CHARTS ========== */}
-          {data.charts.length > 0 && (
+          {(data.charts ?? []).length > 0 && (
             <div className="space-y-2">
-              {data.summary.parsed === 0 && (
+              {data.summary?.parsed === 0 && (
                 <p className="text-[11px] text-muted-foreground mb-2">
                   Charts from selfHeal and telemetry_marker (no telemetry2_0 data).
                 </p>
               )}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {data.charts.map((chart, cIdx) => (
+                {(data.charts ?? []).map((chart, cIdx) => (
                   <div key={cIdx} className="bg-card border border-border rounded-xl overflow-hidden">
                     <div className="px-4 py-2 border-b border-border bg-muted/30">
                       <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{chart.group}</h3>
@@ -421,6 +477,8 @@ export default function TelemetryPage() {
             </div>
           )}
 
+        </>
+      )}
         </>
       )}
     </div>

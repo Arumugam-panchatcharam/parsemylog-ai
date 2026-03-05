@@ -16,6 +16,7 @@ Multi-CPE Strategy:
 """
 
 import os
+import sys
 import time
 import logging
 import zipfile
@@ -24,6 +25,11 @@ from sqlalchemy.exc import IntegrityError
 import shutil
 from pathlib import Path
 from typing import Dict, Any
+
+# Ensure project root is on sys.path (needed for prefork/spawn workers on macOS)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from celery import Task
 from .celery_app import celery
@@ -79,9 +85,9 @@ def process_cpe_batch_job(self, job_id: str, user_id: int, project_id: str,
         cpe_folder_path: Path to folder containing CPE zip files
     """
     logger.info(f"[BatchJob {job_id}] Starting batch processing from {cpe_folder_path}")
-    
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
     try:
-        # Import here to avoid circular dependencies
         from api.user_db_mngr import DBManager
         from flask import Flask
         
@@ -170,9 +176,9 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
     """
     logger.info(f"[CPE {serial}] Starting processing for job {job_id}")
     start_time = time.time()
-    
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
     try:
-        # Import dependencies
         from api.user_db_mngr import DBManager
         from api.file_manager import merge_cpe_logs, register_cpe_files
         from logai.info_extractor import find_and_parse_version_txt, find_and_build_fallback_device_info
@@ -273,6 +279,15 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
                             break
             except Exception:
                 pass
+
+            # Step 5b: Build full API response cache so Telemetry page
+            # and cross-CPE overview load instantly without re-parsing
+            try:
+                from api.routes.telemetry import _parse_and_build
+                _parse_and_build(cpe_dir)
+                logger.info(f"[CPE {serial}] Built telemetry API cache")
+            except Exception as e:
+                logger.warning(f"[CPE {serial}] Telemetry cache build error: {e}")
 
             # Step 6: Save CPE + register files (shared with normal upload path)
             dbm.save_cpe(project_id, serial, mac, date_from, date_to)
@@ -381,6 +396,8 @@ def run_issue_analysis(self, job_id: str, user_id: int, project_id: str,
     Uses the specified knowledge graph to detect patterns and causal chains.
     """
     logger.info(f"[IssueAnalysis] Task started for job={job_id}, graph={graph_id}")
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
     try:
         from logai.utils.constants import UPLOAD_DIRECTORY
         from logai.graph_analyzer import load_graph_definition, generate_batch_analysis

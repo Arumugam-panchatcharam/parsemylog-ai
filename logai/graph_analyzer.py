@@ -667,7 +667,8 @@ def _detect_uptime_resets(reports: List[Dict[str, Any]]) -> List[Dict[str, str]]
 def _extract_telemetry_timeseries(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     ts_data: Dict[str, List] = {
         "timestamps": [],
-        "cpu": [], "memory_pct": [], "memory_free": [],
+        "cpu": [], "memory_pct": [], "memory_free": [], "memory_total": [],
+        "memory_available": [], "shmem": [], "slab_memory": [],
         "temperature": [], "uptime": [], "connected_devices": [],
     }
     for iface, fields in _RXTX_FIELDS.items():
@@ -688,10 +689,23 @@ def _extract_telemetry_timeseries(reports: List[Dict[str, Any]]) -> Dict[str, An
         mem_total = _safe_int(fields.get("Device.DeviceInfo.MemoryStatus.Total",
                                          fields.get("MemInfoTotal")))
         ts_data["memory_free"].append(mem_free)
+        ts_data["memory_total"].append(mem_total)
         if mem_free is not None and mem_total and mem_total > 0:
             ts_data["memory_pct"].append(round((mem_total - mem_free) / mem_total * 100, 1))
         else:
             ts_data["memory_pct"].append(None)
+
+        mem_avail = _safe_int(fields.get("Device.DeviceInfo.MemoryStatus.Available",
+                                         fields.get("meminfoavailable_split")))
+        ts_data["memory_available"].append(mem_avail)
+
+        shmem = _safe_int(fields.get("Device.DeviceInfo.MemoryStatus.SharedMemory",
+                                     fields.get("shmem_split")))
+        ts_data["shmem"].append(shmem)
+
+        slab = _safe_int(fields.get("Device.DeviceInfo.MemoryStatus.SlabMemory",
+                                    fields.get("slab_memory_split")))
+        ts_data["slab_memory"].append(slab)
 
         ts_data["temperature"].append(_safe_float(fields.get("cpu_temp_split")))
         ts_data["uptime"].append(r.get("uptime") or None)
@@ -912,30 +926,6 @@ def analyze_cpe(
         t2_path, dcmscript_path=dcm_path, cpe_dir=cpe_dir, force=force,
     )
     
-    # When force=True, also rebuild the API response cache so Telemetry page has fresh data
-    if force and tel_reports:
-        try:
-            from logai.telemetry_parser import (
-                load_report_field_config,
-                extract_configured_fields,
-                discover_available_fields,
-                save_telemetry_cache,
-            )
-            config = load_report_field_config()
-            configured = extract_configured_fields(tel_merged, config)
-            available = discover_available_fields(tel_merged, config)
-            
-            # Build a minimal API response (without charts/metrics which are expensive)
-            response = {
-                "device_info": {},  # Will be populated by Telemetry page if needed
-                "summary": tel_summary,
-                "configured_fields": configured,
-            }
-            save_telemetry_cache(cpe_dir, response, available)
-            logger.debug(f"[GraphAnalyzer] Rebuilt API cache for {serial} after force re-parse")
-        except Exception as exc:
-            logger.warning(f"[GraphAnalyzer] Could not rebuild API cache for {serial}: {exc}")
-
     # Identity (uses caches when available)
     identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports, force=force)
     identity["project_id"] = project_id

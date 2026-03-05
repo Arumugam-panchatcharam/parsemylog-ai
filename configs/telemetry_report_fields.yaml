@@ -186,9 +186,9 @@ field_groups:
         plot: true
 
   # -------------------------------------------------------------------------
-  # Memory & CPU
+  # Memory
   # -------------------------------------------------------------------------
-  - label: "System Resources"
+  - label: "Memory"
     fields:
       - key: "Device.DeviceInfo.MemoryStatus.Free"
         label: "Memory Free"
@@ -200,7 +200,31 @@ field_groups:
         label: "Memory Total"
         type: numeric
         unit: "KB"
+        plot: true
 
+      - key: "Device.DeviceInfo.MemoryStatus.Available"
+        label: "Memory Available"
+        type: numeric
+        unit: "KB"
+        plot: true
+
+      - key: "Device.DeviceInfo.MemoryStatus.SharedMemory"
+        label: "Shared Memory"
+        type: numeric
+        unit: "KB"
+        plot: true
+
+      - key: "Device.DeviceInfo.MemoryStatus.SlabMemory"
+        label: "Slab Memory"
+        type: numeric
+        unit: "KB"
+        plot: true
+
+  # -------------------------------------------------------------------------
+  # CPU
+  # -------------------------------------------------------------------------
+  - label: "CPU"
+    fields:
       - key: "Device.DeviceInfo.ProcessStatus.CPUUsage"
         label: "CPU Usage"
         type: numeric
@@ -208,6 +232,11 @@ field_groups:
         sample: all
         plot: true
 
+  # -------------------------------------------------------------------------
+  # System
+  # -------------------------------------------------------------------------
+  - label: "System"
+    fields:
       - key: "Device.DeviceInfo.UpTime"
         label: "Uptime"
         type: numeric

@@ -412,6 +412,9 @@ _DCM_KEY_TO_TR181: Dict[str, str] = {
     "DeviceUpTime": "Device.DeviceInfo.UpTime",
     "MemInfoFree": "Device.DeviceInfo.MemoryStatus.Free",
     "MemInfoTotal": "Device.DeviceInfo.MemoryStatus.Total",
+    "meminfoavailable_split": "Device.DeviceInfo.MemoryStatus.Available",
+    "shmem_split": "Device.DeviceInfo.MemoryStatus.SharedMemory",
+    "slab_memory_split": "Device.DeviceInfo.MemoryStatus.SlabMemory",
     "ProcessNumberOfEntries": "Device.DeviceInfo.ProcessStatus.ProcessNumberOfEntries",
     "ModelName": "Device.DeviceInfo.ModelName",
     "ManufacturerOUI": "Device.DeviceInfo.ManufacturerOUI",
@@ -750,18 +753,24 @@ def extract_telemetry_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _resolve_sample(raw_value: str, sample_mode: str) -> str:
     """
-    Resolve a potentially semicolon-separated value according to sample_mode.
+    Resolve a potentially multi-sample value according to sample_mode.
+
+    Telemetry values can contain multiple sub-minute samples separated by
+    semicolons (``;``) or commas (``,``).
 
     - "first": first sample (default)
     - "last":  last sample
     - "all":   average for numeric, otherwise first
     """
-    if ";" not in str(raw_value):
-        return str(raw_value)
+    s = str(raw_value)
+    if ";" not in s and "," not in s:
+        return s
 
-    parts = [p.strip() for p in str(raw_value).split(";") if p.strip()]
+    # Split on both semicolons and commas
+    import re
+    parts = [p.strip() for p in re.split(r"[;,]", s) if p.strip()]
     if not parts:
-        return str(raw_value)
+        return s
 
     if sample_mode == "last":
         return parts[-1]

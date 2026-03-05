@@ -423,6 +423,35 @@ export const patternsApi = {
 };
 
 // ---------- Telemetry ----------
+export interface CrossCpeTelemetryEntry {
+  serial: string;
+  model: string;
+  memory_free_first?: number;
+  memory_free_last?: number;
+  memory_free_min?: number;
+  memory_free_avg?: number;
+  memory_available_min?: number;
+  memory_available_avg?: number;
+  memory_total?: number;
+  memory_unit?: string;
+  memory_trend?: string;
+  memory_usage_pct_peak?: number | null;
+  low_memory?: boolean;
+  status?: string;
+  reboot_count: number;
+  reboot_events: Array<{ time: string; count: number; prev_uptime: number; new_uptime: number }>;
+}
+
+export interface CrossCpeTelemetryOverview {
+  cpes: CrossCpeTelemetryEntry[];
+  fleet_summary: {
+    total: number;
+    with_reboots: number;
+    with_low_memory: number;
+    with_both: number;
+  };
+}
+
 export const telemetryApi = {
   parse: (projectId: string, cpeId?: string | null, force = false) =>
     api.post(`/projects/${projectId}/telemetry/parse`, null, {
@@ -432,6 +461,8 @@ export const telemetryApi = {
     api.get(`/projects/${projectId}/telemetry/available-fields`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
+  crossCpeOverview: (projectId: string) =>
+    api.get<CrossCpeTelemetryOverview>(`/projects/${projectId}/telemetry/cross-cpe-overview`),
 };
 
 // ---------- Semantic Search ----------

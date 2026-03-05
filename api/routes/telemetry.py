@@ -603,11 +603,11 @@ def _build_key_metrics_data(configured_fields, summary):
         time_range = f"{tr['first'][:16]} to {tr['last'][:16]}"
     metrics.append({"label": "Reports", "value": f"{parsed}/{total}", "time_range": time_range, "icon": "chart-bar"})
 
-    # System Resources
-    sys_fields = configured_fields.get("System Resources", [])
-    if sys_fields:
-        mem_vals, mem_unit = _numerics(sys_fields, "Memory Free")
-        mem_total, _ = _numerics(sys_fields, "Memory Total")
+    # Memory
+    mem_fields = configured_fields.get("Memory", [])
+    if mem_fields:
+        mem_vals, mem_unit = _numerics(mem_fields, "Memory Free")
+        mem_total, _ = _numerics(mem_fields, "Memory Total")
         if mem_vals:
             trend = "stable"
             if len(mem_vals) >= 2 and mem_vals[-1] < mem_vals[0] * 0.85:
@@ -621,7 +621,10 @@ def _build_key_metrics_data(configured_fields, summary):
                 "unit": mem_unit, "trend": trend, "icon": "memory",
             })
 
-        cpu_vals, cpu_unit = _numerics(sys_fields, "CPU Usage")
+    # CPU
+    cpu_fields = configured_fields.get("CPU", [])
+    if cpu_fields:
+        cpu_vals, cpu_unit = _numerics(cpu_fields, "CPU Usage")
         if cpu_vals:
             metrics.append({
                 "label": "CPU Usage",
@@ -630,6 +633,9 @@ def _build_key_metrics_data(configured_fields, summary):
                 "unit": cpu_unit, "icon": "microchip",
             })
 
+    # System (Uptime, Process Count)
+    sys_fields = configured_fields.get("System", [])
+    if sys_fields:
         up_vals, up_unit = _numerics(sys_fields, "Uptime")
         if up_vals:
             resets = sum(1 for i in range(1, len(up_vals)) if up_vals[i] < up_vals[i - 1])
@@ -678,3 +684,185 @@ def _build_key_metrics_data(configured_fields, summary):
             })
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Cross-CPE Overview
+# ---------------------------------------------------------------------------
+
+@telemetry_bp.route("/<project_id>/telemetry/cross-cpe-overview", methods=["GET"])
+@jwt_required()
+def cross_cpe_overview(project_id):
+    """
+    Aggregate memory health and reboot data across ALL CPEs in a project.
+
+    Returns:
+        {
+            "cpes": [ { serial, model, memory_free_min, memory_free_avg,
+                         memory_total, memory_usage_pct_peak, reboot_count,
+                         reboot_events, low_memory, status } ],
+            "fleet_summary": { total, with_reboots, with_low_memory, with_both }
+        }
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    cpes = dbm.list_project_cpes(project_id)
+
+    def _to_mb(value, unit):
+        """Convert a memory value to MB for threshold comparison."""
+        u = unit.lower()
+        if u == "kb":
+            return value / 1024
+        if u == "gb":
+            return value * 1024
+        return value
+
+    def _process_cpe(serial, cpe_dir):
+        """Extract memory + reboot data from cached telemetry for one CPE."""
+        entry = {
+            "serial": serial, "model": "N/A",
+            "reboot_count": 0, "reboot_events": [],
+            "low_memory": False, "memory_usage_pct_peak": None,
+            "status": "OK",
+        }
+        cached = load_telemetry_cache(cpe_dir)
+        if not cached:
+            try:
+                resp, _avail, _err = _parse_and_build(cpe_dir)
+                cached = resp
+            except Exception:
+                cached = None
+        if not cached:
+            return entry
+
+        # Device info
+        dev_info = cached.get("device_info") or {}
+        entry["model"] = dev_info.get("model", "N/A")
+
+        # Memory metrics from key_metrics (trend only; values come from chart traces)
+        for km in cached.get("key_metrics") or []:
+            if km.get("label") == "Memory Free":
+                entry["memory_trend"] = km.get("trend", "stable")
+
+        # Read memory stats from chart traces.  Handle various group/label
+        # naming across config versions:
+        #   New config:  group="Memory"            labels: Memory Free / Memory Total / Memory Available
+        #   Old config:  group="System Resources"  labels: Memory Free (only)
+        #   Alt config:  group="Available memory"  labels: Available / Free
+        _MEM_GROUPS = {"Memory", "System Resources", "Available memory"}
+        _FREE_LABELS = {"Memory Free", "Free"}
+        _TOTAL_LABELS = {"Memory Total", "Total"}
+        _AVAIL_LABELS = {"Memory Available", "Available"}
+
+        chart_unit = "KB"
+        for chart in cached.get("charts") or []:
+            if chart.get("group") not in _MEM_GROUPS:
+                continue
+            for trace in chart.get("traces") or []:
+                label = trace["label"]
+                vals = [v for v in trace["values"] if v is not None]
+                if not vals:
+                    continue
+                trace_unit = trace.get("unit", "KB")
+                if label in _FREE_LABELS:
+                    entry["memory_free_first"] = vals[0]
+                    entry["memory_free_last"] = vals[-1]
+                    entry["memory_free_min"] = min(vals)
+                    entry["memory_free_avg"] = round(sum(vals) / len(vals), 2)
+                    chart_unit = trace_unit
+                elif label in _TOTAL_LABELS:
+                    entry["memory_total"] = vals[0]
+                elif label in _AVAIL_LABELS:
+                    entry["memory_available_min"] = min(vals)
+                    entry["memory_available_avg"] = round(sum(vals) / len(vals), 2)
+                    if "memory_free_min" not in entry:
+                        entry["memory_free_first"] = vals[0]
+                        entry["memory_free_last"] = vals[-1]
+                        entry["memory_free_min"] = min(vals)
+                        entry["memory_free_avg"] = round(sum(vals) / len(vals), 2)
+                        chart_unit = trace_unit
+        entry["memory_unit"] = chart_unit
+
+        # Memory usage percentage
+        mem_total = entry.get("memory_total")
+        mem_min = entry.get("memory_free_min")
+        if mem_total and mem_total > 0 and mem_min is not None:
+            entry["memory_usage_pct_peak"] = round(
+                (mem_total - mem_min) / mem_total * 100, 1
+            )
+        else:
+            entry["memory_usage_pct_peak"] = None
+
+        # Reboot data
+        rt = cached.get("reboot_timeline") or {}
+        entry["reboot_count"] = rt.get("total_reboots", 0)
+        entry["reboot_events"] = rt.get("events") or []
+
+        # Status: memory-threshold + reboot correlation
+        free_min = entry.get("memory_free_min")
+        has_reboots = entry["reboot_count"] > 0
+        if free_min is not None:
+            free_mb = _to_mb(free_min, chart_unit)
+            entry["low_memory"] = free_mb < 50
+            if free_mb < 50:
+                entry["status"] = "REBOOT" if has_reboots else "LOW_MEM"
+            elif free_mb < 100:
+                entry["status"] = "MEMLEAK"
+            else:
+                entry["status"] = "OK"
+        else:
+            entry["low_memory"] = False
+            entry["status"] = "OK"
+
+        return entry
+
+    # Build list of (serial, cpe_dir) pairs
+    cpe_list = []
+    if not cpes:
+        cpe_list.append(("default", base_dir))
+    else:
+        for cpe in cpes:
+            cpe_list.append((cpe.serial, base_dir / cpe.serial))
+
+    # Process CPEs in parallel for scalability (500+ CPEs)
+    cpe_results = []
+    workers = min(16, max(1, len(cpe_list)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_process_cpe, s, d): s for s, d in cpe_list}
+        for future in as_completed(futures):
+            try:
+                cpe_results.append(future.result())
+            except Exception as exc:
+                serial = futures[future]
+                logger.warning(f"[CrossCPE] Error processing {serial}: {exc}")
+                cpe_results.append({
+                    "serial": serial, "model": "N/A",
+                    "reboot_count": 0, "reboot_events": [],
+                    "low_memory": False, "memory_usage_pct_peak": None,
+                    "status": "OK",
+                })
+
+    # Fleet summary
+    total = len(cpe_results)
+    with_reboots = sum(1 for c in cpe_results if c.get("reboot_count", 0) > 0)
+    with_low_memory = sum(1 for c in cpe_results if c.get("low_memory"))
+    with_both = sum(
+        1 for c in cpe_results
+        if c.get("reboot_count", 0) > 0 and c.get("low_memory")
+    )
+
+    return jsonify({
+        "cpes": cpe_results,
+        "fleet_summary": {
+            "total": total,
+            "with_reboots": with_reboots,
+            "with_low_memory": with_low_memory,
+            "with_both": with_both,
+        },
+    }), 200

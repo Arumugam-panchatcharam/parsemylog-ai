@@ -1,5 +1,12 @@
 from celery import Celery
 import os
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path so forked workers can import logai, api, etc.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 # CRITICAL: Disable PyTorch MPS (Metal Performance Shaders) to prevent SIGABRT in forked processes on macOS
 # These MUST be set BEFORE any PyTorch/transformers imports

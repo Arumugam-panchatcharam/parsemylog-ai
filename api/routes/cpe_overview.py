@@ -193,23 +193,35 @@ def _build_flat_metrics(
     metrics["reports_total"] = summary.get("total", 0)
     metrics["reports_parsed"] = summary.get("parsed", 0)
 
-    # System Resources
-    sys_fields = configured_fields.get("System Resources", [])
-    if sys_fields:
-        mem_vals, mem_unit = _numerics(sys_fields, "Memory Free")
-        mem_total, _ = _numerics(sys_fields, "Memory Total")
+    # Memory
+    mem_fields = configured_fields.get("Memory", [])
+    if mem_fields:
+        mem_vals, mem_unit = _numerics(mem_fields, "Memory Free")
+        mem_total, _ = _numerics(mem_fields, "Memory Total")
         if mem_vals:
             metrics["memory_free_first"] = mem_vals[0]
             metrics["memory_free_last"] = mem_vals[-1]
+            metrics["memory_free_min"] = min(mem_vals)
+            metrics["memory_free_avg"] = round(sum(mem_vals) / len(mem_vals), 1)
             metrics["memory_total"] = mem_total[0] if mem_total else None
             metrics["memory_unit"] = mem_unit
+            if mem_total and mem_total[0] and mem_total[0] > 0:
+                usage_pcts = [round((mem_total[0] - mf) / mem_total[0] * 100, 1) for mf in mem_vals]
+                metrics["memory_usage_pct_peak"] = max(usage_pcts)
+                metrics["memory_usage_pct_avg"] = round(sum(usage_pcts) / len(usage_pcts), 1)
 
-        cpu_vals, cpu_unit = _numerics(sys_fields, "CPU Usage")
+    # CPU
+    cpu_fields = configured_fields.get("CPU", [])
+    if cpu_fields:
+        cpu_vals, cpu_unit = _numerics(cpu_fields, "CPU Usage")
         if cpu_vals:
             metrics["cpu_avg"] = round(sum(cpu_vals) / len(cpu_vals), 1)
             metrics["cpu_peak"] = round(max(cpu_vals), 1)
             metrics["cpu_unit"] = cpu_unit
 
+    # System (Uptime, Process Count)
+    sys_fields = configured_fields.get("System", [])
+    if sys_fields:
         up_vals, up_unit = _numerics(sys_fields, "Uptime")
         if up_vals:
             resets = sum(1 for i in range(1, len(up_vals)) if up_vals[i] < up_vals[i - 1])
