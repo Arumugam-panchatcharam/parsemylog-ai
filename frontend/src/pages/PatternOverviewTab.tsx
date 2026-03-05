@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cpeOverviewApi, cpesApi } from "@/api/endpoints";
 import type { PatternScanResult, PatternScanDomain } from "@/api/endpoints";
@@ -232,7 +232,7 @@ export default function PatternOverviewTab() {
   }
 
   return (
-    <div className="space-y-3 max-w-5xl mx-auto">
+    <div className="space-y-3">
       {/* Controls bar */}
       <div className="bg-card border border-border rounded-xl px-3 py-2 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -308,7 +308,8 @@ export default function PatternOverviewTab() {
                 margin: { l: 10, r: 20, t: 5, b: 25 },
                 xaxis: {
                   title: { text: "% of CPEs Affected", font: { size: 10 } },
-                  range: [0, 105],
+                  range: [0, 100],
+                  dtick: 5,
                   ticksuffix: "%",
                   tickfont: { size: 9 },
                 },
@@ -323,7 +324,7 @@ export default function PatternOverviewTab() {
               }}
               config={NO_TOOLBAR}
               useResizeHandler
-              style={{ width: "100%", maxWidth: "900px" }}
+              style={{ width: "100%" }}
             />
           </div>
         </div>
@@ -338,14 +339,14 @@ export default function PatternOverviewTab() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-[11px] border-collapse">
+          <table className="w-full text-[11px] border-collapse table-fixed">
             <colgroup>
-              <col className="w-[120px]" />
-              <col />
-              <col className="w-[90px]" />
-              <col className="w-[72px]" />
-              <col className="w-[90px]" />
-              <col className="w-[24px]" />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "46%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "8%" }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border bg-muted/20">
@@ -390,28 +391,48 @@ export default function PatternOverviewTab() {
                 const isExpanded = expandedPattern === key;
                 const domainColor = DOMAIN_COLORS[domainNames.indexOf(row.domain) % DOMAIN_COLORS.length];
                 return (
-                  <tr
-                    key={key}
-                    className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${severityClass(row.pctAffected)}`}
-                    onClick={() => setExpandedPattern(isExpanded ? null : key)}
-                  >
-                    <td className="px-2 py-1 align-top">
-                      <span
-                        className="inline-block px-1.5 py-px rounded text-[10px] font-medium truncate max-w-[110px]"
-                        style={{ backgroundColor: `${domainColor}18`, color: domainColor }}
-                      >
-                        {row.domain}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1 font-medium text-foreground">
-                      <div className="truncate">{row.name}</div>
-                      {isExpanded && (
-                        <div className="mt-1.5 mb-0.5">
+                  <Fragment key={key}>
+                    <tr
+                      className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${severityClass(row.pctAffected)}`}
+                      onClick={() => setExpandedPattern(isExpanded ? null : key)}
+                    >
+                      <td className="px-2 py-1 align-top">
+                        <span
+                          className="inline-block px-1.5 py-px rounded text-[10px] font-medium truncate max-w-[110px]"
+                          style={{ backgroundColor: `${domainColor}18`, color: domainColor }}
+                        >
+                          {row.domain}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1 font-medium text-foreground">
+                        <div className="truncate" title={row.name}>{row.name}</div>
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap align-top">
+                        {row.cpesAffected}/{totalCpes}
+                      </td>
+                      <td className="px-2 py-1 text-right align-top">
+                        <span className={`inline-block px-1.5 py-px rounded text-[10px] font-semibold ${severityBadge(row.pctAffected)}`}>
+                          {row.pctAffected}%
+                        </span>
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums font-medium align-top">
+                        {row.totalMatches.toLocaleString()}
+                      </td>
+                      <td className="px-0 py-1 text-muted-foreground align-top">
+                        {isExpanded
+                          ? <ExpandLessIcon style={{ fontSize: 14 }} />
+                          : <ExpandMoreIcon style={{ fontSize: 14 }} />
+                        }
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="border-b bg-muted/10" onClick={(e) => e.stopPropagation()}>
+                        <td colSpan={6} className="px-3 py-2">
                           <div className="bg-muted/30 rounded-lg p-2 max-h-[240px] overflow-y-auto">
                             <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5 tracking-wide">
                               Per-CPE Breakdown ({row.perCpeCounts.filter((c) => c.count > 0).length} affected)
                             </p>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-1">
+                            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1">
                               {row.perCpeCounts
                                 .filter((c) => c.count > 0)
                                 .map((c) => (
@@ -425,27 +446,10 @@ export default function PatternOverviewTab() {
                                 ))}
                             </div>
                           </div>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap align-top">
-                      {row.cpesAffected}/{totalCpes}
-                    </td>
-                    <td className="px-2 py-1 text-right align-top">
-                      <span className={`inline-block px-1.5 py-px rounded text-[10px] font-semibold ${severityBadge(row.pctAffected)}`}>
-                        {row.pctAffected}%
-                      </span>
-                    </td>
-                    <td className="px-2 py-1 text-right tabular-nums font-medium align-top">
-                      {row.totalMatches.toLocaleString()}
-                    </td>
-                    <td className="px-0 py-1 text-muted-foreground align-top">
-                      {isExpanded
-                        ? <ExpandLessIcon style={{ fontSize: 14 }} />
-                        : <ExpandMoreIcon style={{ fontSize: 14 }} />
-                      }
-                    </td>
-                  </tr>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

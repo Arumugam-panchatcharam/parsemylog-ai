@@ -5,8 +5,6 @@ import type { CrossCpeTelemetryEntry } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import Plot from "react-plotly.js";
 import CircularProgress from "@mui/material/CircularProgress";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
@@ -38,6 +36,15 @@ function severityRowClass(entry: CrossCpeTelemetryEntry): string {
   if (s === "REBOOT" || s === "LOW_MEM") return "bg-red-50 dark:bg-red-900/15 border-red-200 dark:border-red-800";
   if (s === "MEMLEAK") return "bg-orange-50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800";
   return "border-border";
+}
+
+function fmtDurationSec(sec: number): string {
+  if (sec >= 86400) {
+    const days = sec / 86400;
+    return `${days.toFixed(1)}d`;
+  }
+  if (sec >= 3600) return `${(sec / 3600).toFixed(1)}h`;
+  return `${Math.round(sec / 60)}m`;
 }
 
 function fmtMemory(val: number | undefined | null, unit: string): string {
@@ -133,6 +140,20 @@ export default function TelemetryOverviewTab() {
     }));
   }, [cpeChartData]);
 
+  const rebootXRange = useMemo<[string, string] | undefined>(() => {
+    const events = (cpeChartData?.reboot_timeline?.events ?? []) as Array<{ time: string }>;
+    if (events.length !== 1) return undefined;
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    const ts = new Date(events[0].time).getTime();
+    if (isNaN(ts)) return undefined;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const toLocal = (ms: number) => {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+    return [toLocal(ts - TWO_HOURS_MS), toLocal(ts + TWO_HOURS_MS)];
+  }, [cpeChartData]);
+
   const sortedCpes = useMemo(() => {
     if (!data?.cpes) return [];
     return [...data.cpes].sort((a, b) => {
@@ -212,7 +233,7 @@ export default function TelemetryOverviewTab() {
   const fs = data.fleet_summary;
 
   return (
-    <div className="space-y-3 max-w-6xl mx-auto">
+    <div className="space-y-3">
       {/* Summary badges */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <SummaryBadge
@@ -244,160 +265,178 @@ export default function TelemetryOverviewTab() {
         />
       </div>
 
-      {/* Detail table */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="px-3 py-1 border-b border-border bg-muted/30">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            CPE Memory &amp; Reboot Detail
-          </h3>
-        </div>
+      {/* Side-by-side: table (left) + chart (right) */}
+      <div className="flex flex-col lg:flex-row gap-3">
+        {/* Left panel — scrollable table */}
+        <div className="lg:w-[55%] bg-card border border-border rounded-xl overflow-hidden flex flex-col">
+          <div className="px-3 py-1 border-b border-border bg-muted/30">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              CPE Memory &amp; Reboot Detail
+            </h3>
+          </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-[11px] border-collapse">
-            <thead>
-              <tr className="border-b border-border bg-muted/20">
-                <ThSort col="serial" label="Serial" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
-                <ThSort col="model" label="Model" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
-                <ThSort col="reboot_count" label="Reboots" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
-                <ThSort col="memory_usage_pct_peak" label="Mem Usage" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
-                <ThSort col="memory_free_min" label="Min Free" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
-                <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Min Available</th>
-                <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Total</th>
-                <th className="text-center px-2 py-1 font-semibold text-muted-foreground">Status</th>
-                <th className="px-0 py-1 w-6"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedCpes.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-2 py-6 text-center text-muted-foreground">
-                    No CPEs with telemetry data found.
-                  </td>
+          <div className="overflow-auto max-h-[calc(100vh-220px)]">
+            <table className="w-full text-[11px] border-collapse">
+              <thead className="sticky top-0 z-10 bg-card">
+                <tr className="border-b border-border bg-muted/20">
+                  <ThSort col="serial" label="Serial" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
+                  <ThSort col="model" label="Model" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
+                  <ThSort col="reboot_count" label="Reboots" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
+                  <ThSort col="memory_usage_pct_peak" label="Mem Usage" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
+                  <ThSort col="memory_free_min" label="Min Free" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
+                  <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Min Avail</th>
+                  <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Total</th>
+                  <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Uptime</th>
+                  <th className="text-center px-2 py-1 font-semibold text-muted-foreground">Status</th>
                 </tr>
-              )}
-              {sortedCpes.map((cpe) => {
-                const isSelected = selectedCpe === cpe.serial;
-                const unit = cpe.memory_unit ?? "KB";
-                const cfg = statusCfg(cpe);
-                return (
-                  <tr
-                    key={cpe.serial}
-                    className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${isSelected ? "ring-2 ring-primary/40 ring-inset" : ""} ${severityRowClass(cpe)}`}
-                    onClick={() => handleRowClick(cpe.serial)}
-                  >
-                    <td className="px-2 py-1.5 font-mono font-medium text-foreground">
-                      {cpe.serial}
-                    </td>
-                    <td className="px-2 py-1.5 text-muted-foreground">{cpe.model}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums font-medium">
-                      {cpe.reboot_count > 0 ? (
-                        <span className="text-red-600 dark:text-red-400">{cpe.reboot_count}</span>
-                      ) : (
-                        <span className="text-muted-foreground">0</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums" title="Peak memory usage: (Total - Min Free) / Total × 100">
-                      {cpe.memory_usage_pct_peak != null ? (
-                        <span className={cpe.memory_usage_pct_peak > 90 ? "text-red-600 dark:text-red-400 font-bold" : cpe.memory_usage_pct_peak > 80 ? "text-orange-600 dark:text-orange-400 font-medium" : ""}>
-                          {cpe.memory_usage_pct_peak}%
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">N/A</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                      {fmtMemory(cpe.memory_free_min, unit)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                      {fmtMemory(cpe.memory_available_min, unit)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                      {fmtMemory(cpe.memory_total, unit)}
-                    </td>
-                    <td className="px-2 py-1.5 text-center">
-                      <StatusBadge status={cpe.status ?? "OK"} cfg={cfg} />
-                    </td>
-                    <td className="px-0 py-1.5 text-muted-foreground">
-                      {isSelected
-                        ? <ExpandLessIcon style={{ fontSize: 14 }} />
-                        : <ExpandMoreIcon style={{ fontSize: 14 }} />
-                      }
+              </thead>
+              <tbody>
+                {sortedCpes.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-2 py-6 text-center text-muted-foreground">
+                      No CPEs with telemetry data found.
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                )}
+                {sortedCpes.map((cpe) => {
+                  const isSelected = selectedCpe === cpe.serial;
+                  const unit = cpe.memory_unit ?? "KB";
+                  const cfg = statusCfg(cpe);
+                  return (
+                    <tr
+                      key={cpe.serial}
+                      className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${isSelected ? "ring-2 ring-primary/40 ring-inset" : ""} ${severityRowClass(cpe)}`}
+                      onClick={() => handleRowClick(cpe.serial)}
+                    >
+                      <td className="px-2 py-1.5 font-mono font-medium text-foreground">
+                        {cpe.serial}
+                      </td>
+                      <td className="px-2 py-1.5 text-muted-foreground">{cpe.model}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums font-medium">
+                        {cpe.reboot_count > 0 ? (
+                          <span className="text-red-600 dark:text-red-400">{cpe.reboot_count}</span>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums" title="Peak memory usage: (Total - Min Free) / Total × 100">
+                        {cpe.memory_usage_pct_peak != null ? (
+                          <span className={cpe.memory_usage_pct_peak > 90 ? "text-red-600 dark:text-red-400 font-bold" : cpe.memory_usage_pct_peak > 80 ? "text-orange-600 dark:text-orange-400 font-medium" : ""}>
+                            {cpe.memory_usage_pct_peak}%
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">N/A</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {fmtMemory(cpe.memory_free_min, unit)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {fmtMemory(cpe.memory_available_min, unit)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {fmtMemory(cpe.memory_total, unit)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                        {(cpe.reboot_events ?? []).length > 0 ? (
+                          <div className="space-y-0.5">
+                            {(cpe.reboot_events ?? []).map((evt, idx) => (
+                              <span key={idx} className="block whitespace-nowrap">{fmtDurationSec(evt.prev_uptime)}</span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span>—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 text-center">
+                        <StatusBadge status={cpe.status ?? "OK"} cfg={cfg} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Right panel — pinned chart */}
+        <div className="lg:w-[45%] lg:sticky lg:top-4 lg:self-start">
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            {selectedCpe ? (
+              <>
+                <div className="px-3 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
+                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <MemoryIcon style={{ fontSize: 14, color: "#1a73e8" }} />
+                    Memory Timeline &mdash; {selectedCpe}
+                  </h3>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setSelectedCpe(null); }}
+                    className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
+                  >
+                    <CloseIcon style={{ fontSize: 14 }} />
+                  </button>
+                </div>
+                <div className="px-2 py-1">
+                  {cpeChartLoading && (
+                    <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+                      <CircularProgress size={18} />
+                      <span className="text-xs">Loading memory data...</span>
+                    </div>
+                  )}
+                  {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
+                    <Plot
+                      data={memoryTraces.map((t) => ({
+                        type: "scatter" as const,
+                        mode: "lines" as const,
+                        x: t.times,
+                        y: t.values,
+                        name: `${t.label} (${t.unit})`,
+                        line: { color: t.style.color, width: 2, dash: t.style.dash },
+                      }))}
+                      layout={{
+                        height: 340,
+                        margin: { l: 50, r: 20, t: 16, b: 40 },
+                        xaxis: {
+                          tickfont: { size: 10 },
+                          title: { text: "Time", font: { size: 11 } },
+                          tickformat: "%H:%M\n%b %d",
+                          dtick: 20 * 60 * 1000,
+                          ...(rebootXRange ? { range: rebootXRange } : {}),
+                        },
+                        yaxis: {
+                          tickfont: { size: 10 },
+                          title: { text: `Memory (${memoryTraces[0]?.unit ?? "MB"})`, font: { size: 11 } },
+                          rangemode: "tozero",
+                        },
+                        shapes: rebootShapes,
+                        annotations: rebootAnnotations,
+                        legend: { orientation: "h", y: -0.18, font: { size: 10 } },
+                        hovermode: "x unified",
+                        paper_bgcolor: "transparent",
+                        plot_bgcolor: "transparent",
+                        font: { family: "Roboto, sans-serif", size: 11 },
+                      }}
+                      config={{ displayModeBar: true, modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"], displaylogo: false }}
+                      useResizeHandler
+                      style={{ width: "100%" }}
+                    />
+                  )}
+                  {!cpeChartLoading && (!memoryTraces || memoryTraces.length === 0) && (
+                    <div className="py-8 text-center text-xs text-muted-foreground">
+                      No memory chart data available for this CPE.
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
+                <MemoryIcon style={{ fontSize: 32, opacity: 0.3 }} />
+                <p className="text-xs">Click a CPE row to view its memory timeline</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-
-      {/* Per-CPE Memory Chart (shown when a CPE row is selected) */}
-      {selectedCpe && (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <div className="px-3 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              <MemoryIcon style={{ fontSize: 14, color: "#1a73e8" }} />
-              Memory Timeline &mdash; {selectedCpe}
-            </h3>
-            <button
-              onClick={(e) => { e.stopPropagation(); setSelectedCpe(null); }}
-              className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
-            >
-              <CloseIcon style={{ fontSize: 14 }} />
-            </button>
-          </div>
-          <div className="px-2 py-1">
-            {cpeChartLoading && (
-              <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
-                <CircularProgress size={18} />
-                <span className="text-xs">Loading memory data...</span>
-              </div>
-            )}
-            {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
-              <Plot
-                data={memoryTraces.map((t) => ({
-                  type: "scatter" as const,
-                  mode: "lines" as const,
-                  x: t.times,
-                  y: t.values,
-                  name: `${t.label} (${t.unit})`,
-                  line: { color: t.style.color, width: 2, dash: t.style.dash },
-                }))}
-                layout={{
-                  height: 300,
-                  margin: { l: 50, r: 20, t: 16, b: 40 },
-                  xaxis: {
-                    tickfont: { size: 10 },
-                    title: { text: "Time", font: { size: 11 } },
-                    tickformat: "%H:%M\n%b %d",
-                    dtick: 20 * 60 * 1000,
-                  },
-                  yaxis: {
-                    tickfont: { size: 10 },
-                    title: { text: `Memory (${memoryTraces[0]?.unit ?? "MB"})`, font: { size: 11 } },
-                    rangemode: "tozero",
-                  },
-                  shapes: rebootShapes,
-                  annotations: rebootAnnotations,
-                  legend: { orientation: "h", y: -0.18, font: { size: 10 } },
-                  hovermode: "x unified",
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                  font: { family: "Roboto, sans-serif", size: 11 },
-                }}
-                config={{ displayModeBar: false }}
-                useResizeHandler
-                style={{ width: "100%" }}
-              />
-            )}
-            {!cpeChartLoading && (!memoryTraces || memoryTraces.length === 0) && (
-              <div className="py-8 text-center text-xs text-muted-foreground">
-                No memory chart data available for this CPE.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
