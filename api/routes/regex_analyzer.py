@@ -46,11 +46,77 @@ regex_analyzer_bp = Blueprint("regex_analyzer", __name__)
 # Timestamp regex for RDK log lines (ISO-8601 prefix)
 _LOG_TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
 
+# HH:MM validation for maintenance window times
+_HH_MM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
 # Pattern config directory (domain presets from YAML files)
 _RG_PATTERNS_DIR = Path(__file__).resolve().parent.parent.parent / "configs" / "rg_patterns"
 
 # Rule parser config (domain presets from JSON)
 _RULE_PARSER_CONFIG = Path(UPLOAD_DIRECTORY) / "rule_parser_config.json"
+
+
+# ---------------------------------------------------------------------------
+# Maintenance window & reboot proximity helpers
+# ---------------------------------------------------------------------------
+
+def _validate_maintenance_window(mw: Any) -> Optional[str]:
+    """Return an error message if *mw* is not a valid maintenance window, else None."""
+    if mw is None:
+        return None
+    if not isinstance(mw, dict):
+        return "maintenance_window must be an object with 'start' and 'end'"
+    start = mw.get("start")
+    end = mw.get("end")
+    if not start or not end:
+        return "maintenance_window requires both 'start' and 'end' (HH:MM)"
+    if not _HH_MM_RE.match(str(start)) or not _HH_MM_RE.match(str(end)):
+        return "maintenance_window start/end must be HH:MM (00:00 – 23:59)"
+    if start == end:
+        return "maintenance_window start and end must differ"
+    return None
+
+
+def _validate_reboot_proximity(val: Any) -> Optional[str]:
+    """Return an error message if *val* is not a valid reboot proximity, else None."""
+    if val is None:
+        return None
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return "reboot_proximity_minutes must be an integer"
+    if n < 1 or n > 60:
+        return "reboot_proximity_minutes must be between 1 and 60"
+    return None
+
+
+def _is_in_maintenance_window(ts: datetime, mw: Dict[str, str]) -> bool:
+    """Check whether *ts* falls inside a daily recurring maintenance window.
+
+    Handles overnight windows (start > end) such as 23:00 – 03:00.
+    """
+    mw_start = datetime.strptime(mw["start"], "%H:%M").time()
+    mw_end = datetime.strptime(mw["end"], "%H:%M").time()
+    match_time = ts.time()
+    if mw_start <= mw_end:
+        return mw_start <= match_time <= mw_end
+    else:
+        return match_time >= mw_start or match_time <= mw_end
+
+
+def _is_near_reboot(
+    ts: datetime, reboots: List[Dict[str, str]], proximity_minutes: int
+) -> bool:
+    """Check whether *ts* is within ±*proximity_minutes* of any reboot event."""
+    delta = timedelta(minutes=proximity_minutes)
+    for r in reboots:
+        try:
+            rt = datetime.fromisoformat(r["timestamp"])
+        except (ValueError, KeyError):
+            continue
+        if abs(ts - rt) <= delta:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +430,10 @@ def _run_ripgrep_scan(
                 continue
             if ts_end and ts > ts_end:
                 continue
+            if pat.get("maintenance_window") and _is_in_maintenance_window(ts, pat["maintenance_window"]):
+                continue
+            if pat.get("reboot_proximity_minutes") and reboots and _is_near_reboot(ts, reboots, pat["reboot_proximity_minutes"]):
+                continue
 
             match_count += 1
 
@@ -422,7 +492,10 @@ def save_patterns(project_id):
     Save/replace the user's regex patterns (domain-grouped).
 
     Request body:
-        { "domains": { "domain_name": [{ "name": str, "regex": str, "enabled": bool }, ...] } }
+        { "domains": { "domain_name": [{
+            "name": str, "regex": str, "enabled": bool,
+            "maintenance_window": {"start": "HH:MM", "end": "HH:MM"} | null
+        }, ...] } }
     """
     user_id = get_user_id()
     _, err = _verify_project(project_id, user_id)
@@ -461,11 +534,40 @@ def save_patterns(project_id):
                     "error": f"Invalid regex for pattern '{name}' in domain '{domain_name}': {e}"
                 }), 400
 
-            validated.append({
+            # Optional maintenance window
+            raw_mw = p.get("maintenance_window") or None
+            mw_err = _validate_maintenance_window(raw_mw)
+            if mw_err:
+                return jsonify({
+                    "error": f"Pattern '{name}' in domain '{domain_name}': {mw_err}"
+                }), 400
+
+            # Optional reboot proximity
+            raw_rp = p.get("reboot_proximity_minutes")
+            if raw_rp is not None and raw_rp != "" and raw_rp is not False:
+                rp_err = _validate_reboot_proximity(raw_rp)
+                if rp_err:
+                    return jsonify({
+                        "error": f"Pattern '{name}' in domain '{domain_name}': {rp_err}"
+                    }), 400
+                raw_rp = int(raw_rp)
+            else:
+                raw_rp = None
+
+            entry: Dict[str, Any] = {
                 "name": name,
                 "regex": regex,
                 "enabled": enabled,
-            })
+            }
+            if raw_mw:
+                entry["maintenance_window"] = {
+                    "start": str(raw_mw["start"]).strip(),
+                    "end": str(raw_mw["end"]).strip(),
+                }
+            if raw_rp:
+                entry["reboot_proximity_minutes"] = raw_rp
+
+            validated.append(entry)
 
         if validated:
             validated_domains[domain_name] = validated

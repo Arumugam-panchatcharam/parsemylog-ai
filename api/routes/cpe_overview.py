@@ -9,6 +9,7 @@ pattern summary per domain, and log file statistics.
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -500,6 +501,9 @@ def get_cpe_overview(project_id):
 
 _PATTERN_SCAN_CACHE = ".cpe_overview_pattern_scan.json"
 
+# Timestamp regex (same as regex_analyzer.py)
+_LOG_TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
+
 
 def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
     """Run ``rg -c`` and return total match count across all files."""
@@ -595,6 +599,115 @@ def _run_rg_count_all_cpes(
             serial = rel.split("/", 1)[0].split("\\", 1)[0]
             if serial in counts:
                 counts[serial] += cnt
+
+    return counts
+
+
+def _run_rg_count_all_cpes_filtered(
+    rg_binary: str,
+    regex: str,
+    base_dir: Path,
+    cpe_serials: List[str],
+    maintenance_window: Optional[Dict[str, str]] = None,
+    reboot_proximity_minutes: Optional[int] = None,
+    cpe_reboots: Optional[Dict[str, List[Dict[str, str]]]] = None,
+) -> Dict[str, int]:
+    """Like :func:`_run_rg_count_all_cpes` but excludes matches based on
+    maintenance window and/or reboot proximity.
+
+    Uses full ``rg`` output (not ``-c``) so that timestamps can be parsed,
+    while still issuing a single subprocess for all CPEs.
+    """
+    counts: Dict[str, int] = {s: 0 for s in cpe_serials}
+    serial_set = set(cpe_serials)
+
+    mw_start = None
+    mw_end = None
+    if maintenance_window:
+        mw_start = datetime.strptime(maintenance_window["start"], "%H:%M").time()
+        mw_end = datetime.strptime(maintenance_window["end"], "%H:%M").time()
+
+    rp_delta = None
+    if reboot_proximity_minutes and cpe_reboots:
+        from datetime import timedelta
+        rp_delta = timedelta(minutes=reboot_proximity_minutes)
+
+    cmd = [
+        rg_binary,
+        "--no-heading",
+        "--no-line-number",
+        "-i",
+        "--max-filesize", "500M",
+        "--max-count", "1000",
+        "-e", regex,
+        str(base_dir),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            f"[CPEOverview] rg (filtered) timed out for: {regex[:80]}"
+        )
+        return counts
+    except Exception as e:
+        logger.warning(f"[CPEOverview] rg (filtered) error: {e}")
+        return counts
+
+    if result.returncode not in (0, 1):
+        return counts
+
+    base_str = str(base_dir)
+    for line in result.stdout.splitlines():
+        if not line.startswith(base_str):
+            continue
+
+        rel = line[len(base_str):].lstrip("/\\")
+        serial = rel.split("/", 1)[0].split("\\", 1)[0]
+        if serial not in serial_set:
+            continue
+
+        ts_match = _LOG_TS_RE.search(line)
+        if not ts_match:
+            counts[serial] += 1
+            continue
+
+        try:
+            ts_dt = datetime.fromisoformat(ts_match.group(1))
+        except ValueError:
+            counts[serial] += 1
+            continue
+
+        # Maintenance window filter
+        if mw_start is not None and mw_end is not None:
+            match_time = ts_dt.time()
+            if mw_start <= mw_end:
+                if mw_start <= match_time <= mw_end:
+                    continue
+            else:
+                if match_time >= mw_start or match_time <= mw_end:
+                    continue
+
+        # Reboot proximity filter
+        if rp_delta is not None and cpe_reboots:
+            reboots = cpe_reboots.get(serial, [])
+            skip = False
+            for r in reboots:
+                try:
+                    rt = datetime.fromisoformat(r["timestamp"])
+                except (ValueError, KeyError):
+                    continue
+                if abs(ts_dt - rt) <= rp_delta:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+        counts[serial] += 1
 
     return counts
 
@@ -708,11 +821,33 @@ def run_pattern_scan(project_id):
             "cpes": [],
         }
         for idx, pat in enumerate(enabled):
-            all_tasks.append({
+            task: Dict[str, Any] = {
                 "domain": domain_name,
                 "idx": idx,
                 "regex": pat["regex"],
-            })
+            }
+            if pat.get("maintenance_window"):
+                task["maintenance_window"] = pat["maintenance_window"]
+            if pat.get("reboot_proximity_minutes"):
+                task["reboot_proximity_minutes"] = pat["reboot_proximity_minutes"]
+            all_tasks.append(task)
+
+    # Check if any task needs timestamp-level filtering
+    any_needs_filtering = any(
+        t.get("maintenance_window") or t.get("reboot_proximity_minutes")
+        for t in all_tasks
+    )
+
+    # Pre-load per-CPE reboots if any pattern uses reboot proximity
+    any_needs_reboots = any(t.get("reboot_proximity_minutes") for t in all_tasks)
+    cpe_reboots: Dict[str, List[Dict[str, str]]] = {}
+    if any_needs_reboots and is_multi_cpe:
+        from logai.info_extractor import find_and_extract_reboots as _extract_reboots
+        for cpe_info in cpe_dirs:
+            try:
+                cpe_reboots[cpe_info["serial"]] = _extract_reboots(cpe_info["dir"])
+            except Exception:
+                cpe_reboots[cpe_info["serial"]] = []
 
     if is_multi_cpe and len(cpe_dirs) > 1:
         # Fast path: one rg call per pattern over the whole project dir,
@@ -721,9 +856,19 @@ def run_pattern_scan(project_id):
 
         def _scan_pattern(task: Dict[str, Any]) -> tuple:
             key = f"{task['domain']}::{task['idx']}"
-            counts = _run_rg_count_all_cpes(
-                rg_binary, task["regex"], base_dir, cpe_serials,
-            )
+            mw = task.get("maintenance_window")
+            rp = task.get("reboot_proximity_minutes")
+            if mw or rp:
+                counts = _run_rg_count_all_cpes_filtered(
+                    rg_binary, task["regex"], base_dir, cpe_serials,
+                    maintenance_window=mw,
+                    reboot_proximity_minutes=rp,
+                    cpe_reboots=cpe_reboots if rp else None,
+                )
+            else:
+                counts = _run_rg_count_all_cpes(
+                    rg_binary, task["regex"], base_dir, cpe_serials,
+                )
             return key, counts
 
         with ThreadPoolExecutor(max_workers=min(8, len(all_tasks))) as pool:

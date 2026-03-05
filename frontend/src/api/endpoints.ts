@@ -519,10 +519,17 @@ export const embeddingApi = {
 };
 
 // ---------- Pattern Analyzer ----------
+export interface MaintenanceWindow {
+  start: string; // HH:MM (UTC, 24h)
+  end: string;   // HH:MM (UTC, 24h)
+}
+
 export interface UserPattern {
   name: string;
   regex: string;
   enabled: boolean;
+  maintenance_window?: MaintenanceWindow | null;
+  reboot_proximity_minutes?: number | null;
 }
 
 /** Domain-grouped patterns: { domain_name: UserPattern[] } */

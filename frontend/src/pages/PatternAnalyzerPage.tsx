@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { patternAnalyzerApi, patternGovernanceApi, natcoApi, projectsApi } from "@/api/endpoints";
-import type { UserPattern, DomainPatterns, DomainDiff, NatcoInfo } from "@/api/endpoints";
+import type { UserPattern, DomainPatterns, DomainDiff, NatcoInfo, MaintenanceWindow } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
@@ -25,6 +25,8 @@ import PublicIcon from "@mui/icons-material/Public";
 import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CircularProgress from "@mui/material/CircularProgress";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import ScheduleIcon from "@mui/icons-material/Schedule";
+import CloseIcon from "@mui/icons-material/Close";
 import PatternOverviewTab from "@/pages/PatternOverviewTab";
 
 /* ================================================================ Types */
@@ -497,6 +499,27 @@ export default function PatternAnalyzerPage() {
     }));
   };
 
+  const updatePatternMW = (domain: string, idx: number, mw: MaintenanceWindow | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) =>
+        i === idx ? { ...p, maintenance_window: mw } : p
+      ),
+    }));
+  };
+
+  const updatePatternRP = (domain: string, idx: number, minutes: number | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) =>
+        i === idx ? { ...p, reboot_proximity_minutes: minutes } : p
+      ),
+    }));
+  };
+
+  const [mwEditTarget, setMwEditTarget] = useState<string | null>(null);
+  const mwKey = (domain: string, idx: number) => `${domain}::${idx}`;
+
   // -- JSON file import --
   const handleJsonImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -954,46 +977,144 @@ export default function PatternAnalyzerPage() {
                         <p className="text-[11px] text-muted-foreground py-2 text-center">No patterns in this domain yet.</p>
                       ) : (
                         <>
-                          <div className="grid grid-cols-[32px_1fr_2fr_32px] gap-2 px-1 py-0.5">
+                          <div className="grid grid-cols-[32px_1fr_2fr_auto_32px] gap-2 px-1 py-0.5">
                             <span className="text-[10px] text-muted-foreground font-semibold uppercase">On</span>
                             <span className="text-[10px] text-muted-foreground font-semibold uppercase">Name</span>
                             <span className="text-[10px] text-muted-foreground font-semibold uppercase">Regex</span>
+                            <span className="text-[10px] text-muted-foreground font-semibold uppercase whitespace-nowrap">Filters</span>
                             <span />
                           </div>
-                          {patterns.map((p, idx) => (
-                            <div
-                              key={idx}
-                              ref={scrollTarget?.domain === domain && scrollTarget?.idx === idx ? newPatternRef : undefined}
-                              className="grid grid-cols-[32px_1fr_2fr_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={p.enabled}
-                                onChange={(e) => updatePattern(domain, idx, "enabled", e.target.checked)}
-                                className="h-3.5 w-3.5 rounded border-gray-300 accent-blue-600"
-                              />
-                              <input
-                                type="text"
-                                value={p.name}
-                                onChange={(e) => updatePattern(domain, idx, "name", e.target.value)}
-                                placeholder="Pattern name"
-                                className="text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
-                              />
-                              <input
-                                type="text"
-                                value={p.regex}
-                                onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)}
-                                placeholder="Regular expression"
-                                className="text-xs px-2 py-1 rounded border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
-                              />
-                              <button
-                                onClick={() => removePattern(domain, idx)}
-                                className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
-                              >
-                                <DeleteIcon style={{ fontSize: 14 }} />
-                              </button>
-                            </div>
-                          ))}
+                          {patterns.map((p, idx) => {
+                            const key = mwKey(domain, idx);
+                            const mwOpen = mwEditTarget === key;
+                            const hasMW = !!(p.maintenance_window?.start && p.maintenance_window?.end);
+                            const hasRP = !!(p.reboot_proximity_minutes && p.reboot_proximity_minutes > 0);
+                            const hasFilters = hasMW || hasRP;
+                            return (
+                              <div key={idx} ref={scrollTarget?.domain === domain && scrollTarget?.idx === idx ? newPatternRef : undefined}>
+                                <div className="grid grid-cols-[32px_1fr_2fr_auto_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
+                                  <input
+                                    type="checkbox"
+                                    checked={p.enabled}
+                                    onChange={(e) => updatePattern(domain, idx, "enabled", e.target.checked)}
+                                    className="h-3.5 w-3.5 rounded border-gray-300 accent-blue-600"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={p.name}
+                                    onChange={(e) => updatePattern(domain, idx, "name", e.target.value)}
+                                    placeholder="Pattern name"
+                                    className="text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={p.regex}
+                                    onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)}
+                                    placeholder="Regular expression"
+                                    className="text-xs px-2 py-1 rounded border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
+                                  />
+                                  <button
+                                    onClick={() => setMwEditTarget(mwOpen ? null : key)}
+                                    className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap transition-colors ${
+                                      hasFilters
+                                        ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50"
+                                        : "text-muted-foreground hover:bg-muted/50"
+                                    }`}
+                                    title={
+                                      hasFilters
+                                        ? [
+                                            hasMW ? `MW: ${p.maintenance_window!.start}–${p.maintenance_window!.end} UTC` : "",
+                                            hasRP ? `Reboot: ±${p.reboot_proximity_minutes}min` : "",
+                                          ].filter(Boolean).join(" | ")
+                                        : "Set exclusion filters"
+                                    }
+                                  >
+                                    <ScheduleIcon style={{ fontSize: 13 }} />
+                                    {hasMW && <span>{p.maintenance_window!.start}–{p.maintenance_window!.end}</span>}
+                                    {hasRP && (
+                                      <span className="flex items-center gap-0.5">
+                                        <RestartAltIcon style={{ fontSize: 11 }} />
+                                        ±{p.reboot_proximity_minutes}m
+                                      </span>
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => removePattern(domain, idx)}
+                                    className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
+                                  >
+                                    <DeleteIcon style={{ fontSize: 14 }} />
+                                  </button>
+                                </div>
+                                {mwOpen && (
+                                  <div className="ml-8 mr-8 mb-1 mt-0.5 space-y-1">
+                                    <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/40 text-[11px]">
+                                      <ScheduleIcon style={{ fontSize: 13 }} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                                      <span className="text-muted-foreground whitespace-nowrap">Maintenance window (UTC):</span>
+                                      <input
+                                        type="time"
+                                        value={p.maintenance_window?.start || ""}
+                                        onChange={(e) =>
+                                          updatePatternMW(domain, idx, {
+                                            start: e.target.value,
+                                            end: p.maintenance_window?.end || "",
+                                          })
+                                        }
+                                        className="text-xs px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-amber-500 w-[90px]"
+                                      />
+                                      <span className="text-muted-foreground">to</span>
+                                      <input
+                                        type="time"
+                                        value={p.maintenance_window?.end || ""}
+                                        onChange={(e) =>
+                                          updatePatternMW(domain, idx, {
+                                            start: p.maintenance_window?.start || "",
+                                            end: e.target.value,
+                                          })
+                                        }
+                                        className="text-xs px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-amber-500 w-[90px]"
+                                      />
+                                      {hasMW && (
+                                        <button
+                                          onClick={() => updatePatternMW(domain, idx, null)}
+                                          className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
+                                          title="Remove maintenance window"
+                                        >
+                                          <CloseIcon style={{ fontSize: 13 }} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/40 text-[11px]">
+                                      <RestartAltIcon style={{ fontSize: 13 }} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                                      <span className="text-muted-foreground whitespace-nowrap">Reboot proximity:</span>
+                                      <span className="text-muted-foreground">±</span>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={60}
+                                        value={p.reboot_proximity_minutes ?? ""}
+                                        onChange={(e) => {
+                                          const v = e.target.value;
+                                          updatePatternRP(domain, idx, v === "" ? null : Math.max(1, Math.min(60, parseInt(v, 10) || 1)));
+                                        }}
+                                        placeholder="min"
+                                        className="text-xs px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 w-[56px] text-center"
+                                      />
+                                      <span className="text-muted-foreground">min of any reboot</span>
+                                      {hasRP && (
+                                        <button
+                                          onClick={() => updatePatternRP(domain, idx, null)}
+                                          className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
+                                          title="Remove reboot proximity filter"
+                                        >
+                                          <CloseIcon style={{ fontSize: 13 }} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </>
                       )}
                       {/* Inline add-pattern row at the bottom */}
