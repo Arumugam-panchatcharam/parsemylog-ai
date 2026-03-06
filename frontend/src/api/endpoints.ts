@@ -1032,3 +1032,55 @@ export const pcapApi = {
     return api.get<Pcap1905Overview>("/pcap/analyze/1905", { params, timeout: 120_000 });
   },
 };
+
+// ── Telemetry CSV Analyzer ────────────────────────────────────────────────
+
+export interface TelemetryCsvFileInfo {
+  filename: string;
+  size_bytes: number;
+  size_mb: number;
+  uploaded_at: string;
+  tags: string[];
+}
+
+export interface TelemetryCsvMetadata {
+  columns: string[];
+  dtypes: Record<string, string>;
+  row_count: number;
+  column_count: number;
+  unique_values: Record<string, string[]>;
+  ready: boolean;
+}
+
+export interface TelemetryCsvSeries {
+  x: any[];
+  series: Array<{ name: string; values: any[] }>;
+  row_count: number;
+  downsampled: boolean;
+}
+
+export const telemetryCsvApi = {
+  upload: (files: File[]) => {
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f));
+    return api.post<{ uploaded: TelemetryCsvFileInfo[]; errors: string[] }>("/telemetry-csv/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 600_000,
+    });
+  },
+  listFiles: () =>
+    api.get<{ files: TelemetryCsvFileInfo[] }>("/telemetry-csv/files"),
+  deleteFile: (filename: string) =>
+    api.delete(`/telemetry-csv/files/${encodeURIComponent(filename)}`),
+  updateTags: (filename: string, tags: string[]) =>
+    api.put<{ filename: string; tags: string[] }>(`/telemetry-csv/files/${encodeURIComponent(filename)}/tags`, { tags }),
+  getMetadata: (filename: string) =>
+    api.get<TelemetryCsvMetadata>(`/telemetry-csv/files/${encodeURIComponent(filename)}/metadata`, { timeout: 120_000 }),
+  getSeries: (filename: string, xColumn: string, yColumns: string[], maxPoints?: number) =>
+    api.post<TelemetryCsvSeries>("/telemetry-csv/series", { 
+      filename, 
+      x_column: xColumn, 
+      y_columns: yColumns,
+      max_points: maxPoints 
+    }, { timeout: 120_000 }),
+};

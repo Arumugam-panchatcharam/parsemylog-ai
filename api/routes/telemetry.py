@@ -41,7 +41,7 @@ _STATUS_LABEL_GROUPS = {
     "GPON", "PPP / WANoE",
 }
 _SKIP_CHART_GROUPS = {
-    "WiFi Radio", "WiFi SSID", "Device Info",
+    "Device Info",
     "Cellular Backup", "SmartHome", "Deep Power Down",
     "WiFi Global", "CUJO Agent", "Airties Edge",
     "GPON", "PPP / WANoE",
@@ -543,9 +543,21 @@ def _build_status_labels_data(configured_fields):
     return labels
 
 
+_CHART_GROUP_ORDER = [
+    "Memory",
+    "CPU",
+    "DSL / WAN",
+    "WAN Traffic",
+    "WiFi Radio Channel",
+    "WiFi Radio Noise",
+    "WiFi Radio Utilization",
+    "WiFi SSID",
+]
+
+
 def _build_charts_data(configured_fields):
     """Build chart data for plottable fields (JSON, not rendered)."""
-    charts = []
+    charts_by_group = {}
     for group_label, field_list in configured_fields.items():
         if group_label in _SKIP_CHART_GROUPS:
             continue
@@ -566,15 +578,69 @@ def _build_charts_data(configured_fields):
                 "unit": display_unit,
                 "times": times,
                 "values": scaled_values,
+                "raw_unit": raw_unit,
             })
+
+        # Special handling for Memory group: normalize time-based traces to memory scale
+        if group_label == "Memory" and traces:
+            # Identify memory traces (KB/MB/GB) and time traces (sec/min/hours/days)
+            memory_traces = []
+            time_traces = []
+            for trace in traces:
+                unit_lower = trace["unit"].strip().lower()
+                if unit_lower in ("kb", "mb", "gb"):
+                    memory_traces.append(trace)
+                elif unit_lower in ("sec", "min", "hours", "days", "s"):
+                    time_traces.append(trace)
+            
+            # If we have both memory and time traces, normalize time traces
+            if memory_traces and time_traces:
+                # Get min/max range of memory values
+                all_mem_vals = []
+                for mt in memory_traces:
+                    all_mem_vals.extend(mt["values"])
+                
+                if all_mem_vals:
+                    mem_min = min(all_mem_vals)
+                    mem_max = max(all_mem_vals)
+                    mem_range = mem_max - mem_min if mem_max != mem_min else 1.0
+                    
+                    # Normalize each time trace
+                    for tt in time_traces:
+                        if tt["values"]:
+                            time_min = min(tt["values"])
+                            time_max = max(tt["values"])
+                            time_range = time_max - time_min if time_max != time_min else 1.0
+                            
+                            # Store pre-normalization values and display unit for hover
+                            tt["raw_values"] = tt["values"][:]
+                            tt["raw_unit_original"] = tt["unit"]
+                            
+                            # Normalize: map time range to memory range
+                            normalized = []
+                            for v in tt["values"]:
+                                norm_0_1 = (v - time_min) / time_range
+                                norm_mem = mem_min + (norm_0_1 * mem_range)
+                                normalized.append(round(norm_mem, 2))
+                            
+                            tt["values"] = normalized
+                            tt["unit"] = memory_traces[0]["unit"]  # Use same unit as memory
+                            tt["normalized"] = True
 
         if traces:
-            charts.append({
+            charts_by_group[group_label] = {
                 "group": group_label,
                 "traces": traces,
-            })
+            }
 
-    return charts
+    ordered = []
+    for name in _CHART_GROUP_ORDER:
+        if name in charts_by_group:
+            ordered.append(charts_by_group.pop(name))
+    for chart in charts_by_group.values():
+        ordered.append(chart)
+
+    return ordered
 
 
 def _build_key_metrics_data(configured_fields, summary):

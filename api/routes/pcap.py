@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 pcap_bp = Blueprint("pcap", __name__)
 
 ALLOWED_EXTENSIONS = {".pcap", ".pcapng"}
+COMPRESSED_EXTENSIONS = {".zip", ".gz"}
+UPLOAD_EXTENSIONS = ALLOWED_EXTENSIONS | COMPRESSED_EXTENSIONS
 MAX_PCAP_SIZE = 500 * 1024 * 1024  # 500 MB per file
 META_FILENAME = "_meta.json"
 
@@ -95,6 +97,61 @@ def _run_detection_async(user_id: int, filename: str, filepath: str):
     thread.start()
 
 
+def _extract_zip(zip_path: Path, target_dir: Path) -> list[Path]:
+    """Extract .pcap/.pcapng files from a ZIP, filtering macOS metadata."""
+    import zipfile
+
+    extracted = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        pcap_names = [
+            n for n in zf.namelist()
+            if os.path.splitext(n)[1].lower() in ALLOWED_EXTENSIONS
+            and not n.startswith("__MACOSX")
+            and not os.path.basename(n).startswith(".")
+        ]
+        for name in pcap_names:
+            basename = secure_filename(os.path.basename(name))
+            if not basename:
+                continue
+            dest = target_dir / basename
+            counter = 1
+            stem, ext = os.path.splitext(basename)
+            while dest.exists():
+                dest = target_dir / f"{stem}_{counter}{ext}"
+                counter += 1
+            with zf.open(name) as src, open(dest, "wb") as dst:
+                dst.write(src.read())
+            extracted.append(dest)
+    return extracted
+
+
+def _extract_gz(gz_path: Path, target_dir: Path) -> Path | None:
+    """Extract a gzip-compressed PCAP file."""
+    import gzip
+
+    stem = gz_path.stem  # e.g. "capture.pcap" from "capture.pcap.gz"
+    if os.path.splitext(stem)[1].lower() not in ALLOWED_EXTENSIONS:
+        stem = stem + ".pcap"
+    basename = secure_filename(stem)
+    if not basename:
+        return None
+    dest = target_dir / basename
+    counter = 1
+    name_stem, ext = os.path.splitext(basename)
+    while dest.exists():
+        dest = target_dir / f"{name_stem}_{counter}{ext}"
+        counter += 1
+    try:
+        with gzip.open(gz_path, "rb") as src, open(dest, "wb") as dst:
+            dst.write(src.read())
+        return dest
+    except Exception as exc:
+        logger.warning("Failed to extract gzip %s: %s", gz_path.name, exc)
+        if dest.exists():
+            dest.unlink()
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -126,8 +183,8 @@ def upload_pcap():
         name = secure_filename(f.filename)
         ext = os.path.splitext(name)[1].lower()
 
-        if ext not in ALLOWED_EXTENSIONS:
-            errors.append(f"{f.filename}: unsupported format (only .pcap/.pcapng)")
+        if ext not in UPLOAD_EXTENSIONS:
+            errors.append(f"{f.filename}: unsupported format (only .pcap/.pcapng/.zip/.gz)")
             continue
 
         dest = pcap_dir / name
@@ -146,15 +203,34 @@ def upload_pcap():
             errors.append(f"{f.filename}: exceeds {MAX_PCAP_SIZE // (1024*1024)} MB limit")
             continue
 
-        # Initialize metadata entry
-        meta[dest.name] = {"protocol": "detecting...", "tags": []}
-        _save_meta(user_id, meta)
+        # Extract PCAP from compressed archives
+        extracted_files = []
+        if ext == ".zip":
+            extracted_files = _extract_zip(dest, pcap_dir)
+            dest.unlink()
+            if not extracted_files:
+                errors.append(f"{f.filename}: no .pcap/.pcapng files found in ZIP")
+                continue
+        elif ext == ".gz":
+            extracted = _extract_gz(dest, pcap_dir)
+            dest.unlink()
+            if not extracted:
+                errors.append(f"{f.filename}: could not extract .pcap/.pcapng from gzip")
+                continue
+            extracted_files = [extracted]
 
-        uploaded.append(_file_meta(dest, meta))
-        logger.info("PCAP uploaded: %s for user %s", dest.name, user_id)
+        pcap_files = extracted_files if extracted_files else [dest]
+        for pcap_path in pcap_files:
+            if pcap_path.stat().st_size > MAX_PCAP_SIZE:
+                pcap_path.unlink()
+                errors.append(f"{pcap_path.name}: exceeds {MAX_PCAP_SIZE // (1024*1024)} MB limit")
+                continue
 
-        # Kick off background protocol detection
-        _run_detection_async(user_id, dest.name, str(dest))
+            meta[pcap_path.name] = {"protocol": "detecting...", "tags": []}
+            _save_meta(user_id, meta)
+            uploaded.append(_file_meta(pcap_path, meta))
+            logger.info("PCAP uploaded: %s for user %s", pcap_path.name, user_id)
+            _run_detection_async(user_id, pcap_path.name, str(pcap_path))
 
     return jsonify({
         "uploaded": uploaded,

@@ -16,6 +16,7 @@ import AdminPage from "@/pages/AdminPage";
 import ProfilePage from "@/pages/ProfilePage";
 import ChatPage from "@/pages/ChatPage";
 import PcapAnalyzerPage from "@/pages/PcapAnalyzerPage";
+import TelemetryCsvAnalyzerPage from "@/pages/TelemetryCsvAnalyzerPage";
 import BatchJobsPage from "@/pages/BatchJobsPage";
 import BatchJobDetailPage from "@/pages/BatchJobDetailPage";
 import KnowledgeGraphPage from "@/pages/KnowledgeGraphPage";
@@ -76,6 +77,7 @@ function AppRoutes() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/knowledge-graph" element={<KnowledgeGraphPage />} />
         <Route path="/pcap" element={<PcapAnalyzerPage />} />
+        <Route path="/telemetry-csv" element={<TelemetryCsvAnalyzerPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
         <Route path="/projects/:projectId/batch-jobs" element={<BatchJobsPage />} />

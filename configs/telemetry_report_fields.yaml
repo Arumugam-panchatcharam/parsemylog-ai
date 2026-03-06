@@ -106,7 +106,7 @@ field_groups:
         sample: last
 
   # -------------------------------------------------------------------------
-  # WiFi Radio Status
+  # WiFi Radio Status (non-chart status labels)
   # -------------------------------------------------------------------------
   - label: "WiFi Radio"
     fields:
@@ -123,7 +123,6 @@ field_groups:
         label: "Radio {N} Channel"
         type: numeric
         sample: last
-        plot: true
 
       - key: "Device.WiFi.Radio.{N}.OperatingFrequencyBand"
         label: "Radio {N} Band"
@@ -137,12 +136,38 @@ field_groups:
         label: "Radio {N} Tx Power"
         type: numeric
         unit: "%"
+
+  # -------------------------------------------------------------------------
+  # WiFi Radio Channel
+  # -------------------------------------------------------------------------
+  - label: "WiFi Radio Channel"
+    fields:
+      - key: "Device.WiFi.Radio.{N}.Channel"
+        label: "Radio {N} Channel"
+        type: numeric
+        sample: last
         plot: true
 
+  # -------------------------------------------------------------------------
+  # WiFi Radio Noise
+  # -------------------------------------------------------------------------
+  - label: "WiFi Radio Noise"
+    fields:
       - key: "Device.WiFi.Radio.{N}.Stats.Noise"
         label: "Radio {N} Noise"
         type: numeric
         unit: "dBm"
+        plot: true
+
+  # -------------------------------------------------------------------------
+  # WiFi Radio Utilization
+  # -------------------------------------------------------------------------
+  - label: "WiFi Radio Utilization"
+    fields:
+      - key: "Device.WiFi.Radio.{N}.Stats.X_COMCAST-COM_ChannelUtilization"
+        label: "Radio {N} Ch Util"
+        type: numeric
+        unit: "%"
         plot: true
 
   # -------------------------------------------------------------------------
@@ -200,7 +225,6 @@ field_groups:
         label: "Memory Total"
         type: numeric
         unit: "KB"
-        plot: true
 
       - key: "Device.DeviceInfo.MemoryStatus.Available"
         label: "Memory Available"
@@ -220,6 +244,12 @@ field_groups:
         unit: "KB"
         plot: true
 
+      - key: "Device.DeviceInfo.UpTime"
+        label: "Uptime"
+        type: numeric
+        unit: "sec"
+        plot: true
+
   # -------------------------------------------------------------------------
   # CPU
   # -------------------------------------------------------------------------
@@ -230,17 +260,6 @@ field_groups:
         type: numeric
         unit: "%"
         sample: all
-        plot: true
-
-  # -------------------------------------------------------------------------
-  # System
-  # -------------------------------------------------------------------------
-  - label: "System"
-    fields:
-      - key: "Device.DeviceInfo.UpTime"
-        label: "Uptime"
-        type: numeric
-        unit: "sec"
         plot: true
 
       - key: "Device.DeviceInfo.ProcessStatus.ProcessNumberOfEntries"

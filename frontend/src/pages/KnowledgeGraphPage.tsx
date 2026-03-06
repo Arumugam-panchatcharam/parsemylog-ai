@@ -28,6 +28,8 @@ import {
   type KnowledgeEdgeData,
 } from "../api/endpoints";
 
+import { cn } from "@/lib/utils";
+
 import CircularProgress from "@mui/material/CircularProgress";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -38,6 +40,8 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import CloseIcon from "@mui/icons-material/Close";
 import HubIcon from "@mui/icons-material/Hub";
 import FileUploadIcon from "@mui/icons-material/FileUpload";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 
 // ---------------------------------------------------------------------------
 // Node type colors & styles
@@ -237,6 +241,8 @@ export default function KnowledgeGraphPage() {
 
   // Graph list
   const [filterNatcoId, setFilterNatcoId] = useState<number | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(224);
 
   const { data: graphs, isLoading: graphsLoading } = useQuery({
     queryKey: ["knowledgeGraphs", filterNatcoId],
@@ -274,6 +280,7 @@ export default function KnowledgeGraphPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const loadedGraphRef = useRef<string | null>(null);
+  const isResizing = useRef(false);
   const [pendingLayout, setPendingLayout] = useState<Node[] | null>(null);
 
   const enrichedNodes = useMemo(() => {
@@ -515,6 +522,24 @@ export default function KnowledgeGraphPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    isResizing.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return;
+      const newWidth = Math.min(400, Math.max(160, startWidth + e.clientX - startX));
+      setSidebarWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      isResizing.current = false;
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [sidebarWidth]);
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -522,108 +547,139 @@ export default function KnowledgeGraphPage() {
   return (
     <div className="h-[calc(100vh-4rem)] flex">
       {/* Left sidebar - graph list */}
-      <div className="w-64 border-r border-border bg-card flex flex-col overflow-hidden">
-        <div className="p-3 border-b border-border">
-          <div className="flex items-center gap-2 mb-2">
-            <HubIcon fontSize="small" className="text-blue-500" />
-            <h2 className="font-semibold text-sm">Knowledge Graphs</h2>
-          </div>
-          {natcos && natcos.length > 0 && (
-            <select
-              value={filterNatcoId ?? ""}
-              onChange={(e) => setFilterNatcoId(e.target.value ? Number(e.target.value) : null)}
-              className="w-full px-2 py-1 text-xs border border-border rounded-md bg-background mb-2"
-            >
-              <option value="">All NATCOs</option>
-              {natcos.map((nc: { id: number; code: string; name: string }) => (
-                <option key={nc.id} value={nc.id}>{nc.code} - {nc.name}</option>
-              ))}
-            </select>
+      <div 
+        className={cn("border-r border-border bg-card flex flex-col overflow-hidden transition-all relative", sidebarCollapsed && "transition-none")}
+        style={{ width: sidebarCollapsed ? 40 : sidebarWidth }}
+      >
+        <div className="flex items-center justify-between px-2 py-1.5 border-b border-border">
+          {!sidebarCollapsed && (
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <HubIcon fontSize="small" className="text-blue-500" />
+              Knowledge Graphs
+            </h3>
           )}
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => setShowCreateDialog(true)}
-              className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              <AddIcon fontSize="small" /> New Graph
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importJsonMut.isPending}
-              className="flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs border border-border rounded-lg hover:bg-muted"
-              title="Import graph from JSON file"
-            >
-              <FileUploadIcon sx={{ fontSize: 16 }} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json"
-              onChange={handleImportFile}
-              className="hidden"
-            />
-          </div>
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="p-0.5 rounded hover:bg-muted"
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? (
+              <ChevronRightIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+            ) : (
+              <ChevronLeftIcon style={{ fontSize: 14 }} className="text-muted-foreground" />
+            )}
+          </button>
         </div>
 
-        {/* Templates */}
-        {templates && templates.length > 0 && (
-          <div className="px-3 py-2 border-b border-border">
-            <div className="text-[10px] uppercase text-muted-foreground font-semibold mb-1.5">Templates</div>
-            {templates.map((t) => (
-              <button
-                key={t.filename}
-                onClick={() => importMut.mutate(t.filename)}
-                disabled={importMut.isPending}
-                className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted mb-1 flex items-center gap-1"
-              >
-                <UploadIcon sx={{ fontSize: 14 }} className="text-muted-foreground" />
-                <span className="truncate">{t.name}</span>
-                <span className="ml-auto text-[10px] text-muted-foreground">{t.node_count}n</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Graph list */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {graphsLoading && (
-            <div className="flex justify-center py-4"><CircularProgress size={20} /></div>
-          )}
-          {graphs?.map((g) => (
-            <div
-              key={g.id}
-              className={`group flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs transition-colors cursor-pointer ${
-                selectedGraphId === g.id
-                  ? "bg-blue-100 dark:bg-blue-900/40 border border-blue-300 dark:border-blue-700"
-                  : "hover:bg-muted"
-              }`}
-              onClick={() => {
-                setSelectedGraphId(g.id);
-                setEditingNode(null);
-                setEditingEdge(null);
-              }}
-            >
-              <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{g.name}</div>
-                {g.natco_code && (
-                  <span className="text-[10px] text-muted-foreground">{g.natco_code}</span>
-                )}
+        {!sidebarCollapsed && (
+          <>
+            <div className="p-3 border-b border-border">
+              {natcos && natcos.length > 0 && (
+                <select
+                  value={filterNatcoId ?? ""}
+                  onChange={(e) => setFilterNatcoId(e.target.value ? Number(e.target.value) : null)}
+                  className="w-full px-2 py-1 text-xs border border-border rounded-md bg-background mb-2"
+                >
+                  <option value="">All NATCOs</option>
+                  {natcos.map((nc: { id: number; code: string; name: string }) => (
+                    <option key={nc.id} value={nc.id}>{nc.code} - {nc.name}</option>
+                  ))}
+                </select>
+              )}
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setShowCreateDialog(true)}
+                  className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  <AddIcon fontSize="small" /> New Graph
+                </button>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importJsonMut.isPending}
+                  className="flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs border border-border rounded-lg hover:bg-muted"
+                  title="Import graph from JSON file"
+                >
+                  <FileUploadIcon sx={{ fontSize: 16 }} />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json"
+                  onChange={handleImportFile}
+                  className="hidden"
+                />
               </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (confirm(`Delete "${g.name}"?`)) {
-                    deleteGraphMut.mutate(g.id);
-                  }
-                }}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-opacity"
+            </div>
+
+            {/* Templates */}
+            {templates && templates.length > 0 && (
+              <div className="px-3 py-2 border-b border-border">
+                <div className="text-[10px] uppercase text-muted-foreground font-semibold mb-1.5">Templates</div>
+                {templates.map((t) => (
+                  <button
+                    key={t.filename}
+                    onClick={() => importMut.mutate(t.filename)}
+                    disabled={importMut.isPending}
+                    className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted mb-1 flex items-center gap-1"
+                  >
+                    <UploadIcon sx={{ fontSize: 14 }} className="text-muted-foreground" />
+                    <span className="truncate">{t.name}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">{t.node_count}n</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Graph list */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {graphsLoading && (
+                <div className="flex justify-center py-4"><CircularProgress size={20} /></div>
+              )}
+              {graphs?.map((g) => (
+                <div
+                  key={g.id}
+                  className={`group flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs transition-colors cursor-pointer ${
+                    selectedGraphId === g.id
+                      ? "bg-blue-100 dark:bg-blue-900/40 border border-blue-300 dark:border-blue-700"
+                      : "hover:bg-muted"
+                  }`}
+                  onClick={() => {
+                    setSelectedGraphId(g.id);
+                    setEditingNode(null);
+                    setEditingEdge(null);
+                  }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{g.name}</div>
+                    {g.natco_code && (
+                      <span className="text-[10px] text-muted-foreground">{g.natco_code}</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(`Delete "${g.name}"?`)) {
+                        deleteGraphMut.mutate(g.id);
+                      }
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-opacity"
                 title="Delete graph"
               >
                 <DeleteIcon sx={{ fontSize: 14 }} />
               </button>
             </div>
           ))}
-        </div>
+            </div>
+          </>
+        )}
+        
+        {/* Resize handle */}
+        {!sidebarCollapsed && (
+          <div
+            onMouseDown={handleMouseDown}
+            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors"
+          />
+        )}
       </div>
 
       {/* Main canvas area */}

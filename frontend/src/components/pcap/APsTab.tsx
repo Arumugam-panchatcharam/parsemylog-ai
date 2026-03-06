@@ -14,9 +14,21 @@ export default function APsTab({ aps, filename }: Props) {
   const [selectedBssid, setSelectedBssid] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("client_count");
   const [sortAsc, setSortAsc] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return aps;
+    return aps.filter((ap) =>
+      ap.bssid.toLowerCase().includes(q) ||
+      (ap.ssid && ap.ssid.toLowerCase().includes(q)) ||
+      ap.status.toLowerCase().includes(q) ||
+      (ap.channel != null && String(ap.channel).includes(q))
+    );
+  }, [aps, search]);
 
   const sorted = useMemo(() => {
-    const list = [...aps];
+    const list = [...filtered];
     list.sort((a, b) => {
       let cmp = 0;
       if (sortKey === "status") cmp = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
@@ -29,7 +41,7 @@ export default function APsTab({ aps, filename }: Props) {
       return sortAsc ? cmp : -cmp;
     });
     return list;
-  }, [aps, sortKey, sortAsc]);
+  }, [filtered, sortKey, sortAsc]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortAsc(!sortAsc);
@@ -51,6 +63,26 @@ export default function APsTab({ aps, filename }: Props) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {/* Search bar */}
+      <div className="px-3 py-2 border-b border-border shrink-0">
+        <div className="relative">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter by BSSID, SSID, channel, or status..."
+            className="w-full pl-8 pr-8 py-1.5 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {search && (
+            <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          )}
+        </div>
+        {search && <p className="text-[10px] text-muted-foreground mt-1">{sorted.length} of {aps.length} APs</p>}
+      </div>
+
       {/* AP Table */}
       <div className={`border-b border-border overflow-auto shrink-0 ${panelOpen ? "max-h-[160px]" : "flex-1"}`}>
         <table className="w-full text-xs">

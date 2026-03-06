@@ -463,6 +463,7 @@ _DCM_PATTERN_TO_TR181 = [
     (re.compile(r"^wifi_radio_(\d+)_current_operating_channel_bandwith$"), "Device.WiFi.Radio.{N}.OperatingChannelBandwidth"),
     (re.compile(r"^wifi_radio_(\d+)_transmitpower$"), "Device.WiFi.Radio.{N}.TransmitPower"),
     (re.compile(r"^wifi_radio_(\d+)_stats_noise$"), "Device.WiFi.Radio.{N}.Stats.Noise"),
+    (re.compile(r"^wifi_radio_(\d+)_stats_x_comcast_com_channelutilization$"), "Device.WiFi.Radio.{N}.Stats.X_COMCAST-COM_ChannelUtilization"),
     # WiFi SSID
     (re.compile(r"^wifi_ssid_(\d+)_ssid$"), "Device.WiFi.SSID.{N}.SSID"),
     (re.compile(r"^wifi_ssid_(\d+)_enable$"), "Device.WiFi.SSID.{N}.Enable"),

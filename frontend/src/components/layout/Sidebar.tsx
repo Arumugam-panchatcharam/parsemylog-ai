@@ -16,6 +16,7 @@ import SmartToyIcon from "@mui/icons-material/SmartToy";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import WifiIcon from "@mui/icons-material/Wifi";
+import TableChartIcon from "@mui/icons-material/TableChart";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { cn } from "@/lib/utils";
@@ -217,6 +218,22 @@ export default function Sidebar() {
             >
               <WifiIcon style={{ fontSize: 18 }} />
               {!collapsed && "PCAP Analyzer"}
+            </NavLink>
+            <NavLink
+              to="/telemetry-csv"
+              title={collapsed ? "Telemetry CSV" : undefined}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors",
+                  isActive
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                    : "text-muted-foreground hover:bg-sidebar-accent",
+                  collapsed && "justify-center px-2"
+                )
+              }
+            >
+              <TableChartIcon style={{ fontSize: 18 }} />
+              {!collapsed && "Telemetry CSV"}
             </NavLink>
             {user?.is_admin && (
               <NavLink

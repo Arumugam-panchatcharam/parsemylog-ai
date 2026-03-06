@@ -86,7 +86,7 @@ interface TelemetryData {
   summary: { total: number; parsed: number; overall_time_range: { first?: string; last?: string } };
   key_metrics: Array<Record<string, unknown>>;
   status_labels: Array<{ type: string; instance: string; status: string; meta: Record<string, string> }>;
-  charts: Array<{ group: string; traces: Array<{ label: string; unit: string; times: string[]; values: number[] }> }>;
+  charts: Array<{ group: string; traces: Array<{ label: string; unit: string; times: string[]; values: number[]; raw_values?: number[]; raw_unit_original?: string; normalized?: boolean }> }>;
   reboot_timeline?: RebootTimeline;
   mesh_topology?: MeshTopology;
   available_fields?: AvailableFields;
@@ -395,60 +395,6 @@ export default function TelemetryPage() {
             )}
           </div>
 
-          {/* ========== REBOOT TIMELINE ========== */}
-          {data.reboot_timeline && data.reboot_timeline.total_reboots > 0 && (
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
-              <div className="px-4 py-2 border-b border-border bg-muted/30 flex items-center justify-between">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                  <RestartAltIcon style={{ fontSize: 14, color: "#d93025" }} /> Reboot Timeline
-                </h3>
-                <span className="text-[10px] font-bold text-red-600 dark:text-red-400">{data.reboot_timeline.total_reboots} reboot(s) detected</span>
-              </div>
-              <div className="p-2">
-                <Plot
-                  data={[
-                    {
-                      x: data.reboot_timeline.times,
-                      y: data.reboot_timeline.counts,
-                      type: "scatter" as const,
-                      mode: "lines+markers" as const,
-                      name: "Cumulative Reboots",
-                      line: { color: "#d93025", width: 2, shape: "hv" },
-                      marker: { size: 4, color: "#d93025" },
-                      fill: "tozeroy",
-                      fillcolor: "rgba(217,48,37,0.08)",
-                    },
-                    ...(data.reboot_timeline.events.length > 0
-                      ? [{
-                          x: data.reboot_timeline.events.map((e) => e.time),
-                          y: data.reboot_timeline.events.map((e) => e.count),
-                          type: "scatter" as const,
-                          mode: "markers" as const,
-                          name: "Reboot Event",
-                          marker: { size: 10, color: "#d93025", symbol: "x" },
-                          text: data.reboot_timeline.events.map((e) => `Reboot #${e.count}`),
-                          hovertemplate: "Reboot #%{y}<br>%{x}<extra></extra>",
-                        }]
-                      : []),
-                  ]}
-                  layout={{
-                    height: 200,
-                    margin: { l: 40, r: 15, t: 5, b: 35 },
-                    xaxis: { title: { text: "Time" }, tickfont: { size: 10 } },
-                    yaxis: { title: { text: "Reboots" }, tickfont: { size: 10 }, dtick: 1 },
-                    hovermode: "x unified",
-                    legend: { orientation: "h", y: 1.2, x: 0.5, xanchor: "center", font: { size: 10 } },
-                    paper_bgcolor: "transparent",
-                    plot_bgcolor: "transparent",
-                    font: { family: "Roboto, sans-serif", size: 11 },
-                  }}
-                  config={NO_TOOLBAR}
-                  style={{ width: "100%" }}
-                />
-              </div>
-            </div>
-          )}
-
           {/* ========== CHARTS ========== */}
           {(data.charts ?? []).length > 0 && (
             <div className="space-y-2">
@@ -458,21 +404,81 @@ export default function TelemetryPage() {
                 </p>
               )}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {(data.charts ?? []).map((chart, cIdx) => (
-                  <div key={cIdx} className="bg-card border border-border rounded-xl overflow-hidden">
-                    <div className="px-4 py-2 border-b border-border bg-muted/30">
-                      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{chart.group}</h3>
+                {(data.charts ?? []).map((chart, cIdx) => {
+                  // Build reboot event vertical lines
+                  const rebootShapes = (data.reboot_timeline?.events ?? []).map((e) => ({
+                    type: "line" as const,
+                    x0: e.time,
+                    x1: e.time,
+                    y0: 0,
+                    y1: 1,
+                    yref: "paper" as const,
+                    line: { color: "#d93025", width: 1.5, dash: "dot" as const },
+                  }));
+
+                  // Build reboot event annotations
+                  const rebootAnnotations = (data.reboot_timeline?.events ?? []).map((e) => ({
+                    x: e.time,
+                    y: 1,
+                    yref: "paper" as const,
+                    text: "R",
+                    showarrow: false,
+                    font: { size: 9, color: "#d93025", family: "monospace" },
+                    yanchor: "bottom" as const,
+                  }));
+
+                  return (
+                    <div key={cIdx} className="bg-card border border-border rounded-xl overflow-hidden">
+                      <div className="px-4 py-2 border-b border-border bg-muted/30">
+                        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{chart.group}</h3>
+                      </div>
+                      <div className="p-2">
+                        <Plot
+                          data={chart.traces.map((t) => {
+                            if (t.normalized && t.raw_values && t.raw_unit_original) {
+                              // Normalized trace: show raw values in hover
+                              return {
+                                x: t.times,
+                                y: t.values,
+                                name: `${t.label} (${t.raw_unit_original})`,
+                                type: "scatter" as const,
+                                mode: "lines+markers" as const,
+                                marker: { size: 3 },
+                                customdata: t.raw_values,
+                                hovertemplate: `<b>${t.label}</b><br>%{x}<br>%{customdata} ${t.raw_unit_original}<extra></extra>`,
+                              };
+                            } else {
+                              // Normal trace
+                              return {
+                                x: t.times,
+                                y: t.values,
+                                name: `${t.label} (${t.unit})`,
+                                type: "scatter" as const,
+                                mode: "lines+markers" as const,
+                                marker: { size: 3 },
+                              };
+                            }
+                          })}
+                          layout={{
+                            height: 280,
+                            margin: { l: 45, r: 15, t: 5, b: 35 },
+                            xaxis: { title: { text: "Time" }, tickfont: { size: 10 } },
+                            yaxis: { title: { text: "Value" }, tickfont: { size: 10 } },
+                            hovermode: "x unified",
+                            legend: { orientation: "h", y: 1.15, x: 0.5, xanchor: "center", font: { size: 10 } },
+                            paper_bgcolor: "transparent",
+                            plot_bgcolor: "transparent",
+                            font: { family: "Roboto, sans-serif", size: 11 },
+                            shapes: rebootShapes,
+                            annotations: rebootAnnotations,
+                          }}
+                          config={NO_TOOLBAR}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
                     </div>
-                    <div className="p-2">
-                      <Plot
-                        data={chart.traces.map((t) => ({ x: t.times, y: t.values, name: `${t.label} (${t.unit})`, type: "scatter" as const, mode: "lines+markers" as const, marker: { size: 3 } }))}
-                        layout={{ height: 280, margin: { l: 45, r: 15, t: 5, b: 35 }, xaxis: { title: { text: "Time" }, tickfont: { size: 10 } }, yaxis: { title: { text: "Value" }, tickfont: { size: 10 } }, hovermode: "x unified", legend: { orientation: "h", y: 1.15, x: 0.5, xanchor: "center", font: { size: 10 } }, paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { family: "Roboto, sans-serif", size: 11 } }}
-                        config={NO_TOOLBAR}
-                        style={{ width: "100%" }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
