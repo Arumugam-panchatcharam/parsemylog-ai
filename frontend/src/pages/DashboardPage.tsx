@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { projectsApi, natcoApi } from "@/api/endpoints";
@@ -37,8 +37,20 @@ export default function DashboardPage() {
     queryFn: async () => (await natcoApi.list()).data,
   });
 
+  // Auto-select first NATCO if only one exists
+  useEffect(() => {
+    if (natcos && natcos.length === 1 && newNatcoId === null) {
+      setNewNatcoId(natcos[0].id);
+    }
+  }, [natcos, newNatcoId]);
+
   const createMutation = useMutation({
-    mutationFn: () => projectsApi.create(newName, newDesc, newNatcoId, newProjectType),
+    mutationFn: () => {
+      if (!newNatcoId) {
+        throw new Error("NATCO selection is required");
+      }
+      return projectsApi.create(newName, newDesc, newNatcoId, newProjectType);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setShowCreate(false);
@@ -200,20 +212,26 @@ export default function DashboardPage() {
               {natcos && natcos.length > 0 && (
                 <div>
                   <label className="block text-sm font-medium mb-1 flex items-center gap-1">
-                    <PublicIcon style={{ fontSize: 16 }} /> NATCO (optional)
+                    <PublicIcon style={{ fontSize: 16 }} /> NATCO <span className="text-red-500">*</span>
                   </label>
                   <select
                     value={newNatcoId ?? ""}
                     onChange={(e) => setNewNatcoId(e.target.value ? Number(e.target.value) : null)}
-                    title="Assign a country/operator for shared pattern configurations"
+                    title="Select a country/operator for pattern management"
                     className="w-full px-3 py-2.5 border border-input rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+                    required
                   >
-                    <option value="">-- No NATCO --</option>
+                    <option value="">-- Select NATCO --</option>
                     {natcos.map((n: NatcoInfo) => (
                       <option key={n.id} value={n.id}>{n.code} - {n.name}</option>
                     ))}
                   </select>
-                  <p className="text-xs text-muted-foreground mt-1">Assign a NATCO to use global pattern configurations for this country.</p>
+                  <p className="text-xs text-muted-foreground mt-1">Required: Each project must have a NATCO for pattern management.</p>
+                </div>
+              )}
+              {(!natcos || natcos.length === 0) && (
+                <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-xs rounded">
+                  No NATCOs available. Please contact admin to create NATCOs before creating projects.
                 </div>
               )}
               <div>
@@ -250,7 +268,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="flex gap-2 pt-2">
-                <button type="submit" disabled={createMutation.isPending} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">
+                <button type="submit" disabled={createMutation.isPending || !newName.trim() || !newNatcoId} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">
                   {createMutation.isPending ? "Creating..." : "Create Project"}
                 </button>
                 <button type="button" onClick={() => setShowCreate(false)} className="flex-1 py-2.5 border border-border rounded-lg hover:bg-muted">

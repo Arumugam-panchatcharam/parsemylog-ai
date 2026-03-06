@@ -52,7 +52,7 @@ def create_project():
     """
     Create a new project.
 
-    Body: { "name": str, "description"?: str, "natco_id"?: int, "project_type"?: str }
+    Body: { "name": str, "description"?: str, "natco_id": int (required), "project_type"?: str }
     Returns: { "id", "name", "message" }
     """
     user_id = get_user_id()
@@ -69,24 +69,25 @@ def create_project():
     if project_type not in ["normal", "batch"]:
         return jsonify({"error": "Invalid project type. Must be 'normal' or 'batch'"}), 400
 
-    # Validate natco_id if provided
-    if natco_id is not None:
-        natco_id = int(natco_id)
-        natco = dbm.db.session.get(dbm.Natco, natco_id)
-        if not natco:
-            return jsonify({"error": "NATCO not found"}), 400
+    # NATCO is now required
+    if not natco_id:
+        return jsonify({"error": "NATCO selection is required"}), 400
+    
+    natco_id = int(natco_id)
+    natco = dbm.db.session.get(dbm.Natco, natco_id)
+    if not natco:
+        return jsonify({"error": "NATCO not found"}), 400
 
     success, project_id, message = dbm.create_project(user_id, name, description, project_type)
 
     if not success:
         return jsonify({"error": message}), 400
 
-    # Assign NATCO if provided
-    if natco_id:
-        project = dbm.get_project_by_id(project_id)
-        if project:
-            project.natco_id = natco_id
-            dbm.db.session.commit()
+    # Assign NATCO to project
+    project = dbm.get_project_by_id(project_id)
+    if project:
+        project.natco_id = natco_id
+        dbm.db.session.commit()
 
     return jsonify({
         "id": project_id,

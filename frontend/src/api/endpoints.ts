@@ -24,8 +24,8 @@ export const authApi = {
 // ---------- Projects ----------
 export const projectsApi = {
   list: () => api.get("/projects/"),
-  create: (name: string, description?: string, natcoId?: number | null, projectType?: "normal" | "batch") =>
-    api.post("/projects/", { name, description, natco_id: natcoId || undefined, project_type: projectType || "normal" }),
+  create: (name: string, description: string | undefined, natcoId: number, projectType?: "normal" | "batch") =>
+    api.post("/projects/", { name, description, natco_id: natcoId, project_type: projectType || "normal" }),
   get: (id: string) => api.get(`/projects/${id}`),
   update: (id: string, data: { name?: string; description?: string; natco_id?: number | null }) =>
     api.put(`/projects/${id}`, data),
@@ -658,6 +658,8 @@ export interface DiffPattern extends UserPattern {
   change_type: "new" | "modified";
   global_name?: string;
   global_enabled?: boolean;
+  global_maintenance_window?: MaintenanceWindow | null;
+  global_reboot_proximity_minutes?: number | null;
 }
 
 export interface DomainDiff {

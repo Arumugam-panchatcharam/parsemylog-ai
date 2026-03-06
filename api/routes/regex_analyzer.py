@@ -138,6 +138,11 @@ def _user_patterns_path(user_id: int) -> Path:
     return Path(UPLOAD_DIRECTORY) / str(user_id) / "user_patterns.yaml"
 
 
+def _natco_patterns_path(user_id: int, natco_code: str) -> Path:
+    """Return the path to the per-user NATCO-specific pattern YAML file."""
+    return Path(UPLOAD_DIRECTORY) / str(user_id) / f"user_patterns-{natco_code.lower()}.yaml"
+
+
 def _project_patterns_path(user_id: int, project_id: str) -> Path:
     """Return the path to the per-project pattern YAML file."""
     return Path(UPLOAD_DIRECTORY) / str(user_id) / project_id / "project_patterns.yaml"
@@ -170,8 +175,14 @@ def load_project_patterns(user_id: int, project_id: str) -> Dict[str, List[Dict[
     """
     Load per-project regex patterns from YAML, grouped by domain.
 
-    Falls back to the legacy per-user ``user_patterns.yaml`` on first access
-    and copies it into the project directory for future use.
+    Falls back through multiple sources in priority order:
+    1. project_patterns.yaml (per-project working copy)
+    2. user_patterns-{natco}.yaml (per-user NATCO defaults)
+    3. DB GlobalPattern for that NATCO (admin-managed global)
+    4. user_patterns.yaml (legacy migration fallback)
+    5. empty
+
+    When seeding from NATCO file or DB global, also writes to project_patterns.yaml.
 
     Returns:
         Dict mapping domain names to lists of pattern dicts.
@@ -183,12 +194,65 @@ def load_project_patterns(user_id: int, project_id: str) -> Dict[str, List[Dict[
     if domains:
         return domains
 
+    # Look up project's NATCO to determine the fallback chain
+    project = dbm.get_project_by_id(project_id)
+    natco_code = None
+    if project and project.natco_id:
+        natco = dbm.db.session.get(dbm.Natco, project.natco_id)
+        if natco:
+            natco_code = natco.code
+
+    # Try NATCO-specific user patterns file
+    if natco_code:
+        natco_path = _natco_patterns_path(user_id, natco_code)
+        natco_domains = _load_yaml_patterns(natco_path)
+        if natco_domains:
+            logger.info(
+                f"[PatternAnalyzer] Seeding project {project_id} from NATCO file "
+                f"user_patterns-{natco_code.lower()}.yaml for user {user_id}"
+            )
+            save_project_patterns(user_id, project_id, natco_domains)
+            return natco_domains
+
+        # Try DB global patterns for this NATCO
+        global_patterns = (
+            dbm.db.session.query(dbm.GlobalPattern)
+            .filter_by(natco_id=project.natco_id)
+            .order_by(dbm.GlobalPattern.domain, dbm.GlobalPattern.name)
+            .all()
+        )
+        if global_patterns:
+            global_domains: Dict[str, List[Dict[str, Any]]] = {}
+            for gp in global_patterns:
+                if gp.domain not in global_domains:
+                    global_domains[gp.domain] = []
+                entry: Dict[str, Any] = {
+                    "name": gp.name,
+                    "regex": gp.regex,
+                    "enabled": gp.enabled,
+                }
+                if gp.maintenance_window_json:
+                    try:
+                        entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if gp.reboot_proximity_minutes is not None:
+                    entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+                global_domains[gp.domain].append(entry)
+            
+            logger.info(
+                f"[PatternAnalyzer] Seeding project {project_id} from DB global "
+                f"patterns for NATCO {natco_code} (user {user_id})"
+            )
+            save_project_patterns(user_id, project_id, global_domains)
+            return global_domains
+
     # Migration fallback: copy from legacy per-user file
     legacy_path = _user_patterns_path(user_id)
     legacy_domains = _load_yaml_patterns(legacy_path)
     if legacy_domains:
         logger.info(
-            f"[PatternAnalyzer] Migrating per-user patterns to project "
+            f"[PatternAnalyzer] Migrating legacy per-user patterns to project "
             f"{project_id} for user {user_id}"
         )
         save_project_patterns(user_id, project_id, legacy_domains)
@@ -200,11 +264,32 @@ def load_project_patterns(user_id: int, project_id: str) -> Dict[str, List[Dict[
 def save_project_patterns(
     user_id: int, project_id: str, domains: Dict[str, List[Dict[str, Any]]]
 ) -> None:
-    """Save per-project regex patterns to YAML (domain-grouped)."""
+    """
+    Save per-project regex patterns to YAML (domain-grouped).
+    
+    If the project has a NATCO assigned, also writes to the per-user NATCO file
+    (user_patterns-{natco_code}.yaml) so future projects with the same NATCO
+    will inherit these patterns.
+    """
+    # Always write to project file
     path = _project_patterns_path(user_id, project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         yaml.dump({"domains": domains}, f, default_flow_style=False, sort_keys=False)
+    
+    # Also write to NATCO file if project has a NATCO
+    project = dbm.get_project_by_id(project_id)
+    if project and project.natco_id:
+        natco = dbm.db.session.get(dbm.Natco, project.natco_id)
+        if natco:
+            natco_path = _natco_patterns_path(user_id, natco.code)
+            natco_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(natco_path, "w") as f:
+                yaml.dump({"domains": domains}, f, default_flow_style=False, sort_keys=False)
+            logger.info(
+                f"[PatternAnalyzer] Auto-saved patterns to NATCO file "
+                f"user_patterns-{natco.code.lower()}.yaml for user {user_id}"
+            )
 
 
 def _load_domain_presets() -> Dict[str, List[Dict[str, Any]]]:
@@ -859,11 +944,19 @@ def get_global_patterns(project_id):
     for p in patterns:
         if p.domain not in domains:
             domains[p.domain] = []
-        domains[p.domain].append({
+        entry: Dict[str, Any] = {
             "name": p.name,
             "regex": p.regex,
             "enabled": p.enabled,
-        })
+        }
+        if p.maintenance_window_json:
+            try:
+                entry["maintenance_window"] = json.loads(p.maintenance_window_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if p.reboot_proximity_minutes is not None:
+            entry["reboot_proximity_minutes"] = p.reboot_proximity_minutes
+        domains[p.domain].append(entry)
 
     return jsonify({
         "domains": domains,
@@ -910,11 +1003,19 @@ def sync_from_global(project_id):
     for gp in global_patterns:
         if gp.domain not in global_by_domain:
             global_by_domain[gp.domain] = []
-        global_by_domain[gp.domain].append({
+        entry: Dict[str, Any] = {
             "name": gp.name,
             "regex": gp.regex,
             "enabled": gp.enabled,
-        })
+        }
+        if gp.maintenance_window_json:
+            try:
+                entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if gp.reboot_proximity_minutes is not None:
+            entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+        global_by_domain[gp.domain].append(entry)
 
     # Use caller-supplied patterns or fall back to saved YAML
     body = request.get_json(silent=True) or {}
@@ -940,11 +1041,12 @@ def sync_from_global(project_id):
         global_regexes = set()
         for gp in global_pats:
             global_regexes.add(gp["regex"])
-            domain_result.append({
-                "name": gp["name"],
-                "regex": gp["regex"],
-                "enabled": gp["enabled"],
-            })
+            entry = {"name": gp["name"], "regex": gp["regex"], "enabled": gp["enabled"]}
+            if gp.get("maintenance_window"):
+                entry["maintenance_window"] = gp["maintenance_window"]
+            if gp.get("reboot_proximity_minutes") is not None:
+                entry["reboot_proximity_minutes"] = gp["reboot_proximity_minutes"]
+            domain_result.append(entry)
             synced += 1
 
         # Then add user-only patterns (not in global)
@@ -997,7 +1099,7 @@ def diff_patterns(project_id):
     if not natco:
         return jsonify({"domains": {}, "natco": None}), 200
 
-    # Build global lookup: {domain: {regex: {name, regex, enabled}}}
+    # Build global lookup: {domain: {regex: {name, regex, enabled, mw, rp}}}
     global_pats = (
         dbm.db.session.query(dbm.GlobalPattern)
         .filter_by(natco_id=natco.id)
@@ -1005,9 +1107,15 @@ def diff_patterns(project_id):
     )
     global_by_domain: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for gp in global_pats:
-        global_by_domain.setdefault(gp.domain, {})[gp.regex] = {
-            "name": gp.name, "regex": gp.regex, "enabled": gp.enabled,
-        }
+        entry: Dict[str, Any] = {"name": gp.name, "regex": gp.regex, "enabled": gp.enabled}
+        if gp.maintenance_window_json:
+            try:
+                entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if gp.reboot_proximity_minutes is not None:
+            entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+        global_by_domain.setdefault(gp.domain, {})[gp.regex] = entry
 
     # Use caller-supplied patterns (POST) or fall back to saved YAML (GET)
     body = request.get_json(silent=True) or {}
@@ -1031,18 +1139,37 @@ def diff_patterns(project_id):
             rx = p.get("regex", "")
             name = p.get("name", "")
             enabled = p.get("enabled", True)
+            mw = p.get("maintenance_window")
+            rp = p.get("reboot_proximity_minutes")
+
+            base: Dict[str, Any] = {"name": name, "regex": rx, "enabled": enabled}
+            if mw:
+                base["maintenance_window"] = mw
+            if rp is not None:
+                base["reboot_proximity_minutes"] = rp
 
             if rx not in gmap:
-                new_pats.append({"name": name, "regex": rx, "enabled": enabled})
+                new_pats.append(base)
             else:
-                gp = gmap[rx]
-                if gp["name"] != name or gp["enabled"] != enabled:
-                    modified_pats.append({
-                        "name": name, "regex": rx, "enabled": enabled,
-                        "global_name": gp["name"], "global_enabled": gp["enabled"],
-                    })
+                gp_entry = gmap[rx]
+                g_mw = gp_entry.get("maintenance_window")
+                g_rp = gp_entry.get("reboot_proximity_minutes")
+                changed = (
+                    gp_entry["name"] != name
+                    or gp_entry["enabled"] != enabled
+                    or mw != g_mw
+                    or rp != g_rp
+                )
+                if changed:
+                    base["global_name"] = gp_entry["name"]
+                    base["global_enabled"] = gp_entry["enabled"]
+                    if g_mw:
+                        base["global_maintenance_window"] = g_mw
+                    if g_rp is not None:
+                        base["global_reboot_proximity_minutes"] = g_rp
+                    modified_pats.append(base)
                 else:
-                    unchanged_pats.append({"name": name, "regex": rx, "enabled": enabled})
+                    unchanged_pats.append(base)
 
         if new_pats or modified_pats or unchanged_pats:
             result_domains[domain] = {
@@ -1106,7 +1233,19 @@ def submit_patterns(project_id):
             re.compile(regex_val)
         except re.error as e:
             return jsonify({"error": f"Invalid regex '{regex_val}': {e}"}), 400
-        validated.append({"name": name, "regex": regex_val, "enabled": enabled, "change_type": change_type})
+        entry = {"name": name, "regex": regex_val, "enabled": enabled, "change_type": change_type}
+        mw = p.get("maintenance_window")
+        if isinstance(mw, dict) and mw.get("start") and mw.get("end"):
+            entry["maintenance_window"] = {"start": str(mw["start"]), "end": str(mw["end"])}
+        rp = p.get("reboot_proximity_minutes")
+        if rp is not None:
+            try:
+                rp_int = int(rp)
+                if 1 <= rp_int <= 60:
+                    entry["reboot_proximity_minutes"] = rp_int
+            except (TypeError, ValueError):
+                pass
+        validated.append(entry)
 
     if not validated:
         return jsonify({"error": "No valid patterns to submit"}), 400

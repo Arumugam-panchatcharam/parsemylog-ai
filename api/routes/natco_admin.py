@@ -147,12 +147,20 @@ def get_global_patterns(natco_id):
     for p in patterns:
         if p.domain not in domains:
             domains[p.domain] = []
-        domains[p.domain].append({
+        entry: Dict[str, Any] = {
             "id": p.id,
             "name": p.name,
             "regex": p.regex,
             "enabled": p.enabled,
-        })
+        }
+        if p.maintenance_window_json:
+            try:
+                entry["maintenance_window"] = json.loads(p.maintenance_window_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if p.reboot_proximity_minutes is not None:
+            entry["reboot_proximity_minutes"] = p.reboot_proximity_minutes
+        domains[p.domain].append(entry)
 
     return jsonify({"domains": domains, "natco": {"id": natco.id, "code": natco.code, "name": natco.name}}), 200
 
@@ -194,12 +202,19 @@ def set_global_patterns(natco_id):
             except re.error:
                 continue
 
+            mw = p.get("maintenance_window")
+            mw_json = json.dumps(mw) if isinstance(mw, dict) and mw.get("start") and mw.get("end") else None
+            rp = p.get("reboot_proximity_minutes")
+            rp_val = int(rp) if rp is not None and str(rp).strip().lstrip("-").isdigit() and 1 <= int(rp) <= 60 else None
+
             gp = dbm.GlobalPattern(
                 natco_id=natco_id,
                 domain=domain_name,
                 name=name,
                 regex=regex_val,
                 enabled=enabled,
+                maintenance_window_json=mw_json,
+                reboot_proximity_minutes=rp_val,
                 created_by=user_id,
             )
             dbm.db.session.add(gp)
@@ -329,7 +344,17 @@ def get_submission(submission_id):
         .filter_by(natco_id=sub.natco_id, domain=sub.domain)
         .all()
     )
-    current_dict = {gp.regex: {"name": gp.name, "regex": gp.regex, "enabled": gp.enabled} for gp in current_global}
+    current_dict: Dict[str, Dict[str, Any]] = {}
+    for gp in current_global:
+        entry: Dict[str, Any] = {"name": gp.name, "regex": gp.regex, "enabled": gp.enabled}
+        if gp.maintenance_window_json:
+            try:
+                entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if gp.reboot_proximity_minutes is not None:
+            entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+        current_dict[gp.regex] = entry
 
     submitted_patterns = json.loads(sub.patterns_json) if sub.patterns_json else []
 
@@ -339,9 +364,14 @@ def get_submission(submission_id):
     for p in submitted_patterns:
         rx = p.get("regex", "")
         if rx in current_dict:
-            # Check if modified
             cur = current_dict[rx]
-            if cur["name"] != p.get("name") or cur["enabled"] != p.get("enabled", True):
+            changed = (
+                cur["name"] != p.get("name")
+                or cur["enabled"] != p.get("enabled", True)
+                or cur.get("maintenance_window") != p.get("maintenance_window")
+                or cur.get("reboot_proximity_minutes") != p.get("reboot_proximity_minutes")
+            )
+            if changed:
                 modified_patterns.append({"submitted": p, "current": cur})
         else:
             new_patterns.append(p)
@@ -392,6 +422,11 @@ def approve_submission(submission_id):
         if not name or not regex_val:
             continue
 
+        mw = p.get("maintenance_window")
+        mw_json = json.dumps(mw) if isinstance(mw, dict) and mw.get("start") and mw.get("end") else None
+        rp = p.get("reboot_proximity_minutes")
+        rp_val = int(rp) if rp is not None and str(rp).strip().lstrip("-").isdigit() and 1 <= int(rp) <= 60 else None
+
         existing = (
             dbm.db.session.query(dbm.GlobalPattern)
             .filter_by(natco_id=sub.natco_id, domain=sub.domain, regex=regex_val)
@@ -400,6 +435,8 @@ def approve_submission(submission_id):
         if existing:
             existing.name = name
             existing.enabled = enabled
+            existing.maintenance_window_json = mw_json
+            existing.reboot_proximity_minutes = rp_val
             existing.updated_at = datetime.utcnow()
         else:
             dbm.db.session.add(dbm.GlobalPattern(
@@ -408,6 +445,8 @@ def approve_submission(submission_id):
                 name=name,
                 regex=regex_val,
                 enabled=enabled,
+                maintenance_window_json=mw_json,
+                reboot_proximity_minutes=rp_val,
                 created_by=sub.user_id,
             ))
         merged += 1

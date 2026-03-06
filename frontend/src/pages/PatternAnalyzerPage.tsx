@@ -233,12 +233,20 @@ export default function PatternAnalyzerPage() {
         const patsToSubmit: Array<UserPattern & { change_type: string }> = [];
         for (const p of diff.new) {
           if (selectedChanges[`${domain}::${p.regex}`]) {
-            patsToSubmit.push({ name: p.name, regex: p.regex, enabled: p.enabled, change_type: "new" });
+            patsToSubmit.push({
+              name: p.name, regex: p.regex, enabled: p.enabled, change_type: "new",
+              ...(p.maintenance_window ? { maintenance_window: p.maintenance_window } : {}),
+              ...(p.reboot_proximity_minutes != null ? { reboot_proximity_minutes: p.reboot_proximity_minutes } : {}),
+            });
           }
         }
         for (const p of diff.modified) {
           if (selectedChanges[`${domain}::${p.regex}`]) {
-            patsToSubmit.push({ name: p.name, regex: p.regex, enabled: p.enabled, change_type: "modified" });
+            patsToSubmit.push({
+              name: p.name, regex: p.regex, enabled: p.enabled, change_type: "modified",
+              ...(p.maintenance_window ? { maintenance_window: p.maintenance_window } : {}),
+              ...(p.reboot_proximity_minutes != null ? { reboot_proximity_minutes: p.reboot_proximity_minutes } : {}),
+            });
           }
         }
         if (patsToSubmit.length > 0) {
@@ -830,19 +838,21 @@ export default function PatternAnalyzerPage() {
               >
                 <FileDownloadIcon style={{ fontSize: 14 }} /> Export
               </button>
-              <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-lg z-10 hidden group-hover:block min-w-[100px]">
-                <button
-                  onClick={() => handleExport("json")}
-                  className="block w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors"
-                >
-                  As JSON
-                </button>
-                <button
-                  onClick={() => handleExport("yaml")}
-                  className="block w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors"
-                >
-                  As YAML
-                </button>
+              <div className="absolute right-0 top-full pt-1 z-10 hidden group-hover:block">
+                <div className="bg-card border border-border rounded-lg shadow-lg min-w-[100px]">
+                  <button
+                    onClick={() => handleExport("json")}
+                    className="block w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    As JSON
+                  </button>
+                  <button
+                    onClick={() => handleExport("yaml")}
+                    className="block w-full text-left px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    As YAML
+                  </button>
+                </div>
               </div>
             </div>
             {/* NATCO Governance buttons */}
@@ -1275,6 +1285,12 @@ export default function PatternAnalyzerPage() {
                                     <div className="flex items-center gap-2">
                                       <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px] font-bold">NEW</span>
                                       <span className="text-xs font-medium truncate">{p.name}</span>
+                                      {p.maintenance_window && (
+                                        <span className="text-[10px] text-purple-600 dark:text-purple-400" title="Maintenance window">MW {p.maintenance_window.start}–{p.maintenance_window.end}</span>
+                                      )}
+                                      {p.reboot_proximity_minutes != null && (
+                                        <span className="text-[10px] text-orange-600 dark:text-orange-400" title="Reboot proximity">±{p.reboot_proximity_minutes}m</span>
+                                      )}
                                     </div>
                                     <code className="text-[11px] font-mono text-muted-foreground block truncate mt-0.5">{p.regex}</code>
                                   </div>
@@ -1285,6 +1301,10 @@ export default function PatternAnalyzerPage() {
                             {diff.modified.map((p) => {
                               const key = `${domain}::${p.regex}`;
                               const checked = !!selectedChanges[key];
+                              const mwStr = p.maintenance_window ? `${p.maintenance_window.start}–${p.maintenance_window.end}` : "none";
+                              const gMwStr = p.global_maintenance_window ? `${p.global_maintenance_window.start}–${p.global_maintenance_window.end}` : "none";
+                              const mwChanged = mwStr !== gMwStr;
+                              const rpChanged = (p.reboot_proximity_minutes ?? null) !== (p.global_reboot_proximity_minutes ?? null);
                               return (
                                 <label key={key} className="flex items-start gap-3 px-4 py-2 hover:bg-muted/20 cursor-pointer">
                                   <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-blue-600 shrink-0" />
@@ -1297,9 +1317,17 @@ export default function PatternAnalyzerPage() {
                                       )}
                                     </div>
                                     <code className="text-[11px] font-mono text-muted-foreground block truncate mt-0.5">{p.regex}</code>
-                                    {p.global_enabled !== undefined && p.global_enabled !== p.enabled && (
-                                      <span className="text-[10px] text-muted-foreground">enabled: {String(p.global_enabled)} → {String(p.enabled)}</span>
-                                    )}
+                                    <div className="flex flex-wrap gap-2 mt-0.5">
+                                      {p.global_enabled !== undefined && p.global_enabled !== p.enabled && (
+                                        <span className="text-[10px] text-muted-foreground">enabled: {String(p.global_enabled)} → {String(p.enabled)}</span>
+                                      )}
+                                      {mwChanged && (
+                                        <span className="text-[10px] text-purple-600 dark:text-purple-400">MW: {gMwStr} → {mwStr}</span>
+                                      )}
+                                      {rpChanged && (
+                                        <span className="text-[10px] text-orange-600 dark:text-orange-400">Reboot: ±{p.global_reboot_proximity_minutes ?? "none"}m → ±{p.reboot_proximity_minutes ?? "none"}m</span>
+                                      )}
+                                    </div>
                                   </div>
                                 </label>
                               );

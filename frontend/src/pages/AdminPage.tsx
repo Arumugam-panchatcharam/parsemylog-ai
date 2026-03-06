@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminApi } from "@/api/endpoints";
-import type { AdminNatco, PatternSubmission, UserPattern, DomainPatterns } from "@/api/endpoints";
+import type { AdminNatco, PatternSubmission, UserPattern, DomainPatterns, MaintenanceWindow } from "@/api/endpoints";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import DeleteIcon from "@mui/icons-material/Delete";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
@@ -17,12 +17,15 @@ import SmartToyIcon from "@mui/icons-material/SmartToy";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
-import DownloadIcon from "@mui/icons-material/Download";
+import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CancelIcon from "@mui/icons-material/Cancel";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ScheduleIcon from "@mui/icons-material/Schedule";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import CloseIcon from "@mui/icons-material/Close";
 import CircularProgress from "@mui/material/CircularProgress";
 import { formatDate } from "@/lib/utils";
 
@@ -401,14 +404,6 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adminNatcoPatterns", natcoId] }),
   });
 
-  const importMutation = useMutation({
-    mutationFn: () => adminApi.importPresets(natcoId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["adminNatcoPatterns", natcoId] });
-      setLoaded(false); // reload
-    },
-  });
-
   const toggleCollapse = (d: string) => {
     setCollapsedDomains((prev) => { const n = new Set(prev); n.has(d) ? n.delete(d) : n.add(d); return n; });
   };
@@ -434,6 +429,34 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
 
   const updatePattern = (d: string, idx: number, field: keyof UserPattern, value: string | boolean) => {
     setDomains((prev) => ({ ...prev, [d]: (prev[d] || []).map((p, i) => (i === idx ? { ...p, [field]: value } : p)) }));
+  };
+
+  const [filterEditTarget, setFilterEditTarget] = useState<string | null>(null);
+  const filterKey = (d: string, idx: number) => `${d}::${idx}`;
+
+  const updatePatternMW = (d: string, idx: number, mw: MaintenanceWindow | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [d]: (prev[d] || []).map((p, i) => (i === idx ? { ...p, maintenance_window: mw } : p)),
+    }));
+  };
+
+  const updatePatternRP = (d: string, idx: number, rp: number | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [d]: (prev[d] || []).map((p, i) => (i === idx ? { ...p, reboot_proximity_minutes: rp } : p)),
+    }));
+  };
+
+  const handleExportJSON = () => {
+    const content = JSON.stringify({ domains }, null, 2);
+    const blob = new Blob([content], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `global_patterns_${data?.natco?.code || "export"}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   /** Parse and merge patterns from an imported JSON or YAML file. */
@@ -624,9 +647,9 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               Import JSON/YAML
             </button>
             <input ref={fileInputRef} type="file" accept=".json,.yaml,.yml" onChange={handleFileImport} className="hidden" />
-            <button onClick={() => importMutation.mutate()} disabled={importMutation.isPending} title="Import preset patterns for this NATCO" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-50">
-              {importMutation.isPending ? <CircularProgress size={12} /> : <DownloadIcon style={{ fontSize: 14 }} />}
-              Import Presets
+            <button onClick={handleExportJSON} title="Export patterns as JSON file" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted">
+              <FileDownloadIcon style={{ fontSize: 14 }} />
+              Export JSON
             </button>
             <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} title="Save all pattern changes to database" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
               {saveMutation.isPending ? <CircularProgress size={12} sx={{ color: "white" }} /> : <SaveIcon style={{ fontSize: 14 }} />}
@@ -650,7 +673,6 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               </div>
 
               {saveMutation.isSuccess && <div className="mb-3 px-3 py-2 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 text-xs rounded-lg">Patterns saved successfully.</div>}
-              {importMutation.isSuccess && <div className="mb-3 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 text-xs rounded-lg">Presets imported. Click "Save All" to persist.</div>}
               {importMsg && <div className="mb-3 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-xs rounded-lg flex items-center gap-1.5"><UploadFileIcon style={{ fontSize: 14 }} />{importMsg}</div>}
 
               {/* Domains */}
@@ -677,20 +699,84 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                             <p className="text-xs text-muted-foreground py-2 text-center">No patterns</p>
                           ) : (
                             <>
-                              <div className="grid grid-cols-[32px_1fr_2fr_32px] gap-2 px-1">
+                              <div className="grid grid-cols-[32px_1fr_2fr_36px_32px] gap-2 px-1">
                                 <span className="text-[10px] text-muted-foreground font-semibold uppercase">On</span>
                                 <span className="text-[10px] text-muted-foreground font-semibold uppercase">Name</span>
                                 <span className="text-[10px] text-muted-foreground font-semibold uppercase">Regex</span>
+                                <span className="text-[10px] text-muted-foreground font-semibold uppercase">Filters</span>
                                 <span />
                               </div>
-                              {pats.map((p, idx) => (
-                                <div key={idx} className="grid grid-cols-[32px_1fr_2fr_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
-                                  <input type="checkbox" checked={p.enabled} onChange={(e) => updatePattern(domain, idx, "enabled", e.target.checked)} className="h-3.5 w-3.5 accent-blue-600" />
-                                  <input type="text" value={p.name} onChange={(e) => updatePattern(domain, idx, "name", e.target.value)} placeholder="Name" className="text-xs px-2 py-1 rounded border border-border bg-background min-w-0" />
-                                  <input type="text" value={p.regex} onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)} placeholder="Regex" className="text-xs px-2 py-1 rounded border border-border bg-background font-mono min-w-0" />
-                                  <button onClick={() => removePattern(domain, idx)} title="Remove this pattern" className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 14 }} /></button>
-                                </div>
-                              ))}
+                              {pats.map((p, idx) => {
+                                const fk = filterKey(domain, idx);
+                                const hasMW = !!p.maintenance_window;
+                                const hasRP = p.reboot_proximity_minutes != null && p.reboot_proximity_minutes > 0;
+                                const hasFilter = hasMW || hasRP;
+                                return (
+                                  <div key={idx}>
+                                    <div className="grid grid-cols-[32px_1fr_2fr_36px_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
+                                      <input type="checkbox" checked={p.enabled} onChange={(e) => updatePattern(domain, idx, "enabled", e.target.checked)} className="h-3.5 w-3.5 accent-blue-600" />
+                                      <input type="text" value={p.name} onChange={(e) => updatePattern(domain, idx, "name", e.target.value)} placeholder="Name" className="text-xs px-2 py-1 rounded border border-border bg-background min-w-0" />
+                                      <input type="text" value={p.regex} onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)} placeholder="Regex" className="text-xs px-2 py-1 rounded border border-border bg-background font-mono min-w-0" />
+                                      <button
+                                        onClick={() => setFilterEditTarget(filterEditTarget === fk ? null : fk)}
+                                        title={hasFilter ? `MW: ${p.maintenance_window?.start ?? "–"}–${p.maintenance_window?.end ?? "–"} | RP: ±${p.reboot_proximity_minutes ?? "–"}m` : "Add maintenance window / reboot proximity filter"}
+                                        className={`p-0.5 rounded text-xs flex items-center justify-center gap-0.5 ${hasFilter ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400" : "hover:bg-muted text-muted-foreground"}`}
+                                      >
+                                        <ScheduleIcon style={{ fontSize: 14 }} />
+                                      </button>
+                                      <button onClick={() => removePattern(domain, idx)} title="Remove this pattern" className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 14 }} /></button>
+                                    </div>
+                                    {filterEditTarget === fk && (
+                                      <div className="ml-8 mr-8 my-1 p-2 border border-purple-200 dark:border-purple-800 rounded-lg bg-purple-50/50 dark:bg-purple-900/10 space-y-2 text-xs">
+                                        {/* Maintenance Window */}
+                                        <div className="flex items-center gap-2">
+                                          <ScheduleIcon style={{ fontSize: 14 }} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                                          <span className="text-muted-foreground w-8 shrink-0">MW</span>
+                                          <input
+                                            type="time"
+                                            value={p.maintenance_window?.start ?? ""}
+                                            onChange={(e) => updatePatternMW(domain, idx, { start: e.target.value, end: p.maintenance_window?.end ?? "" })}
+                                            className="px-1.5 py-0.5 rounded border border-border bg-background text-xs w-24"
+                                          />
+                                          <span className="text-muted-foreground">–</span>
+                                          <input
+                                            type="time"
+                                            value={p.maintenance_window?.end ?? ""}
+                                            onChange={(e) => updatePatternMW(domain, idx, { start: p.maintenance_window?.start ?? "", end: e.target.value })}
+                                            className="px-1.5 py-0.5 rounded border border-border bg-background text-xs w-24"
+                                          />
+                                          <span className="text-[10px] text-muted-foreground">UTC</span>
+                                          {hasMW && (
+                                            <button onClick={() => updatePatternMW(domain, idx, null)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20" title="Clear maintenance window">
+                                              <CloseIcon style={{ fontSize: 12 }} />
+                                            </button>
+                                          )}
+                                        </div>
+                                        {/* Reboot Proximity */}
+                                        <div className="flex items-center gap-2">
+                                          <RestartAltIcon style={{ fontSize: 14 }} className="text-orange-600 dark:text-orange-400 shrink-0" />
+                                          <span className="text-muted-foreground w-8 shrink-0">±</span>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={60}
+                                            value={p.reboot_proximity_minutes ?? ""}
+                                            onChange={(e) => updatePatternRP(domain, idx, e.target.value ? Number(e.target.value) : null)}
+                                            placeholder="min"
+                                            className="px-1.5 py-0.5 rounded border border-border bg-background text-xs w-16"
+                                          />
+                                          <span className="text-[10px] text-muted-foreground">minutes around reboot</span>
+                                          {hasRP && (
+                                            <button onClick={() => updatePatternRP(domain, idx, null)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20" title="Clear reboot proximity">
+                                              <CloseIcon style={{ fontSize: 12 }} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </>
                           )}
                         </div>
@@ -708,6 +794,94 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
           <button onClick={onClose} className="w-full py-2.5 border border-border rounded-lg hover:bg-muted text-sm font-medium">Close</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface SubmissionDiffData {
+  diff: {
+    new: Array<Record<string, unknown>>;
+    modified: Array<{ submitted: Record<string, unknown>; current: Record<string, unknown> }>;
+    total_current: number;
+  };
+}
+
+function SubmissionPatternList({ submission }: { submission: PatternSubmission }) {
+  const { data: diffData, isLoading } = useQuery({
+    queryKey: ["adminSubmissionDetail", submission.id],
+    queryFn: async () => (await adminApi.getSubmission(submission.id)).data as SubmissionDiffData,
+  });
+
+  // Build a map of regex -> current pattern for modified patterns
+  const modifiedMap = new Map<string, Record<string, unknown>>();
+  if (diffData?.diff?.modified) {
+    for (const m of diffData.diff.modified) {
+      const sub = m.submitted as Record<string, unknown>;
+      modifiedMap.set(String(sub.regex), m.current);
+    }
+  }
+
+  const fmtMw = (mw?: { start?: string; end?: string } | null) => mw?.start && mw?.end ? `${mw.start}–${mw.end}` : "none";
+
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-semibold text-muted-foreground uppercase">Submitted Patterns</p>
+      {submission.patterns.map((p: { name: string; regex: string; enabled: boolean; change_type?: string; maintenance_window?: { start: string; end: string } | null; reboot_proximity_minutes?: number | null }, idx: number) => {
+        const current = modifiedMap.get(p.regex);
+        const changes: Array<{ label: string; from: string; to: string }> = [];
+        
+        if (current && p.change_type === "modified") {
+          if (current.name !== p.name) changes.push({ label: "name", from: String(current.name), to: String(p.name) });
+          if (current.enabled !== p.enabled) changes.push({ label: "enabled", from: String(current.enabled ?? true), to: String(p.enabled ?? true) });
+          const curMw = current.maintenance_window as { start?: string; end?: string } | null | undefined;
+          const subMw = p.maintenance_window;
+          if (fmtMw(curMw) !== fmtMw(subMw)) changes.push({ label: "MW", from: fmtMw(curMw), to: fmtMw(subMw) });
+          const curRp = current.reboot_proximity_minutes as number | null | undefined;
+          const subRp = p.reboot_proximity_minutes;
+          if ((curRp ?? null) !== (subRp ?? null)) changes.push({ label: "reboot", from: curRp != null ? `±${curRp}m` : "none", to: subRp != null ? `±${subRp}m` : "none" });
+        }
+
+        return (
+          <div key={idx} className="space-y-1">
+            <div className="flex items-center gap-3 px-3 py-1.5 bg-muted/30 rounded text-xs">
+              <span className={`w-4 h-4 rounded-full flex items-center justify-center ${p.enabled ? "bg-green-500" : "bg-gray-400"}`}>
+                {p.enabled ? <CheckCircleIcon style={{ fontSize: 12, color: "white" }} /> : null}
+              </span>
+              {p.change_type === "new" ? (
+                <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px] font-bold shrink-0">NEW</span>
+              ) : p.change_type === "modified" ? (
+                <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold shrink-0">MODIFIED</span>
+              ) : null}
+              <span className="font-medium min-w-[120px]">{p.name}</span>
+              <code className="font-mono text-[11px] text-muted-foreground flex-1 truncate">{p.regex}</code>
+              {p.maintenance_window && (
+                <span className="shrink-0 px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded text-[10px]" title="Maintenance window">
+                  <ScheduleIcon style={{ fontSize: 10, marginRight: 2 }} />{p.maintenance_window.start}–{p.maintenance_window.end}
+                </span>
+              )}
+              {p.reboot_proximity_minutes != null && p.reboot_proximity_minutes > 0 && (
+                <span className="shrink-0 px-1.5 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 rounded text-[10px]" title="Reboot proximity">
+                  <RestartAltIcon style={{ fontSize: 10, marginRight: 2 }} />±{p.reboot_proximity_minutes}m
+                </span>
+              )}
+            </div>
+            {changes.length > 0 && (
+              <div className="ml-7 px-3 py-1.5 bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded text-xs">
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                  {changes.map((c) => (
+                    <span key={c.label} className="text-[11px]">
+                      <span className="text-muted-foreground">{c.label}:</span>{" "}
+                      <span className="line-through text-red-500 dark:text-red-400">{c.from}</span>{" → "}
+                      <span className="text-green-600 dark:text-green-400">{c.to}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {isLoading && <div className="flex items-center gap-2 text-xs text-muted-foreground py-2"><CircularProgress size={12} /> Loading diff...</div>}
     </div>
   );
 }
@@ -803,24 +977,7 @@ function ReviewTab() {
 
               {isExpanded && (
                 <div className="border-t border-border p-4 space-y-3">
-                  {/* Pattern list */}
-                  <div className="space-y-1">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase">Submitted Patterns</p>
-                    {s.patterns.map((p: { name: string; regex: string; enabled: boolean; change_type?: string }, idx: number) => (
-                      <div key={idx} className="flex items-center gap-3 px-3 py-1.5 bg-muted/30 rounded text-xs">
-                        <span className={`w-4 h-4 rounded-full flex items-center justify-center ${p.enabled ? "bg-green-500" : "bg-gray-400"}`}>
-                          {p.enabled ? <CheckCircleIcon style={{ fontSize: 12, color: "white" }} /> : null}
-                        </span>
-                        {p.change_type === "new" ? (
-                          <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px] font-bold shrink-0">NEW</span>
-                        ) : p.change_type === "modified" ? (
-                          <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold shrink-0">MODIFIED</span>
-                        ) : null}
-                        <span className="font-medium min-w-[120px]">{p.name}</span>
-                        <code className="font-mono text-[11px] text-muted-foreground flex-1 truncate">{p.regex}</code>
-                      </div>
-                    ))}
-                  </div>
+                  <SubmissionPatternList submission={s} />
 
                   {s.admin_comment && (
                     <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 rounded text-xs text-amber-800 dark:text-amber-400">
