@@ -265,18 +265,28 @@ export default function TelemetryOverviewTab() {
         />
       </div>
 
-      {/* Side-by-side: table (left) + chart (right) */}
-      <div className="flex flex-col lg:flex-row gap-3">
-        {/* Left panel — scrollable table */}
-        <div className="lg:w-[55%] bg-card border border-border rounded-xl overflow-hidden flex flex-col">
+      {/* CPE Detail Table */}
+      <div className="flex justify-center">
+        <div className="bg-card border border-border rounded-xl overflow-hidden inline-block">
           <div className="px-3 py-1 border-b border-border bg-muted/30">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               CPE Memory &amp; Reboot Detail
             </h3>
           </div>
 
-          <div className="overflow-auto max-h-[calc(100vh-220px)]">
-            <table className="w-full text-[11px] border-collapse">
+          <div className="overflow-auto max-h-[calc(100vh-300px)]">
+            <table className="text-[11px] border-collapse">
+              <colgroup>
+                <col style={{ width: "140px" }} />
+                <col style={{ width: "100px" }} />
+                <col style={{ width: "80px" }} />
+                <col style={{ width: "100px" }} />
+                <col style={{ width: "100px" }} />
+                <col style={{ width: "100px" }} />
+                <col style={{ width: "100px" }} />
+                <col style={{ width: "120px" }} />
+                <col style={{ width: "100px" }} />
+              </colgroup>
               <thead className="sticky top-0 z-10 bg-card">
                 <tr className="border-b border-border bg-muted/20">
                   <ThSort col="serial" label="Serial" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
@@ -337,16 +347,10 @@ export default function TelemetryOverviewTab() {
                       <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                         {fmtMemory(cpe.memory_total, unit)}
                       </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {(cpe.reboot_events ?? []).length > 0 ? (
-                          <div className="space-y-0.5">
-                            {(cpe.reboot_events ?? []).map((evt, idx) => (
-                              <span key={idx} className="block whitespace-nowrap">{fmtDurationSec(evt.prev_uptime)}</span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span>—</span>
-                        )}
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                        {(cpe.reboot_events ?? []).length > 0
+                          ? (cpe.reboot_events ?? []).map((evt) => fmtDurationSec(evt.prev_uptime)).join(" / ")
+                          : "—"}
                       </td>
                       <td className="px-2 py-1.5 text-center">
                         <StatusBadge status={cpe.status ?? "OK"} cfg={cfg} />
@@ -358,85 +362,76 @@ export default function TelemetryOverviewTab() {
             </table>
           </div>
         </div>
-
-        {/* Right panel — pinned chart */}
-        <div className="lg:w-[45%] lg:sticky lg:top-4 lg:self-start">
-          <div className="bg-card border border-border rounded-xl overflow-hidden">
-            {selectedCpe ? (
-              <>
-                <div className="px-3 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                    <MemoryIcon style={{ fontSize: 14, color: "#1a73e8" }} />
-                    Memory Timeline &mdash; {selectedCpe}
-                  </h3>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setSelectedCpe(null); }}
-                    className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
-                  >
-                    <CloseIcon style={{ fontSize: 14 }} />
-                  </button>
-                </div>
-                <div className="px-2 py-1">
-                  {cpeChartLoading && (
-                    <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
-                      <CircularProgress size={18} />
-                      <span className="text-xs">Loading memory data...</span>
-                    </div>
-                  )}
-                  {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
-                    <Plot
-                      data={memoryTraces.map((t) => ({
-                        type: "scatter" as const,
-                        mode: "lines" as const,
-                        x: t.times,
-                        y: t.values,
-                        name: `${t.label} (${t.unit})`,
-                        line: { color: t.style.color, width: 2, dash: t.style.dash },
-                      }))}
-                      layout={{
-                        height: 340,
-                        margin: { l: 50, r: 20, t: 16, b: 40 },
-                        xaxis: {
-                          tickfont: { size: 10 },
-                          title: { text: "Time", font: { size: 11 } },
-                          tickformat: "%H:%M\n%b %d",
-                          dtick: 20 * 60 * 1000,
-                          ...(rebootXRange ? { range: rebootXRange } : {}),
-                        },
-                        yaxis: {
-                          tickfont: { size: 10 },
-                          title: { text: `Memory (${memoryTraces[0]?.unit ?? "MB"})`, font: { size: 11 } },
-                          rangemode: "tozero",
-                        },
-                        shapes: rebootShapes,
-                        annotations: rebootAnnotations,
-                        legend: { orientation: "h", y: -0.18, font: { size: 10 } },
-                        hovermode: "x unified",
-                        paper_bgcolor: "transparent",
-                        plot_bgcolor: "transparent",
-                        font: { family: "Roboto, sans-serif", size: 11 },
-                      }}
-                      config={{ displayModeBar: true, modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"], displaylogo: false }}
-                      useResizeHandler
-                      style={{ width: "100%" }}
-                    />
-                  )}
-                  {!cpeChartLoading && (!memoryTraces || memoryTraces.length === 0) && (
-                    <div className="py-8 text-center text-xs text-muted-foreground">
-                      No memory chart data available for this CPE.
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
-                <MemoryIcon style={{ fontSize: 32, opacity: 0.3 }} />
-                <p className="text-xs">Click a CPE row to view its memory timeline</p>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
+
+      {/* Memory Timeline Chart */}
+      {selectedCpe && (
+        <div className="bg-card border border-border rounded-xl overflow-hidden max-h-[calc(100vh-280px)]">
+          <div className="px-3 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <MemoryIcon style={{ fontSize: 14, color: "#1a73e8" }} />
+                Memory Timeline &mdash; {selectedCpe}
+              </h3>
+              <button
+                onClick={(e) => { e.stopPropagation(); setSelectedCpe(null); }}
+                className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
+              >
+                <CloseIcon style={{ fontSize: 14 }} />
+              </button>
+            </div>
+            <div className="px-2 py-1 overflow-auto">
+              {cpeChartLoading && (
+                <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+                  <CircularProgress size={18} />
+                  <span className="text-xs">Loading memory data...</span>
+                </div>
+              )}
+              {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
+                <Plot
+                  data={memoryTraces.map((t) => ({
+                    type: "scatter" as const,
+                    mode: "lines" as const,
+                    x: t.times,
+                    y: t.values,
+                    name: `${t.label} (${t.unit})`,
+                    line: { color: t.style.color, width: 2, dash: t.style.dash },
+                  }))}
+                  layout={{
+                    height: 340,
+                    margin: { l: 50, r: 20, t: 16, b: 40 },
+                    xaxis: {
+                      tickfont: { size: 10 },
+                      title: { text: "Time", font: { size: 11 } },
+                      tickformat: "%H:%M\n%b %d",
+                      dtick: 20 * 60 * 1000,
+                      ...(rebootXRange ? { range: rebootXRange } : {}),
+                    },
+                    yaxis: {
+                      tickfont: { size: 10 },
+                      title: { text: `Memory (${memoryTraces[0]?.unit ?? "MB"})`, font: { size: 11 } },
+                      rangemode: "tozero",
+                    },
+                    shapes: rebootShapes,
+                    annotations: rebootAnnotations,
+                    legend: { orientation: "h", y: -0.18, font: { size: 10 } },
+                    hovermode: "x unified",
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                    font: { family: "Roboto, sans-serif", size: 11 },
+                  }}
+                  config={{ displayModeBar: true, modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"], displaylogo: false }}
+                  useResizeHandler
+                  style={{ width: "100%" }}
+                />
+              )}
+              {!cpeChartLoading && (!memoryTraces || memoryTraces.length === 0) && (
+                <div className="py-8 text-center text-xs text-muted-foreground">
+                  No memory chart data available for this CPE.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
     </div>
   );
 }

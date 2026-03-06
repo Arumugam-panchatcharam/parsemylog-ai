@@ -167,10 +167,10 @@ export default function PatternOverviewTab() {
     });
 
     return {
-      y: sorted.map((r) => `${r.name} (${r.domain})`),
+      y: sorted.map((r) => r.name),
       x: sorted.map((r) => r.pctAffected),
       colors: sorted.map((r) => domainColorMap[r.domain] ?? "#888"),
-      customdata: sorted.map((r) => [r.cpesAffected, totalCpes, r.totalMatches]),
+      customdata: sorted.map((r) => [r.cpesAffected, totalCpes, r.totalMatches, r.domain]),
     };
   }, [filteredRows, domainNames, totalCpes]);
 
@@ -277,9 +277,9 @@ export default function PatternOverviewTab() {
         </p>
       )}
 
-      {/* Summary bar chart */}
+      {/* Horizontal bar chart */}
       {chartData && chartData.y.length > 0 && (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <div className="bg-card border border-border rounded-xl">
           <div className="px-3 py-1.5 border-b border-border bg-muted/30">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Pattern Spread Across CPEs
@@ -296,22 +296,25 @@ export default function PatternOverviewTab() {
                   marker: { color: chartData.colors },
                   customdata: chartData.customdata,
                   hovertemplate:
-                    "<b>%{y}</b><br>" +
+                    "<b>%{y}</b> (%{customdata[3]})<br>" +
                     "CPEs affected: %{customdata[0]} / %{customdata[1]}<br>" +
                     "Spread: %{x}%<br>" +
                     "Total matches: %{customdata[2]}<extra></extra>",
-                  textposition: "auto",
+                  text: chartData.x.map((v) => `${v}%`),
+                  textposition: "outside",
+                  textfont: { size: 9 },
+                  cliponaxis: false,
                 } as any,
               ]}
               layout={{
-                height: Math.max(140, chartData.y.length * 20 + 50),
-                margin: { l: 10, r: 20, t: 5, b: 25 },
+                height: Math.max(200, chartData.y.length * 28 + 60),
+                margin: { l: 220, r: 50, t: 10, b: 30 },
                 xaxis: {
                   title: { text: "% of CPEs Affected", font: { size: 10 } },
-                  range: [0, 100],
-                  dtick: 5,
+                  range: [0, Math.min(110, Math.max(...chartData.x) + 15)],
                   ticksuffix: "%",
                   tickfont: { size: 9 },
+                  gridcolor: "rgba(128,128,128,0.15)",
                 },
                 yaxis: {
                   automargin: true,
@@ -320,7 +323,7 @@ export default function PatternOverviewTab() {
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
                 font: { color: "#888", size: 10 },
-                bargap: 0.12,
+                bargap: 0.15,
               }}
               config={NO_TOOLBAR}
               useResizeHandler
@@ -331,7 +334,8 @@ export default function PatternOverviewTab() {
       )}
 
       {/* Detail table */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="flex justify-center">
+        <div className="bg-card border border-border rounded-xl overflow-hidden inline-block">
         <div className="px-3 py-1 border-b border-border bg-muted/30">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Pattern Distribution Detail
@@ -339,14 +343,14 @@ export default function PatternOverviewTab() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-[11px] border-collapse table-fixed">
+          <table className="text-[11px] border-collapse">
             <colgroup>
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "46%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "8%" }} />
+              <col style={{ width: "140px" }} />
+              <col style={{ width: "auto" }} />
+              <col style={{ width: "120px" }} />
+              <col style={{ width: "80px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "60px" }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border bg-muted/20">
@@ -456,6 +460,7 @@ export default function PatternOverviewTab() {
           </table>
         </div>
       </div>
+    </div>
     </div>
   );
 }
