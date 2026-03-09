@@ -1084,3 +1084,38 @@ export const telemetryCsvApi = {
       max_points: maxPoints 
     }, { timeout: 120_000 }),
 };
+
+// ── Utilities API ──────────────────────────────────────────────────────────────
+
+export interface MacLookupResult {
+  original: string;
+  mac: string | null;
+  oui: string | null;
+  vendor: string | null;
+  error: string | null;
+}
+
+export interface OuiStatus {
+  entries: number;
+  file_exists: boolean;
+  file_size_mb: number;
+  last_modified: number | null;
+}
+
+export interface OuiUpdateResult {
+  status: string;
+  message: string;
+  entries?: number;
+  size_mb?: number;
+}
+
+export const utilitiesApi = {
+  macLookup: (macs: string[]) =>
+    api.post<MacLookupResult[]>("/utilities/mac-lookup", { macs }, { timeout: 120_000 }),
+  
+  ouiStatus: () =>
+    api.get<OuiStatus>("/utilities/oui-status"),
+  
+  ouiUpdate: () =>
+    api.post<OuiUpdateResult>("/utilities/oui-update", {}, { timeout: 90_000 }),
+};
