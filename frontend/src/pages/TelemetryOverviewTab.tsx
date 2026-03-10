@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { telemetryApi } from "@/api/endpoints";
 import type { CrossCpeTelemetryEntry } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
@@ -13,6 +13,7 @@ import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import ErrorIcon from "@mui/icons-material/Error";
 import CloseIcon from "@mui/icons-material/Close";
 import MemoryIcon from "@mui/icons-material/Memory";
+import RefreshIcon from "@mui/icons-material/Refresh";
 
 /* ---------------------------------------------------------------- Types */
 
@@ -77,10 +78,12 @@ const MEMORY_TRACE_COLORS: Record<string, { color: string; dash?: Dash }> = {
 
 export default function TelemetryOverviewTab() {
   const { projectId } = useProject();
+  const queryClient = useQueryClient();
 
   const [sortKey, setSortKey] = useState<SortKey>("memory_free_min");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selectedCpe, setSelectedCpe] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["telemetry-cross-cpe-overview", projectId],
@@ -88,6 +91,20 @@ export default function TelemetryOverviewTab() {
     enabled: !!projectId,
     staleTime: 5 * 60 * 1000,
   });
+
+  const handleForceRefresh = async () => {
+    if (!projectId || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const result = await telemetryApi.crossCpeOverview(projectId, true);
+      // Update the query cache directly with the new data instead of invalidating
+      queryClient.setQueryData(["telemetry-cross-cpe-overview", projectId], result.data);
+    } catch (err) {
+      console.error("Force refresh failed:", err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   /* Per-CPE telemetry chart data */
   const { data: cpeChartData, isLoading: cpeChartLoading } = useQuery({
@@ -234,6 +251,19 @@ export default function TelemetryOverviewTab() {
 
   return (
     <div className="space-y-3">
+      {/* Header with Force Refresh Button */}
+      <div className="flex justify-end">
+        <button
+          onClick={handleForceRefresh}
+          disabled={isRefreshing || isLoading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-card hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Force re-parse telemetry data for all CPEs"
+        >
+          <RefreshIcon style={{ fontSize: 14 }} className={isRefreshing ? "animate-spin" : ""} />
+          {isRefreshing ? "Re-parsing..." : "Force Refresh All"}
+        </button>
+      </div>
+
       {/* Summary badges */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <SummaryBadge

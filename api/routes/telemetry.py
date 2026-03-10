@@ -762,6 +762,9 @@ def cross_cpe_overview(project_id):
     """
     Aggregate memory health and reboot data across ALL CPEs in a project.
 
+    Query params:
+        force (optional): Set to "1" or "true" to force re-parse all telemetry data
+
     Returns:
         {
             "cpes": [ { serial, model, memory_free_min, memory_free_avg,
@@ -777,6 +780,7 @@ def cross_cpe_overview(project_id):
     if err:
         return err
 
+    force = request.args.get("force", "0") in ("1", "true")
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
     cpes = dbm.list_project_cpes(project_id)
 
@@ -797,10 +801,11 @@ def cross_cpe_overview(project_id):
             "low_memory": False, "memory_usage_pct_peak": None,
             "status": "OK",
         }
-        cached = load_telemetry_cache(cpe_dir)
+        # Load from cache unless force re-parse is requested
+        cached = None if force else load_telemetry_cache(cpe_dir)
         if not cached:
             try:
-                resp, _avail, _err = _parse_and_build(cpe_dir)
+                resp, _avail, _err = _parse_and_build(cpe_dir, force=force)
                 cached = resp
             except Exception:
                 cached = None
@@ -811,13 +816,19 @@ def cross_cpe_overview(project_id):
         dev_info = cached.get("device_info") or {}
         entry["model"] = dev_info.get("model", "N/A")
 
-        # Memory metrics from key_metrics (trend only; values come from chart traces)
+        # Memory metrics from key_metrics
+        # Priority 1: Get memory total from key_metrics (always available if Memory Free exists)
+        km_unit = None
         for km in cached.get("key_metrics") or []:
             if km.get("label") == "Memory Free":
                 entry["memory_trend"] = km.get("trend", "stable")
+                # Memory total is included in the Memory Free key metric
+                if "total" in km and km["total"]:
+                    entry["memory_total"] = km["total"]
+                    km_unit = km.get("unit", "KB")  # Track the original unit
 
-        # Read memory stats from chart traces.  Handle various group/label
-        # naming across config versions:
+        # Priority 2: Read memory stats from chart traces (for memory_free values)
+        # Handle various group/label naming across config versions:
         #   New config:  group="Memory"            labels: Memory Free / Memory Total / Memory Available
         #   Old config:  group="System Resources"  labels: Memory Free (only)
         #   Alt config:  group="Available memory"  labels: Available / Free
@@ -854,6 +865,23 @@ def cross_cpe_overview(project_id):
                         entry["memory_free_avg"] = round(sum(vals) / len(vals), 2)
                         chart_unit = trace_unit
         entry["memory_unit"] = chart_unit
+
+        # Convert memory_total to match chart_unit if it came from key_metrics
+        if "memory_total" in entry and km_unit and km_unit != chart_unit:
+            mem_total = entry["memory_total"]
+            # Convert from km_unit to chart_unit
+            if km_unit == "KB" and chart_unit == "MB":
+                entry["memory_total"] = round(mem_total / 1024, 2)
+            elif km_unit == "KB" and chart_unit == "GB":
+                entry["memory_total"] = round(mem_total / (1024 * 1024), 2)
+            elif km_unit == "MB" and chart_unit == "GB":
+                entry["memory_total"] = round(mem_total / 1024, 2)
+            elif km_unit == "MB" and chart_unit == "KB":
+                entry["memory_total"] = round(mem_total * 1024, 2)
+            elif km_unit == "GB" and chart_unit == "MB":
+                entry["memory_total"] = round(mem_total * 1024, 2)
+            elif km_unit == "GB" and chart_unit == "KB":
+                entry["memory_total"] = round(mem_total * 1024 * 1024, 2)
 
         # Memory usage percentage
         mem_total = entry.get("memory_total")

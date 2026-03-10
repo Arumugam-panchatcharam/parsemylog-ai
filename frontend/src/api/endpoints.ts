@@ -461,8 +461,10 @@ export const telemetryApi = {
     api.get(`/projects/${projectId}/telemetry/available-fields`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
-  crossCpeOverview: (projectId: string) =>
-    api.get<CrossCpeTelemetryOverview>(`/projects/${projectId}/telemetry/cross-cpe-overview`),
+  crossCpeOverview: (projectId: string, force = false) =>
+    api.get<CrossCpeTelemetryOverview>(`/projects/${projectId}/telemetry/cross-cpe-overview`, {
+      params: force ? { force: "1" } : undefined,
+    }),
 };
 
 // ---------- Semantic Search ----------

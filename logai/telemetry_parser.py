@@ -198,20 +198,62 @@ def _try_parse_json(json_str: str) -> Optional[dict]:
 
 def _extract_report_fields(report_json: dict) -> Dict[str, Any]:
     """
-    Extract key fields from the parsed Report JSON.
+    Extract key fields from parsed telemetry JSON.
 
-    The Report is an array of single-key dicts:
-      {"Report": [{"Time": "..."}, {"Profile.Name": "..."}, ...]}
+    Automatically detects and handles multiple telemetry formats:
+    - T2 format: {"Report": [{"Time": "..."}, {"Profile.Name": "..."}, ...]}
+    - dcmscript format: {"searchResult": [{"T2": "1.0"}, {"Profile": "..."}, ...]}
+    - Custom formats: Any top-level array of single-key dicts
+
+    For dcmscript format, automatically applies TR-181 key aliases to ensure
+    compatibility with the rest of the telemetry pipeline.
+
+    Args:
+        report_json: Parsed JSON object from telemetry file.
+
+    Returns:
+        Flattened dict of all telemetry fields, with dcmscript keys mapped to
+        TR-181 equivalents when applicable.
     """
     result: Dict[str, Any] = {}
-    report_array = report_json.get("Report", [])
-
+    
+    # Detect format by checking known array keys (in priority order)
+    report_array = None
+    source_format = None
+    
+    # Priority 1: T2 format (Report key)
+    if "Report" in report_json:
+        report_array = report_json["Report"]
+        source_format = "t2"
+    # Priority 2: dcmscript format (searchResult key)
+    elif "searchResult" in report_json:
+        report_array = report_json["searchResult"]
+        source_format = "dcmscript"
+    # Priority 3: Try to find any top-level array as fallback
+    else:
+        for key, value in report_json.items():
+            if isinstance(value, list) and len(value) > 0:
+                report_array = value
+                source_format = "custom"
+                break
+    
+    if not report_array:
+        return result
+    
+    # Extract fields from array of single-key dicts
     for item in report_array:
         if not isinstance(item, dict):
             continue
         for key, value in item.items():
+            # Skip empty string values (common in dcmscript)
+            if isinstance(value, str) and value == "":
+                continue
             result[key] = value
-
+    
+    # Apply dcmscript -> TR-181 key mappings if from dcmscript format
+    if source_format == "dcmscript" and result:
+        _apply_dcm_tr181_aliases(result)
+    
     return result
 
 
