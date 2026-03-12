@@ -158,6 +158,8 @@ def create_api_app():
     from api.routes.batch_jobs import batch_jobs_bp
     from api.routes.knowledge_graph import knowledge_graph_bp
     from api.routes.issue_analysis import issue_analysis_bp
+    from api.routes.ml_anomaly import ml_anomaly_bp
+    from api.routes.ml_feedback import ml_feedback_bp
     from api.routes.utilities import utilities_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
@@ -178,8 +180,21 @@ def create_api_app():
     app.register_blueprint(batch_jobs_bp, url_prefix="/api/projects")
     app.register_blueprint(knowledge_graph_bp, url_prefix="/api/knowledge-graphs")
     app.register_blueprint(issue_analysis_bp, url_prefix="/api/projects")
+    app.register_blueprint(ml_anomaly_bp, url_prefix="/api/projects")
+    app.register_blueprint(ml_feedback_bp, url_prefix="/api/projects")
     app.register_blueprint(utilities_bp, url_prefix="/api/utilities")
-
+    
+    # Create feedback tables
+    with app.app_context():
+        try:
+            from logai.ml.feedback import create_feedback_tables
+            create_feedback_tables()
+            import logging
+            logging.getLogger(__name__).info("[App] Feedback tables created/verified")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[App] Could not create feedback tables: {e}")
+    
     # Health check
     @app.route("/api/health")
     def health():

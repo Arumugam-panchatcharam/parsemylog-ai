@@ -28,8 +28,9 @@ export default function DashboardPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const { data: projects, isLoading, refetch } = useQuery({
-    queryKey: ["projects"],
+    queryKey: ["projects", user?.id],
     queryFn: async () => (await projectsApi.list()).data,
+    enabled: !!user,
   });
 
   const { data: natcos } = useQuery({
@@ -52,7 +53,7 @@ export default function DashboardPage() {
       return projectsApi.create(newName, newDesc, newNatcoId, newProjectType);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", user?.id] });
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
@@ -64,7 +65,7 @@ export default function DashboardPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => projectsApi.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", user?.id] });
       setDeleteId(null);
     },
   });

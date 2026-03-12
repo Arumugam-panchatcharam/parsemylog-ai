@@ -697,6 +697,12 @@ export const patternGovernanceApi = {
 };
 
 // ---------- Chat (AI LLM) ----------
+export interface ChatFileList {
+  logs: Array<{ name: string; path: string; size: number }>;
+  csv: Array<{ name: string; size: number }>;
+  pcap: Array<{ name: string; size: number }>;
+}
+
 export const chatApi = {
   llmStatus: (projectId: string) =>
     api.get<{ enabled: boolean; available: boolean; model_info: Record<string, unknown> | null }>(
@@ -718,6 +724,11 @@ export const chatApi = {
     api.get<Array<{ id: number; role: string; content: string; context_used: Record<string, unknown> | null; created_at: string | null }>>(
       `/projects/${projectId}/chat/messages`,
       { params: { conversation_id: conversationId, ...(limit ? { limit } : {}) } }
+    ),
+  listFiles: (projectId: string, cpeId?: string | null) =>
+    api.get<ChatFileList>(
+      `/projects/${projectId}/chat/list-files`,
+      { params: cpeId ? { cpe_id: cpeId } : undefined }
     ),
   // Note: send is done via fetch() + SSE streaming, not Axios
 };
@@ -769,7 +780,16 @@ export const adminApi = {
 
   // LLM settings
   getLlmSettings: () =>
-    api.get<{ enabled: boolean; available: boolean; model_info: Record<string, unknown> | null }>("/admin/settings/llm"),
+    api.get<{ 
+      enabled: boolean; 
+      available: boolean; 
+      model_info: Record<string, unknown> | null;
+      providers?: {
+        openai?: { configured: boolean; available: boolean; model: string | null; base_url?: string | null };
+        openrouter?: { configured: boolean; available: boolean; model: string | null };
+      };
+      active_provider?: string | null;
+    }>("/admin/settings/llm"),
   setLlmSettings: (enabled: boolean) =>
     api.put<{ enabled: boolean; message: string }>("/admin/settings/llm", { enabled }),
 
@@ -1085,6 +1105,213 @@ export const telemetryCsvApi = {
       y_columns: yColumns,
       max_points: maxPoints 
     }, { timeout: 120_000 }),
+};
+
+// ── ML Anomaly Detection API ──────────────────────────────────────────────────
+
+export interface LogAnomalyReport {
+  anomalies: Array<{
+    cluster_id: number;
+    template: string;
+    count: number;
+    anomaly_score: number;
+    score?: number; // Alternative field name
+    method: string;
+    methods?: Record<string, number>; // Method scores
+    examples: string[];
+    category?: string; // Domain/category
+    sample_loglines?: string[]; // Sample log lines
+  }>;
+  total_anomalies: number;
+  processing_time: number;
+  summary?: string;
+  domain?: string; // Domain filter
+  method_stats?: Record<string, { detected: number }>; // Stats per method
+}
+
+export interface TelemetryAnomalyReport {
+  anomalies: Array<{
+    cpe_id: string;
+    metric_name: string;
+    anomaly_type: string;
+    severity: string;
+    description: string;
+    timestamp?: string;
+    value?: number;
+    expected_range?: string;
+  }>;
+  total_anomalies: number;
+  processing_time: number;
+  summary?: string | { narrative?: string }; // Can be string or object with narrative
+  health?: {
+    overall_score: number;
+  };
+  plot_data?: {
+    metrics: Array<{
+      name: string;
+      values: number[];
+      timestamps: string[];
+      metric_label?: string;
+      has_anomalies?: boolean;
+      unit?: string;
+      mean?: number;
+      lower_threshold?: number;
+      upper_threshold?: number;
+      anomaly_points?: {
+        values: number[];
+        timestamps: string[];
+        severities?: string[];
+      };
+    }>;
+  };
+}
+
+export interface FleetAnalysisReport {
+  log_anomalies: number;
+  telemetry_anomalies: number;
+  total_devices: number;
+  affected_devices: number;
+  top_issues: Array<{
+    issue_type: string;
+    affected_count: number;
+    description: string;
+  }>;
+  processing_time: number;
+  details?: {
+    log_anomalies: number;
+    telemetry_anomalies: number;
+  };
+  summary?: string;
+  analyzed_cpes?: number;
+  total_cpes?: number;
+  health_distribution?: {
+    healthy: number;
+    warning: number;
+    critical: number;
+  };
+  fleet_anomaly_patterns?: Array<{
+    pattern: string;
+    template?: string;
+    count: number;
+    cpe_count?: number;
+    affected_cpes: string[];
+  }>;
+  outlier_cpes?: Array<{
+    cpe_id: string;
+    score: number;
+    anomalies: number;
+  }>;
+  per_cpe_summary?: Record<string, {
+    overall_score: number;
+    health_score?: number;
+    log_anomaly_count: number;
+    telemetry_anomaly_count: number;
+    log_anomalies?: number;
+    telemetry_anomalies?: number;
+  }>;
+  per_cpe_results?: Array<{
+    cpe_id: string;
+    overall_score: number;
+    health_score?: number;
+    log_anomaly_count: number;
+    telemetry_anomaly_count: number;
+    log_anomalies?: number;
+    telemetry_anomalies?: number;
+  }>;
+}
+
+export const mlAnomalyApi = {
+  detectLogAnomalies: (
+    projectId: string,
+    params: {
+      cpe_id?: string;
+      domain?: string;
+      enable_vector_similarity?: boolean;
+      enable_gru?: boolean;
+      enable_isolation_forest?: boolean;
+      top_n?: number;
+    } = {}
+  ) =>
+    api.post<LogAnomalyReport>(
+      `/projects/${projectId}/ml/log-anomalies`,
+      {},
+      { params }
+    ),
+  detectTelemetryAnomalies: (projectId: string, cpeId?: string) =>
+    api.post<TelemetryAnomalyReport>(
+      `/projects/${projectId}/ml/telemetry-anomalies`,
+      {},
+      { params: cpeId ? { cpe_id: cpeId } : undefined }
+    ),
+  runFleetAnalysis: (
+    projectId: string,
+    body?: {
+      target_cpes?: string[];
+    },
+    params: {
+      enable_log?: boolean;
+      enable_telemetry?: boolean;
+      enable_vector_similarity?: boolean;
+      enable_gru?: boolean;
+      enable_isolation_forest?: boolean;
+      max_workers?: number;
+    } = {}
+  ) =>
+    api.post<FleetAnalysisReport>(
+      `/projects/${projectId}/ml/fleet-analysis`,
+      body || {},
+      { params }
+    ),
+  
+  // Feedback APIs
+  submitFeedback: (
+    projectId: string,
+    feedback: {
+      cpe_id?: string; // CPE ID field
+      domain?: string; // Domain field
+      anomaly_type: string;
+      cluster_id?: number;
+      template?: string;
+      metric_name?: string;
+      is_true_positive: boolean;
+      confidence?: number;
+      feedback_notes?: string;
+    }
+  ) =>
+    api.post(`/projects/${projectId}/ml/feedback`, feedback),
+  
+  getFeedback: (projectId: string, domain?: string) =>
+    api.get<{
+      feedback: Array<{
+        id: number;
+        anomaly_type: string;
+        cluster_id?: number;
+        template?: string;
+        metric_name?: string;
+        is_true_positive: boolean;
+        confidence: number;
+        feedback_notes?: string;
+        created_at: string;
+      }>;
+      count: number;
+    }>(`/projects/${projectId}/ml/feedback`, {
+      params: domain ? { domain } : undefined,
+    }),
+  
+  // Admin APIs
+  getActiveGlobalModels: (params?: { model_type?: string; domain?: string }) =>
+    api.get<{
+      models: Array<{
+        id: number;
+        model_type: string;
+        domain: string;
+        vocabulary_size: number;
+        training_samples: number;
+        accuracy_metrics: any;
+        trained_at: string;
+        version: number;
+      }>;
+    }>("/projects/ml/global-models/active", { params }),
 };
 
 // ── Utilities API ──────────────────────────────────────────────────────────────

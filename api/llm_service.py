@@ -1,10 +1,10 @@
 """
-LLM Service — OpenRouter client, evidence-grounded prompt builder, request queue.
-================================================================================
+LLM Service — OpenAI (primary) + OpenRouter (fallback) client, evidence-grounded prompt builder.
+==================================================================================================
 
-Uses OpenRouter's API (free-tier models) with fallback across multiple models
-on rate limit or provider failure. Builds evidence-grounded prompts from the
-parsed pipeline data.
+Uses OpenAI's API as primary provider with function calling support for tool access.
+Falls back to OpenRouter's free-tier models on errors or when OpenAI is not configured.
+Builds evidence-grounded prompts from the parsed pipeline data.
 """
 
 import json
@@ -62,12 +62,32 @@ _queue_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 def is_available() -> bool:
-    """OpenRouter is available if API key is set (no network check to avoid rate limits)."""
+    """
+    LLM is available if either OpenAI or OpenRouter is configured.
+    Prioritizes OpenAI, falls back to OpenRouter.
+    """
+    try:
+        from api.openai_service import is_available as openai_available
+        if openai_available():
+            return True
+    except Exception as e:
+        logger.warning(f"[LLM] OpenAI check failed: {e}")
+    
     return bool(OPENROUTER_API_KEY)
 
 
 def get_model_info() -> Optional[Dict[str, Any]]:
     """Return provider/model info for the UI (no external call)."""
+    # Try OpenAI first
+    try:
+        from api.openai_service import get_model_info as openai_model_info
+        info = openai_model_info()
+        if info:
+            return info
+    except Exception as e:
+        logger.warning(f"[LLM] OpenAI model info failed: {e}")
+    
+    # Fallback to OpenRouter
     if not OPENROUTER_API_KEY:
         return None
     models = _get_openrouter_models()
@@ -75,7 +95,7 @@ def get_model_info() -> Optional[Dict[str, Any]]:
     return {
         "id": first,
         "object": "provider",
-        "provider": "OpenRouter (free)",
+        "provider": "OpenRouter (free, fallback)",
     }
 
 
@@ -364,29 +384,60 @@ def _is_retryable_error(resp: Optional[requests.Response], exc: Optional[Excepti
 
 
 def chat_completion_stream(messages: List[Dict[str, str]],
+                           user_id: int,
+                           project_id: str,
+                           cpe_id: Optional[str] = None,
                            temperature: float = 0.4,
-                           max_tokens: int = 2048) -> Generator[str, None, None]:
+                           max_tokens: int = 2048,
+                           selected_files: Optional[List[str]] = None) -> Generator[str, None, None]:
     """
-    Call OpenRouter and yield the response in chunks for SSE delivery.
-    Tries each model in OPENROUTER_MODELS in order; on 429/502/503/timeout/connection
-    error, tries the next model. Non-retryable errors (e.g. 401) are returned
-    immediately. If all models fail, yields a single error message.
-
+    Call LLM (OpenAI primary, OpenRouter fallback) and yield the response in chunks.
+    
+    OpenAI provider:
+    - Supports function calling for tool access
+    - Can analyze specific files based on user selection
+    - Executes tools and integrates results
+    
+    OpenRouter fallback:
+    - Uses free-tier models with retry logic
+    - Evidence-based context only (no tool calling)
+    
     Blocks until an inference slot is available (request queue).
     """
-    if not OPENROUTER_API_KEY:
-        yield "\n\n**Error**: OpenRouter API key is not configured. Please set OPENROUTER_API_KEY."
-        return
-
-    models = _get_openrouter_models()
-    if not models:
-        yield "\n\n**Error**: No OpenRouter models configured. Set OPENROUTER_MODELS."
-        return
-
     _acquire_slot()
     try:
+        # Try OpenAI first
+        try:
+            from api.openai_service import is_available as openai_available, chat_completion_stream as openai_stream
+            
+            if openai_available():
+                logger.info(f"[LLM] Using OpenAI provider ({len(messages)} messages)")
+                for chunk in openai_stream(
+                    messages=messages,
+                    user_id=user_id,
+                    project_id=project_id,
+                    cpe_id=cpe_id,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    selected_files=selected_files
+                ):
+                    yield chunk
+                return
+        except Exception as e:
+            logger.warning(f"[LLM] OpenAI failed, falling back to OpenRouter: {e}")
+        
+        # Fallback to OpenRouter
+        if not OPENROUTER_API_KEY:
+            yield "\n\n**Error**: No LLM provider is configured. Please set OPENAI_API_KEY or OPENROUTER_API_KEY."
+            return
+
+        models = _get_openrouter_models()
+        if not models:
+            yield "\n\n**Error**: No OpenRouter models configured. Set OPENROUTER_MODELS."
+            return
+
         logger.info(
-            f"[LLM] OpenRouter request ({len(messages)} messages, "
+            f"[LLM] OpenRouter fallback ({len(messages)} messages, "
             f"max_tokens={max_tokens}, temp={temperature}), models={models}"
         )
         url = f"{OPENROUTER_BASE_URL}/chat/completions"

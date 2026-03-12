@@ -193,7 +193,11 @@ def send_message(project_id):
     """
     Send a user message and stream back the LLM response via SSE.
 
-    Body: { conversation_id: int, message: string }
+    Body: { 
+        conversation_id: int, 
+        message: string,
+        selected_files: string[] (optional) - list of file names/paths for context
+    }
 
     Gates:
         - LLM must be enabled by admin
@@ -219,6 +223,7 @@ def send_message(project_id):
     data = request.get_json(silent=True) or {}
     conv_id = data.get("conversation_id")
     user_message = (data.get("message") or "").strip()
+    selected_files = data.get("selected_files", [])
 
     if not conv_id or not user_message:
         return jsonify({"error": "conversation_id and message are required"}), 400
@@ -287,7 +292,13 @@ def send_message(project_id):
             # Stream LLM response
             full_response = []
             logger.info(f"[Chat] Starting LLM stream for conv {conv_id}")
-            for token in llm.chat_completion_stream(messages):
+            for token in llm.chat_completion_stream(
+                messages,
+                user_id=user_id,
+                project_id=project_id,
+                cpe_id=cpe_id,
+                selected_files=selected_files if selected_files else None
+            ):
                 full_response.append(token)
                 yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
 
@@ -339,3 +350,98 @@ def llm_status(project_id):
         "available": available,
         "model_info": model_info,
     }), 200
+
+
+# ---------------------------------------------------------------------------
+# File context selection
+# ---------------------------------------------------------------------------
+
+@chat_bp.route("/<project_id>/chat/list-files", methods=["GET"])
+@jwt_required()
+def list_chat_files(project_id):
+    """
+    List available files in the project for context selection.
+    
+    Query params:
+        cpe_id (optional): filter to a specific CPE
+        
+    Returns: { 
+        logs: [{name, path, size}],
+        csv: [{name, size}],
+        pcap: [{name, size}]
+    }
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    
+    cpe_id = request.args.get("cpe_id")
+    project_dir = _get_project_dir(user_id, project_id, cpe_id)
+    
+    files = {
+        "logs": [],
+        "csv": [],
+        "pcap": []
+    }
+    
+    if not project_dir.exists():
+        return jsonify(files), 200
+    
+    try:
+        # List log files (limit to common log files, not all .txt)
+        common_logs = [
+            "version.txt", "PARODUSlog.txt", "parodusStart-log.txt",
+            "BootTime.log", "selfHeal.txt", "telemetry_marker.txt",
+            "RDKB_Telemetry.txt", "xOpsAnalytics.log", "LM.txt",
+            "Consolelog.txt", "ArmConsolelog.txt"
+        ]
+        
+        for log_name in common_logs:
+            log_path = project_dir / log_name
+            if log_path.exists() and log_path.is_file():
+                files["logs"].append({
+                    "name": log_name,
+                    "path": log_name,
+                    "size": log_path.stat().st_size
+                })
+        
+        # Check merged_logs directory
+        merged_dir = project_dir / "merged_logs"
+        if merged_dir.exists():
+            for log_name in common_logs:
+                log_path = merged_dir / log_name
+                if log_path.exists() and log_path.is_file():
+                    rel_path = f"merged_logs/{log_name}"
+                    # Avoid duplicates
+                    if not any(f["path"] == rel_path for f in files["logs"]):
+                        files["logs"].append({
+                            "name": log_name,
+                            "path": rel_path,
+                            "size": log_path.stat().st_size
+                        })
+        
+        # List CSV files
+        csv_dir = project_dir / "telemetry_csv"
+        if csv_dir.exists():
+            for csv_file in sorted(csv_dir.glob("*.csv")):
+                files["csv"].append({
+                    "name": csv_file.name,
+                    "size": csv_file.stat().st_size
+                })
+        
+        # List PCAP files
+        pcap_dir = project_dir / "pcap"
+        if pcap_dir.exists():
+            for pcap_file in sorted(pcap_dir.glob("*")):
+                if pcap_file.suffix.lower() in [".pcap", ".pcapng", ".cap"]:
+                    files["pcap"].append({
+                        "name": pcap_file.name,
+                        "size": pcap_file.stat().st_size
+                    })
+        
+        return jsonify(files), 200
+        
+    except Exception as exc:
+        logger.exception(f"Failed to list files for chat context")
+        return jsonify({"error": f"Failed to list files: {str(exc)}"}), 500

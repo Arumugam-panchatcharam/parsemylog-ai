@@ -483,7 +483,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
             // Basic YAML: extract patterns using regex-based heuristics
             // This handles the standard domain-grouped format the app exports
             const lines = text.split("\n");
-            const result: Record<string, Array<{ name: string; regex: string; enabled: boolean }>> = {};
+            const result: Record<string, Array<{ name: string; regex: string; enabled: boolean; maintenance_window?: { start: string; end: string }; reboot_proximity_minutes?: number }>> = {};
             let currentDomain = "";
 
             for (const line of lines) {
@@ -506,11 +506,38 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               const enabledMatch = line.match(/^\s+enabled:\s*(true|false)$/);
               if (enabledMatch && currentDomain && result[currentDomain].length > 0) {
                 result[currentDomain][result[currentDomain].length - 1].enabled = enabledMatch[1] === "true";
+                continue;
+              }
+              // Parse maintenance_window start
+              const mwStartMatch = line.match(/^\s+maintenance_window:\s*\{?\s*start:\s*['"]?([^'"}\s]+)['"]?/);
+              if (mwStartMatch && currentDomain && result[currentDomain].length > 0) {
+                if (!result[currentDomain][result[currentDomain].length - 1].maintenance_window) {
+                  result[currentDomain][result[currentDomain].length - 1].maintenance_window = { start: "", end: "" };
+                }
+                result[currentDomain][result[currentDomain].length - 1].maintenance_window!.start = mwStartMatch[1];
+                continue;
+              }
+              // Parse maintenance_window end (can be on same line or separate)
+              const mwEndMatch = line.match(/end:\s*['"]?([^'"}\s]+)['"]?/);
+              if (mwEndMatch && currentDomain && result[currentDomain].length > 0) {
+                if (!result[currentDomain][result[currentDomain].length - 1].maintenance_window) {
+                  result[currentDomain][result[currentDomain].length - 1].maintenance_window = { start: "", end: "" };
+                }
+                result[currentDomain][result[currentDomain].length - 1].maintenance_window!.end = mwEndMatch[1];
+                continue;
+              }
+              // Parse reboot_proximity_minutes
+              const rpMatch = line.match(/^\s+reboot_proximity_minutes:\s*(\d+)$/);
+              if (rpMatch && currentDomain && result[currentDomain].length > 0) {
+                const rp = Number(rpMatch[1]);
+                if (!isNaN(rp) && rp >= 1 && rp <= 60) {
+                  result[currentDomain][result[currentDomain].length - 1].reboot_proximity_minutes = rp;
+                }
               }
             }
 
             // Filter out patterns with empty regex
-            const cleaned: Record<string, Array<{ name: string; regex: string; enabled: boolean }>> = {};
+            const cleaned: Record<string, Array<{ name: string; regex: string; enabled: boolean; maintenance_window?: { start: string; end: string }; reboot_proximity_minutes?: number }>> = {};
             for (const [d, pats] of Object.entries(result)) {
               const valid = pats.filter((p) => p.regex);
               if (valid.length > 0) cleaned[d] = valid;
@@ -539,11 +566,28 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               const existing = next[domain] || [];
               const existingRegexes = new Set(existing.map((p) => p.regex));
               const newPats = (pats as Array<Record<string, unknown>>)
-                .map((p) => ({
-                  name: String(p.name || "").slice(0, 200),
-                  regex: String(p.regex || p.pattern || ""),
-                  enabled: p.enabled !== false,
-                }))
+                .map((p) => {
+                  const pattern: UserPattern = {
+                    name: String(p.name || "").slice(0, 200),
+                    regex: String(p.regex || p.pattern || ""),
+                    enabled: p.enabled !== false,
+                  };
+                  // Preserve maintenance_window if present
+                  if (p.maintenance_window && typeof p.maintenance_window === "object") {
+                    const mw = p.maintenance_window as { start?: string; end?: string };
+                    if (mw.start && mw.end) {
+                      pattern.maintenance_window = { start: mw.start, end: mw.end };
+                    }
+                  }
+                  // Preserve reboot_proximity_minutes if present
+                  if (p.reboot_proximity_minutes != null) {
+                    const rp = Number(p.reboot_proximity_minutes);
+                    if (!isNaN(rp) && rp >= 1 && rp <= 60) {
+                      pattern.reboot_proximity_minutes = rp;
+                    }
+                  }
+                  return pattern;
+                })
                 .filter((p) => p.regex && !existingRegexes.has(p.regex));
               imported += newPats.length;
               next[domain] = [...existing, ...newPats];
@@ -557,11 +601,28 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
         // Format 2: flat array [{name, regex}]
         if (Array.isArray(parsed)) {
           const pats = (parsed as Array<Record<string, unknown>>)
-            .map((p) => ({
-              name: String(p.name || p.template || p.regex || "").slice(0, 200),
-              regex: String(p.regex || p.pattern || p.template || ""),
-              enabled: p.enabled !== false,
-            }))
+            .map((p) => {
+              const pattern: UserPattern = {
+                name: String(p.name || p.template || p.regex || "").slice(0, 200),
+                regex: String(p.regex || p.pattern || p.template || ""),
+                enabled: p.enabled !== false,
+              };
+              // Preserve maintenance_window if present
+              if (p.maintenance_window && typeof p.maintenance_window === "object") {
+                const mw = p.maintenance_window as { start?: string; end?: string };
+                if (mw.start && mw.end) {
+                  pattern.maintenance_window = { start: mw.start, end: mw.end };
+                }
+              }
+              // Preserve reboot_proximity_minutes if present
+              if (p.reboot_proximity_minutes != null) {
+                const rp = Number(p.reboot_proximity_minutes);
+                if (!isNaN(rp) && rp >= 1 && rp <= 60) {
+                  pattern.reboot_proximity_minutes = rp;
+                }
+              }
+              return pattern;
+            })
             .filter((p) => p.regex);
 
           if (pats.length > 0) {
@@ -589,11 +650,30 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               const cpeLogs = issue.CPELogs as Array<Record<string, unknown>> | undefined;
               if (!Array.isArray(cpeLogs)) continue;
               for (const cpeLog of cpeLogs) {
-                const regexEntries = cpeLog.Regex as Array<Record<string, string>> | undefined;
+                const regexEntries = cpeLog.Regex as Array<Record<string, unknown>> | undefined;
                 if (!Array.isArray(regexEntries)) continue;
                 for (const rx of regexEntries) {
                   if (rx.pattern) {
-                    patterns.push({ name: rx.description || title || rx.pattern.slice(0, 60), regex: rx.pattern, enabled: true });
+                    const pattern: UserPattern = {
+                      name: String(rx.description || title || String(rx.pattern).slice(0, 60)),
+                      regex: String(rx.pattern),
+                      enabled: true,
+                    };
+                    // Preserve maintenance_window if present
+                    if (rx.maintenance_window && typeof rx.maintenance_window === "object") {
+                      const mw = rx.maintenance_window as { start?: string; end?: string };
+                      if (mw.start && mw.end) {
+                        pattern.maintenance_window = { start: mw.start, end: mw.end };
+                      }
+                    }
+                    // Preserve reboot_proximity_minutes if present
+                    if (rx.reboot_proximity_minutes != null) {
+                      const rp = Number(rx.reboot_proximity_minutes);
+                      if (!isNaN(rp) && rp >= 1 && rp <= 60) {
+                        pattern.reboot_proximity_minutes = rp;
+                      }
+                    }
+                    patterns.push(pattern);
                     found = true;
                   }
                 }
@@ -1033,6 +1113,11 @@ function SettingsTab() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adminLlmSettings"] }),
   });
 
+  const providers = llmSettings?.providers as {
+    openai?: { configured: boolean; available: boolean; model: string | null; base_url: string | null };
+    openrouter?: { configured: boolean; available: boolean; model: string | null };
+  };
+
   return (
     <>
       <div className="flex items-center justify-between mb-4">
@@ -1045,13 +1130,13 @@ function SettingsTab() {
       </div>
 
       {/* LLM Settings Card */}
-      <div className="bg-card border border-border rounded-2xl p-6 max-w-xl">
+      <div className="bg-card border border-border rounded-2xl p-6 max-w-2xl">
         <div className="flex items-start gap-4">
           <div className="shrink-0 h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
             <SmartToyIcon style={{ fontSize: 28 }} className="text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-semibold">AI Chat (OpenRouter)</h3>
+            <h3 className="text-base font-semibold">AI Chat</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
               Enable or disable the AI-powered log analysis chat for all users.
             </p>
@@ -1078,30 +1163,114 @@ function SettingsTab() {
               {toggleMutation.isPending && <CircularProgress size={14} />}
             </div>
 
-            {/* Server Health */}
-            <div className="mt-4 flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">OpenRouter:</span>
-              {isLoading ? (
-                <CircularProgress size={12} />
-              ) : llmSettings?.available ? (
-                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400" title="OpenRouter API configured and ready">
-                  <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-                  Configured
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 text-xs text-red-500" title="OpenRouter API not configured">
-                  <span className="h-2 w-2 rounded-full bg-red-500" />
-                  {llmSettings?.enabled ? "Not configured — set OPENROUTER_API_KEY in .env" : "Not checked (disabled)"}
-                </span>
-              )}
+            {/* Provider Status */}
+            <div className="mt-4 space-y-3">
+              {/* OpenAI */}
+              <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">OpenAI</span>
+                    {llmSettings?.active_provider === "openai" && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-primary/20 text-primary rounded font-medium">
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  {providers?.openai?.model && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Model: {providers.openai.model}
+                    </p>
+                  )}
+                  {providers?.openai?.base_url && (
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-md" title={providers.openai.base_url}>
+                      Endpoint: {providers.openai.base_url}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {isLoading ? (
+                    <CircularProgress size={12} />
+                  ) : providers?.openai?.available ? (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                      <span className="text-xs text-green-600 dark:text-green-400">Configured</span>
+                    </>
+                  ) : providers?.openai?.configured ? (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-yellow-500" />
+                      <span className="text-xs text-yellow-600 dark:text-yellow-400">Error</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-red-500" />
+                      <span className="text-xs text-red-500">Not configured</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* OpenRouter */}
+              <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">OpenRouter (Fallback)</span>
+                    {llmSettings?.active_provider === "openrouter" && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-primary/20 text-primary rounded font-medium">
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  {providers?.openrouter?.model && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {providers.openrouter.model}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {isLoading ? (
+                    <CircularProgress size={12} />
+                  ) : providers?.openrouter?.available ? (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                      <span className="text-xs text-green-600 dark:text-green-400">Configured</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-red-500" />
+                      <span className="text-xs text-red-500">Not configured</span>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Model Info */}
-            {llmSettings?.model_info && (
-              <div className="mt-3 p-3 bg-muted/50 rounded-lg text-xs space-y-1">
-                <p className="font-medium">Provider / model</p>
-                <p className="text-muted-foreground">
-                  {String((llmSettings.model_info as Record<string, unknown>).provider || "OpenRouter (free)")} — {String((llmSettings.model_info as Record<string, unknown>).id || "—")}
+            {/* Configuration Instructions */}
+            {llmSettings?.enabled && !llmSettings?.available && (
+              <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                  Configuration Required
+                </p>
+                <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                  Add at least one API key to .env:
+                </p>
+                <ul className="text-xs text-yellow-700 dark:text-yellow-300 mt-1 space-y-0.5 ml-4 list-disc">
+                  <li><code className="bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">OPENAI_API_KEY=your-key</code></li>
+                  <li><code className="bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">OPENAI_BASE_URL=https://...</code> (for Azure OpenAI)</li>
+                  <li><code className="bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">OPENAI_MODEL=gpt-4.1</code></li>
+                  <li>Or <code className="bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">OPENROUTER_API_KEY=sk-...</code> (fallback)</li>
+                </ul>
+              </div>
+            )}
+
+            {/* Active Provider Info */}
+            {llmSettings?.active_provider && (
+              <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                  ✓ AI Chat Ready
+                </p>
+                <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                  Using <strong>{llmSettings.active_provider === "openai" ? "OpenAI" : "OpenRouter"}</strong>
+                  {llmSettings.active_provider === "openai" && " with function calling for tool access"}
                 </p>
               </div>
             )}

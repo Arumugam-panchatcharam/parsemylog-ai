@@ -123,17 +123,66 @@ def get_llm_settings():
     """
     Get LLM settings (admin only).
 
-    Returns: { enabled: bool, available: bool, model_info: {...} | null }
+    Returns: { 
+        enabled: bool, 
+        providers: {
+            openai: { available: bool, configured: bool, model: str },
+            openrouter: { available: bool, configured: bool, model: str }
+        },
+        active_provider: "openai" | "openrouter" | null,
+        model_info: {...} | null 
+    }
     """
     import api.llm_service as llm
-
+    import os
+    
     enabled = llm.is_enabled(dbm)
     available = llm.is_available() if enabled else False
     model_info = llm.get_model_info() if available else None
-
+    
+    # Check individual providers
+    openai_configured = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    openrouter_configured = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+    
+    openai_available = False
+    openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    
+    if openai_configured:
+        try:
+            from api.openai_service import is_available as openai_is_available
+            openai_available = openai_is_available()
+        except Exception:
+            pass
+    
+    openrouter_available = openrouter_configured
+    openrouter_model = "free-tier models"
+    
+    # Determine active provider
+    active_provider = None
+    if enabled and available:
+        if openai_available:
+            active_provider = "openai"
+        elif openrouter_available:
+            active_provider = "openrouter"
+    
     return jsonify({
         "enabled": enabled,
         "available": available,
+        "providers": {
+            "openai": {
+                "configured": openai_configured,
+                "available": openai_available,
+                "model": openai_model if openai_configured else None,
+                "base_url": openai_base_url if openai_configured else None
+            },
+            "openrouter": {
+                "configured": openrouter_configured,
+                "available": openrouter_available,
+                "model": openrouter_model if openrouter_configured else None
+            }
+        },
+        "active_provider": active_provider,
         "model_info": model_info,
     }), 200
 

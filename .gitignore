@@ -8,6 +8,7 @@ bge-small-en-v1.5-local/
 *.db
 .DS_Store
 test*
+oui.txt
 
 # Frontend
 frontend/node_modules/

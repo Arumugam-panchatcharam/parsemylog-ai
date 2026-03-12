@@ -45,6 +45,7 @@ pytz==2025.2
 tqdm==4.67.1
 click==8.3.0
 regex==2024.11.6
+openai==1.59.6
 
 # Type hints and validation
 pydantic==2.11.9

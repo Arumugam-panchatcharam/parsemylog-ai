@@ -21,6 +21,7 @@ import BatchJobsPage from "@/pages/BatchJobsPage";
 import BatchJobDetailPage from "@/pages/BatchJobDetailPage";
 import KnowledgeGraphPage from "@/pages/KnowledgeGraphPage";
 import IssueAnalysisPage from "@/pages/IssueAnalysisPage";
+import MLPipelinePage from "@/pages/MLPipelinePage";
 import type { ReactNode } from "react";
 
 const queryClient = new QueryClient({
@@ -89,6 +90,7 @@ function AppRoutes() {
         <Route path="/workspace/pattern-analyzer" element={<PatternAnalyzerPage />} />
         <Route path="/workspace/cpe-overview" element={<CPEOverviewPage />} />
         <Route path="/workspace/issue-analysis" element={<IssueAnalysisPage />} />
+        <Route path="/workspace/ml-pipeline" element={<MLPipelinePage />} />
         <Route path="/workspace/chat" element={<ChatPage />} />
       </Route>
 

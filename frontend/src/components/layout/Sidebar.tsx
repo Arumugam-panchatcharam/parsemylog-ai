@@ -13,6 +13,7 @@ import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import HubIcon from "@mui/icons-material/Hub";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
+import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import WifiIcon from "@mui/icons-material/Wifi";
@@ -32,6 +33,7 @@ const workspaceNav = [
   { to: "/workspace/ai", icon: PsychologyIcon, label: "Semantic Search" },
   { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
   { to: "/workspace/issue-analysis", icon: AccountTreeIcon, label: "Issue Analysis" },
+  { to: "/workspace/ml-pipeline", icon: ModelTrainingIcon, label: "ML Pipeline" },
 ];
 
 export default function Sidebar() {
