@@ -258,7 +258,7 @@ def _build_flat_metrics(
 
 def _collect_reboot_summary(project_dir: Path) -> Dict[str, Any]:
     """Collect reboot data for a CPE directory."""
-    result: Dict[str, Any] = {"total": 0, "reasons": {}}
+    result: Dict[str, Any] = {"total": 0, "reasons": {}, "types": {"soft": 0, "hard": 0}}
 
     try:
         from logai.info_extractor import find_and_extract_reboots
@@ -268,6 +268,11 @@ def _collect_reboot_summary(project_dir: Path) -> Dict[str, Any]:
             reasons = [r.get("reason", "unknown") for r in reboots]
             result["reasons"] = dict(Counter(reasons))
             result["events"] = reboots
+            
+            # Count reboot types
+            soft_count = sum(1 for r in reboots if r.get("reboot_type") == "soft")
+            hard_count = len(reboots) - soft_count
+            result["types"] = {"soft": soft_count, "hard": hard_count}
     except Exception as e:
         logger.warning(f"[CPEOverview] Error collecting reboots from {project_dir}: {e}")
 

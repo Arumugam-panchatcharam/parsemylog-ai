@@ -324,7 +324,7 @@ def _parse_and_build(project_dir: Path, force: bool = False):
     status_labels = _build_status_labels_data(configured_fields)
     charts = _build_charts_data(configured_fields)
     key_metrics = _build_key_metrics_data(configured_fields, summary)
-    reboot_timeline = _build_reboot_timeline(reports)
+    reboot_timeline = _build_reboot_timeline(reports, project_dir)
     mesh_topology = extract_mesh_topology_timeline(reports)
 
     response = {
@@ -429,18 +429,29 @@ def get_available_fields(project_id):
         return jsonify({"error": str(e)}), 500
 
 
-def _build_reboot_timeline(reports):
-    """Detect reboots from uptime drops and return timeline data for charting."""
+def _build_reboot_timeline(reports, project_dir=None):
+    """
+    Detect reboots from uptime drops and BootTime.log, return timeline data for charting.
+    
+    Returns reboot events from two sources:
+    - B (BootTime): Actual reboot start time from BootTime.log (more accurate)
+    - TR (Telemetry): When telemetry services came back online (uptime drop detection)
+    
+    Args:
+        reports: List of telemetry reports
+        project_dir: Path to project directory (optional, for BootTime.log access)
+    """
     ok_reports = [r for r in reports if r.get("parse_ok") and r.get("time")]
     ok_reports.sort(key=lambda x: x["time"])
 
     uptime_key = "Device.DeviceInfo.UpTime"
     times = []
     reboot_counts = []  # cumulative reboot count at each timestamp
-    reboot_events = []  # individual reboot event markers
+    reboot_events_telemetry = []  # telemetry-based reboot events (TR)
     cumulative = 0
     prev_uptime = None
 
+    # Detect reboots from uptime drops (TR - Telemetry)
     for r in ok_reports:
         raw = r["fields"].get(uptime_key)
         if raw is None:
@@ -456,17 +467,73 @@ def _build_reboot_timeline(reports):
 
         if prev_uptime is not None and uptime < prev_uptime:
             cumulative += 1
-            reboot_events.append({"time": ts, "count": cumulative, "prev_uptime": prev_uptime, "new_uptime": uptime})
+            reboot_events_telemetry.append({
+                "time": ts,
+                "count": cumulative,
+                "prev_uptime": prev_uptime,
+                "new_uptime": uptime,
+                "source": "telemetry",
+                "label": "TR"
+            })
 
         times.append(ts)
         reboot_counts.append(cumulative)
         prev_uptime = uptime
 
+    # Get reboots from BootTime.log (B - BootTime) if available
+    reboot_events_boottime = []
+    boottime_reboots = []
+    if project_dir:
+        try:
+            from logai.info_extractor import find_and_extract_reboots
+            boottime_reboots = find_and_extract_reboots(project_dir)
+            for idx, reboot in enumerate(boottime_reboots, start=1):
+                reboot_events_boottime.append({
+                    "time": reboot.get("timestamp", ""),
+                    "reason": reboot.get("reason", "unknown"),
+                    "reboot_type": reboot.get("reboot_type", "unknown"),
+                    "source": "boottime",
+                    "label": "B"
+                })
+        except Exception as e:
+            logger.debug(f"[Telemetry] Could not load BootTime.log reboots: {e}")
+
+    # Cross-reference telemetry-detected reboots with BootTime.log to add reboot_type
+    # Match timestamps within ±30 minutes tolerance
+    from datetime import datetime, timedelta
+    REBOOT_MATCH_TOLERANCE = timedelta(minutes=30)
+    
+    for tr_event in reboot_events_telemetry:
+        tr_event["reboot_type"] = None  # Default to None (unknown)
+        
+        try:
+            tr_time = datetime.fromisoformat(tr_event["time"])
+            
+            # Find matching BootTime.log reboot
+            for bt_reboot in boottime_reboots:
+                try:
+                    bt_time = datetime.fromisoformat(bt_reboot.get("timestamp", ""))
+                    time_diff = abs(tr_time - bt_time)
+                    
+                    if time_diff <= REBOOT_MATCH_TOLERANCE:
+                        tr_event["reboot_type"] = bt_reboot.get("reboot_type")
+                        break
+                except (ValueError, TypeError):
+                    continue
+        except (ValueError, TypeError):
+            pass
+
+    # Combine all reboot events
+    all_events = reboot_events_boottime + reboot_events_telemetry
+    all_events.sort(key=lambda e: e["time"])
+
     return {
         "times": times,
         "counts": reboot_counts,
         "total_reboots": cumulative,
-        "events": reboot_events,
+        "events": reboot_events_telemetry,  # Now includes reboot_type when matched
+        "boottime_events": reboot_events_boottime,  # BootTime.log based reboots
+        "all_events": all_events,  # Combined list for comprehensive view
     }
 
 
@@ -897,6 +964,13 @@ def cross_cpe_overview(project_id):
         rt = cached.get("reboot_timeline") or {}
         entry["reboot_count"] = rt.get("total_reboots", 0)
         entry["reboot_events"] = rt.get("events") or []
+        
+        # Add reboot type breakdown
+        events = entry["reboot_events"]
+        entry["reboot_types"] = {
+            "soft": sum(1 for e in events if e.get("reboot_type") == "soft"),
+            "hard": sum(1 for e in events if e.get("reboot_type") == "hard"),
+        }
 
         # Status: memory-threshold + reboot correlation
         free_min = entry.get("memory_free_min")

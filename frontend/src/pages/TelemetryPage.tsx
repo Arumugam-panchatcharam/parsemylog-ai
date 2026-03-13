@@ -46,7 +46,13 @@ interface RebootTimeline {
   times: string[];
   counts: number[];
   total_reboots: number;
-  events: Array<{ time: string; count: number; prev_uptime: number; new_uptime: number }>;
+  events: Array<{ 
+    time: string; 
+    count: number; 
+    prev_uptime: number; 
+    new_uptime: number;
+    reboot_type?: "soft" | "hard";
+  }>;
 }
 interface AvailableFieldInfo {
   key: string;
@@ -403,29 +409,114 @@ export default function TelemetryPage() {
                   Charts from selfHeal and telemetry_marker (no telemetry2_0 data).
                 </p>
               )}
+              {/* Reboot Legend */}
+              {(data.reboot_timeline?.all_events ?? []).length > 0 && (
+                <div className="bg-card border border-border rounded-lg p-2 mb-2">
+                  <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+                    <span className="font-semibold">Reboot Markers:</span>
+                    <div className="flex items-center gap-1">
+                      <div className="w-6 h-0.5 bg-[#1a73e8]"></div>
+                      <span><span className="font-mono font-semibold text-[#1a73e8]">B</span> = BootTime (actual reboot start)</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-6 h-0.5 border-t-2 border-dashed border-[#d93025]"></div>
+                      <span><span className="font-mono font-semibold text-[#d93025]">TR</span> = Telemetry Recovery (services online)</span>
+                    </div>
+                    <div className="border-l border-border pl-4 ml-2 flex items-center gap-3">
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono font-semibold text-[#3b82f6]">S</span>
+                        <span>= Soft Reboot (software)</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono font-semibold text-[#d93025]">H</span>
+                        <span>= Hard Reboot (power/crash)</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 {(data.charts ?? []).map((chart, cIdx) => {
-                  // Build reboot event vertical lines
-                  const rebootShapes = (data.reboot_timeline?.events ?? []).map((e) => ({
-                    type: "line" as const,
-                    x0: e.time,
-                    x1: e.time,
-                    y0: 0,
-                    y1: 1,
-                    yref: "paper" as const,
-                    line: { color: "#d93025", width: 1.5, dash: "dot" as const },
-                  }));
+                  // Build reboot event vertical lines - use all_events for both BootTime and Telemetry
+                  const rebootShapes = (data.reboot_timeline?.all_events ?? []).map((e: any) => {
+                    const isBootTime = e.source === "boottime";
+                    const isSoft = e.reboot_type === "soft";
+                    const isHard = e.reboot_type === "hard";
+                    
+                    // Determine color: use reboot_type if available, otherwise use source-based color
+                    let lineColor = isBootTime ? "#1a73e8" : "#d93025"; // Default: blue for BootTime, red for Telemetry
+                    if (isSoft) lineColor = "#3b82f6"; // Soft reboot = blue
+                    else if (isHard) lineColor = "#d93025"; // Hard reboot = red
+                    
+                    return {
+                      type: "line" as const,
+                      x0: e.time,
+                      x1: e.time,
+                      y0: 0,
+                      y1: 1,
+                      yref: "paper" as const,
+                      line: { 
+                        color: lineColor, 
+                        width: isBootTime ? 2 : 1.5, 
+                        dash: isBootTime ? "solid" : "dot" as const 
+                      },
+                    };
+                  });
 
                   // Build reboot event annotations
-                  const rebootAnnotations = (data.reboot_timeline?.events ?? []).map((e) => ({
-                    x: e.time,
-                    y: 1,
-                    yref: "paper" as const,
-                    text: "R",
-                    showarrow: false,
-                    font: { size: 9, color: "#d93025", family: "monospace" },
-                    yanchor: "bottom" as const,
-                  }));
+                  const rebootAnnotations = (data.reboot_timeline?.all_events ?? []).map((e: any) => {
+                    const isBootTime = e.source === "boottime";
+                    const sourceLabel = e.label || (isBootTime ? "B" : "TR");
+                    const isSoft = e.reboot_type === "soft";
+                    const isHard = e.reboot_type === "hard";
+                    
+                    // Show both source and type: "B-S", "TR-H", etc.
+                    const typeLabel = isSoft ? "S" : isHard ? "H" : "";
+                    const fullLabel = typeLabel ? `${sourceLabel}-${typeLabel}` : sourceLabel;
+                    
+                    // Determine color based on reboot_type
+                    let fontColor = isBootTime ? "#1a73e8" : "#d93025";
+                    if (isSoft) fontColor = "#3b82f6";
+                    else if (isHard) fontColor = "#d93025";
+                    
+                    return {
+                      x: e.time,
+                      y: 1,
+                      yref: "paper" as const,
+                      text: fullLabel,
+                      showarrow: false,
+                      font: { 
+                        size: 9, 
+                        color: fontColor, 
+                        family: "monospace" 
+                      },
+                      yanchor: "bottom" as const,
+                    };
+                  });
+
+                  // Build invisible scatter points for reboot hover tooltips
+                  const rebootHoverTrace = {
+                    type: "scatter" as const,
+                    mode: "markers" as const,
+                    x: (data.reboot_timeline?.all_events ?? []).map((e: any) => e.time),
+                    y: (data.reboot_timeline?.all_events ?? []).map(() => 0), // Bottom of chart
+                    marker: {
+                      size: 10,
+                      opacity: 0, // Invisible but still hoverable
+                    },
+                    hovertemplate: (data.reboot_timeline?.all_events ?? []).map((e: any) => {
+                      const isBootTime = e.source === "boottime";
+                      const sourceLabel = isBootTime ? "BootTime" : "Telemetry Recovery";
+                      const typeLabel = e.reboot_type === "soft" ? "Soft Reboot" : 
+                                       e.reboot_type === "hard" ? "Hard Reboot" : "Reboot";
+                      const reasonText = e.reason && e.reason !== "" ? 
+                                        `<br><b>Reason:</b> ${e.reason}` : "";
+                      
+                      return `<b>${sourceLabel}</b> (${typeLabel})<br><b>Time:</b> %{x}${reasonText}<extra></extra>`;
+                    }),
+                    showlegend: false,
+                    name: "Reboot Events",
+                  };
 
                   return (
                     <div key={cIdx} className="bg-card border border-border rounded-xl overflow-hidden">
@@ -434,31 +525,34 @@ export default function TelemetryPage() {
                       </div>
                       <div className="p-2">
                         <Plot
-                          data={chart.traces.map((t) => {
-                            if (t.normalized && t.raw_values && t.raw_unit_original) {
-                              // Normalized trace: show raw values in hover
-                              return {
-                                x: t.times,
-                                y: t.values,
-                                name: `${t.label} (${t.raw_unit_original})`,
-                                type: "scatter" as const,
-                                mode: "lines+markers" as const,
-                                marker: { size: 3 },
-                                customdata: t.raw_values,
-                                hovertemplate: `<b>${t.label}</b><br>%{x}<br>%{customdata} ${t.raw_unit_original}<extra></extra>`,
-                              };
-                            } else {
-                              // Normal trace
-                              return {
-                                x: t.times,
-                                y: t.values,
-                                name: `${t.label} (${t.unit})`,
-                                type: "scatter" as const,
-                                mode: "lines+markers" as const,
-                                marker: { size: 3 },
-                              };
-                            }
-                          })}
+                          data={[
+                            ...chart.traces.map((t) => {
+                              if (t.normalized && t.raw_values && t.raw_unit_original) {
+                                // Normalized trace: show raw values in hover
+                                return {
+                                  x: t.times,
+                                  y: t.values,
+                                  name: `${t.label} (${t.raw_unit_original})`,
+                                  type: "scatter" as const,
+                                  mode: "lines+markers" as const,
+                                  marker: { size: 3 },
+                                  customdata: t.raw_values,
+                                  hovertemplate: `<b>${t.label}</b><br>%{x}<br>%{customdata} ${t.raw_unit_original}<extra></extra>`,
+                                };
+                              } else {
+                                // Normal trace
+                                return {
+                                  x: t.times,
+                                  y: t.values,
+                                  name: `${t.label} (${t.unit})`,
+                                  type: "scatter" as const,
+                                  mode: "lines+markers" as const,
+                                  marker: { size: 3 },
+                                };
+                              }
+                            }),
+                            rebootHoverTrace, // Add hover trace for reboot events
+                          ]}
                           layout={{
                             height: 280,
                             margin: { l: 45, r: 15, t: 5, b: 35 },

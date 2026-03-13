@@ -439,7 +439,14 @@ export interface CrossCpeTelemetryEntry {
   low_memory?: boolean;
   status?: string;
   reboot_count: number;
-  reboot_events: Array<{ time: string; count: number; prev_uptime: number; new_uptime: number }>;
+  reboot_events: Array<{ 
+    time: string; 
+    count: number; 
+    prev_uptime: number; 
+    new_uptime: number;
+    reboot_type?: "soft" | "hard";
+  }>;
+  reboot_types?: { soft: number; hard: number };
 }
 
 export interface CrossCpeTelemetryOverview {

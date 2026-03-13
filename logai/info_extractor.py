@@ -1053,11 +1053,28 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
     if not cycles:
         return {}
 
-    # Build reboot summary
+    # SHIFT REBOOT REASONS BACKWARD
+    # The "Received reboot_reason" logged in cycle N explains why cycle N-1 rebooted
+    # So we assign cycle[i].reason to cycle[i-1]
+    if len(cycles) > 0:
+        # Collect all logged reasons first
+        logged_reasons = [c.get("reason", "") for c in cycles]
+        
+        # Shift backward: cycle i gets the reason from cycle i+1
+        for i in range(len(cycles)):
+            if i + 1 < len(cycles):
+                # This cycle's reboot was caused by what the NEXT cycle logged
+                cycles[i]["reason"] = logged_reasons[i + 1] if logged_reasons[i + 1] else "unknown"
+            else:
+                # Last cycle is current boot - no reboot yet, so no reason
+                cycles[i]["reason"] = ""
+
+    # Build reboot summary (only for cycles that have been assigned a reason)
     reason_counts: Dict[str, int] = {}
-    for cycle in cycles:
+    for cycle in cycles[:-1]:  # Exclude last cycle (current boot, no reboot)
         reason = cycle.get("reason", "unknown")
-        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if reason:  # Only count non-empty reasons
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
 
     return {
         "total_reboots": len(cycles),
@@ -1067,8 +1084,56 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Console log parser for software reboot detection
+# ---------------------------------------------------------------------------
+
+_CONSOLELOG_BACKUP_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).*(?:==> Taking backup of logs before reboot|Taking a backup from /rdklogs/logs/)"
+)
+
+
+def parse_consolelog_for_soft_reboots(content: str) -> List[str]:
+    """
+    Parse Consolelog.txt to detect software-initiated reboots.
+
+    Searches for backup log indicators that appear before software reboots:
+        - "==> Taking backup of logs before reboot"
+        - "Taking a backup from /rdklogs/logs/ to /nvram/logbackup/"
+
+    Args:
+        content: Raw text content of Consolelog.txt.
+
+    Returns:
+        List of ISO-formatted timestamp strings indicating soft reboot times.
+    """
+    if not content or not content.strip():
+        return []
+
+    soft_reboot_times: List[str] = []
+    seen_timestamps: set = set()
+
+    for line in content.splitlines():
+        m = _CONSOLELOG_BACKUP_RE.match(line)
+        if m:
+            timestamp = m.group(1)
+            # Deduplicate (both indicators may appear for same reboot)
+            if timestamp not in seen_timestamps:
+                soft_reboot_times.append(timestamp)
+                seen_timestamps.add(timestamp)
+
+    logger.info(
+        f"[InfoExtractor] Found {len(soft_reboot_times)} soft reboot "
+        f"indicators in Consolelog.txt"
+    )
+    return soft_reboot_times
+
+
+# ---------------------------------------------------------------------------
 # Reboot extraction coordinator
 # ---------------------------------------------------------------------------
+
+# Cache version - increment when reboot parsing logic changes
+REBOOTS_CACHE_VERSION = 2
 
 
 def _reboots_cache_is_fresh(
@@ -1078,6 +1143,19 @@ def _reboots_cache_is_fresh(
     """Return True if *cache_path* exists and is newer than all *source_paths*."""
     if not cache_path.exists():
         return False
+    
+    # Check cache version
+    try:
+        cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
+        cache_version = cache_data.get("version", 1)
+        if cache_version != REBOOTS_CACHE_VERSION:
+            logger.info(f"[InfoExtractor] Cache version mismatch (cached: {cache_version}, expected: {REBOOTS_CACHE_VERSION}), invalidating")
+            return False
+    except Exception as e:
+        logger.warning(f"[InfoExtractor] Error reading cache version: {e}")
+        return False
+    
+    # Check mtime
     cache_mtime = cache_path.stat().st_mtime
     for src in source_paths:
         if src.exists() and src.stat().st_mtime > cache_mtime:
@@ -1091,11 +1169,15 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
 
     Results are cached to ``{project_dir}/.reboots_cache.json``.
     The cache is automatically invalidated when the source log files
-    (``BootTime.log`` or ``PARODUSlog.txt``) are modified (mtime check).
+    (``BootTime.log``, ``PARODUSlog.txt``, or ``Consolelog.txt``) are modified (mtime check).
 
     Tries multiple sources in priority order:
         1. BootTime.log  (most reliable -- explicit boot-cycle markers)
         2. PARODUSlog.txt (fallback -- PARODUS startup blocks)
+
+    Then cross-references with Consolelog.txt to detect software-initiated
+    reboots (marked as ``reboot_type: "soft"``). Reboots without console log
+    backup indicators are marked as ``reboot_type: "hard"``.
 
     Searches for files directly in *project_dir* (where merged logs
     are stored after upload processing).
@@ -1105,22 +1187,32 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                      (e.g. ``UPLOAD_DIRECTORY/{user_id}/{project_id}``).
 
     Returns:
-        Sorted list of ``{"timestamp": "<ISO-datetime>", "reason": "..."}``
+        Sorted list of ``{"timestamp": "<ISO-datetime>", "reason": "...", "reboot_type": "soft"|"hard"}``
         dicts.  Returns an empty list when no reboot data is found.
     """
     cache_path = project_dir / ".reboots_cache.json"
     bt_path = project_dir / "BootTime.log"
     p_path = project_dir / "PARODUSlog.txt"
     p_start_path = project_dir / "parodusStart-log.txt"
+    console_path = project_dir / "Consolelog.txt"
 
     # --- Check cache ---
-    if _reboots_cache_is_fresh(cache_path, [bt_path, p_path, p_start_path]):
+    if _reboots_cache_is_fresh(cache_path, [bt_path, p_path, p_start_path, console_path]):
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(cached, list):
+            # Handle both old format (array) and new format (object with version)
+            if isinstance(cached, dict) and "reboots" in cached:
+                reboots_list = cached["reboots"]
+                logger.debug(
+                    f"[InfoExtractor] Returning {len(reboots_list)} cached reboots "
+                    f"from {cache_path}"
+                )
+                return reboots_list
+            elif isinstance(cached, list):
+                # Old format - still supported for backward compatibility
                 logger.debug(
                     f"[InfoExtractor] Returning {len(cached)} cached reboots "
-                    f"from {cache_path}"
+                    f"from {cache_path} (old format)"
                 )
                 return cached
         except Exception as e:
@@ -1144,14 +1236,11 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                     f"[InfoExtractor] Found {len(reboots)} reboots "
                     f"from {bt_path}"
                 )
-                reboots.sort(key=lambda r: r["timestamp"])
-                _write_reboots_cache(cache_path, reboots)
-                return reboots
         except Exception as e:
             logger.warning(f"[InfoExtractor] Error parsing {bt_path}: {e}")
 
     # --- Fallback: PARODUSlog.txt ---
-    if p_path.exists() and p_path.is_file():
+    if not reboots and p_path.exists() and p_path.is_file():
         try:
             content = p_path.read_text(encoding="utf-8", errors="ignore")
             p_info = parse_parodus_log(content)
@@ -1165,14 +1254,11 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                     f"[InfoExtractor] Found {len(reboots)} reboots "
                     f"from {p_path}"
                 )
-                reboots.sort(key=lambda r: r["timestamp"])
-                _write_reboots_cache(cache_path, reboots)
-                return reboots
         except Exception as e:
             logger.warning(f"[InfoExtractor] Error parsing {p_path}: {e}")
 
     # --- Fallback: parodusStart-log.txt ---
-    if p_start_path.exists() and p_start_path.is_file():
+    if not reboots and p_start_path.exists() and p_start_path.is_file():
         try:
             content = p_start_path.read_text(encoding="utf-8", errors="ignore")
             p_info = parse_parodus_start_log(content)
@@ -1186,14 +1272,63 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                     f"[InfoExtractor] Found {len(reboots)} reboots "
                     f"from {p_start_path}"
                 )
-                reboots.sort(key=lambda r: r["timestamp"])
-                _write_reboots_cache(cache_path, reboots)
-                return reboots
         except Exception as e:
             logger.warning(f"[InfoExtractor] Error parsing {p_start_path}: {e}")
 
-    logger.info(f"[InfoExtractor] No reboot data found in {project_dir}")
-    # Cache the empty result too so we don't re-parse on every call
+    # --- Cross-reference with Consolelog.txt for soft reboot detection ---
+    soft_reboot_timestamps: List[str] = []
+    if console_path.exists() and console_path.is_file():
+        try:
+            console_content = console_path.read_text(encoding="utf-8", errors="ignore")
+            soft_reboot_timestamps = parse_consolelog_for_soft_reboots(console_content)
+        except Exception as e:
+            logger.warning(f"[InfoExtractor] Error parsing {console_path}: {e}")
+
+    # Mark reboot types based on soft reboot timestamp correlation
+    # Tolerance: ±30 minutes to handle time drift
+    from datetime import datetime, timedelta
+    
+    SOFT_REBOOT_TOLERANCE = timedelta(minutes=30)
+    
+    for reboot in reboots:
+        reboot_type = "hard"  # default
+        
+        try:
+            reboot_dt = datetime.fromisoformat(reboot["timestamp"])
+            
+            # Check if any soft reboot timestamp is within tolerance
+            for soft_ts in soft_reboot_timestamps:
+                try:
+                    soft_dt = datetime.fromisoformat(soft_ts)
+                    time_diff = abs(reboot_dt - soft_dt)
+                    
+                    if time_diff <= SOFT_REBOOT_TOLERANCE:
+                        reboot_type = "soft"
+                        logger.debug(
+                            f"[InfoExtractor] Matched soft reboot: {reboot['timestamp']} "
+                            f"<-> {soft_ts} (delta: {time_diff.total_seconds():.0f}s)"
+                        )
+                        break
+                except (ValueError, TypeError):
+                    continue
+        except (ValueError, TypeError):
+            # If timestamp parsing fails, default to hard
+            pass
+        
+        reboot["reboot_type"] = reboot_type
+
+    if reboots:
+        reboots.sort(key=lambda r: r["timestamp"])
+        soft_count = sum(1 for r in reboots if r.get("reboot_type") == "soft")
+        hard_count = len(reboots) - soft_count
+        logger.info(
+            f"[InfoExtractor] Classified {len(reboots)} reboots: "
+            f"{soft_count} soft, {hard_count} hard"
+        )
+    else:
+        logger.info(f"[InfoExtractor] No reboot data found in {project_dir}")
+    
+    # Cache the result (empty or not)
     _write_reboots_cache(cache_path, reboots)
     return reboots
 
@@ -1202,10 +1337,14 @@ def _write_reboots_cache(
     cache_path: Path,
     reboots: List[Dict[str, str]],
 ) -> None:
-    """Write reboots list to the JSON cache file."""
+    """Write reboots list to the JSON cache file with version."""
     try:
+        cache_data = {
+            "version": REBOOTS_CACHE_VERSION,
+            "reboots": reboots,
+        }
         cache_path.write_text(
-            json.dumps(reboots, indent=2),
+            json.dumps(cache_data, indent=2),
             encoding="utf-8",
         )
         logger.debug(f"[InfoExtractor] Wrote reboots cache to {cache_path}")

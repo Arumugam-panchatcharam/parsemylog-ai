@@ -22,6 +22,7 @@ type SortKey = "serial" | "model" | "reboot_count" | "memory_usage_pct_peak" | "
 /* ---------------------------------------------------------------- Helpers */
 
 const STATUS_CFG: Record<string, { color: string; bg: string; darkBg: string; border: string; darkBorder: string; label: string; icon: React.ElementType }> = {
+  SOFT_REBOOT: { color: "#3b82f6", bg: "bg-blue-100",   darkBg: "dark:bg-blue-900/30",   border: "border-blue-200",   darkBorder: "dark:border-blue-800",   label: "SOFT REBOOT", icon: RestartAltIcon },
   REBOOT:  { color: "#d93025", bg: "bg-red-100",    darkBg: "dark:bg-red-900/30",    border: "border-red-200",    darkBorder: "dark:border-red-800",    label: "REBOOT",  icon: RestartAltIcon },
   LOW_MEM: { color: "#d93025", bg: "bg-red-100",    darkBg: "dark:bg-red-900/30",    border: "border-red-200",    darkBorder: "dark:border-red-800",    label: "LOW MEM", icon: ErrorIcon },
   MEMLEAK: { color: "#e8710a", bg: "bg-orange-100", darkBg: "dark:bg-orange-900/30", border: "border-orange-200", darkBorder: "dark:border-orange-800", label: "MEMLEAK", icon: WarningAmberIcon },
@@ -130,38 +131,114 @@ export default function TelemetryOverviewTab() {
   }, [cpeChartData]);
 
   const rebootShapes = useMemo(() => {
-    const events = (cpeChartData?.reboot_timeline?.events ?? []) as Array<{ time: string }>;
-    return events.map((evt) => ({
-      type: "line" as const,
-      xref: "x" as const,
-      yref: "paper" as const,
-      x0: evt.time,
-      x1: evt.time,
-      y0: 0,
-      y1: 1,
-      line: { color: "#d93025", width: 1.5, dash: "dot" as const },
-    }));
+    const allEvents = (cpeChartData?.reboot_timeline?.all_events ?? []) as Array<{ 
+      time: string; 
+      source?: string; 
+      label?: string;
+      reboot_type?: "soft" | "hard";
+    }>;
+    
+    return allEvents.map((evt) => {
+      const isBootTime = evt.source === "boottime";
+      const isSoft = evt.reboot_type === "soft";
+      const isHard = evt.reboot_type === "hard";
+      
+      // Determine color: use reboot_type if available, otherwise use source-based color
+      let lineColor = isBootTime ? "#1a73e8" : "#d93025"; // Default: blue for BootTime, red for Telemetry
+      if (isSoft) lineColor = "#3b82f6"; // Soft reboot = blue
+      else if (isHard) lineColor = "#d93025"; // Hard reboot = red
+      
+      return {
+        type: "line" as const,
+        xref: "x" as const,
+        yref: "paper" as const,
+        x0: evt.time,
+        x1: evt.time,
+        y0: 0,
+        y1: 1,
+        line: { 
+          color: lineColor,
+          width: isBootTime ? 2 : 1.5, 
+          dash: isBootTime ? "solid" : "dot" as const 
+        },
+      };
+    });
   }, [cpeChartData]);
 
   const rebootAnnotations = useMemo(() => {
-    const events = (cpeChartData?.reboot_timeline?.events ?? []) as Array<{ time: string }>;
-    return events.map((evt) => ({
-      x: evt.time,
-      y: 1,
-      xref: "x" as const,
-      yref: "paper" as const,
-      text: "Reboot",
-      showarrow: false,
-      font: { size: 8, color: "#d93025" },
-      yanchor: "bottom" as const,
-    }));
+    const allEvents = (cpeChartData?.reboot_timeline?.all_events ?? []) as Array<{ 
+      time: string; 
+      source?: string; 
+      label?: string;
+      reason?: string;
+      reboot_type?: "soft" | "hard";
+    }>;
+    
+    return allEvents.map((evt) => {
+      const isBootTime = evt.source === "boottime";
+      const sourceLabel = evt.label || (isBootTime ? "B" : "TR");
+      const isSoft = evt.reboot_type === "soft";
+      const isHard = evt.reboot_type === "hard";
+      
+      // Show both source and type: "B-S", "TR-H", etc.
+      const typeLabel = isSoft ? "S" : isHard ? "H" : "";
+      const fullLabel = typeLabel ? `${sourceLabel}-${typeLabel}` : sourceLabel;
+      
+      // Determine color based on reboot_type
+      let fontColor = isBootTime ? "#1a73e8" : "#d93025";
+      if (isSoft) fontColor = "#3b82f6";
+      else if (isHard) fontColor = "#d93025";
+      
+      return {
+        x: evt.time,
+        y: 1,
+        xref: "x" as const,
+        yref: "paper" as const,
+        text: fullLabel,  // Only show the source-type label, not the reason
+        showarrow: false,
+        font: { 
+          size: 8, 
+          color: fontColor
+        },
+        yanchor: "bottom" as const,
+      };
+    });
+  }, [cpeChartData]);
+
+  const rebootHoverTrace = useMemo(() => {
+    const allEvents = (cpeChartData?.reboot_timeline?.all_events ?? []) as Array<{
+      time: string;
+      source?: string;
+      reason?: string;
+      reboot_type?: "soft" | "hard";
+    }>;
+    
+    return {
+      type: "scatter" as const,
+      mode: "markers" as const,
+      x: allEvents.map(e => e.time),
+      y: allEvents.map(() => 0),
+      marker: { size: 10, opacity: 0 },
+      hovertemplate: allEvents.map(e => {
+        const isBootTime = e.source === "boottime";
+        const sourceLabel = isBootTime ? "BootTime" : "Telemetry Recovery";
+        const typeLabel = e.reboot_type === "soft" ? "Soft Reboot" : 
+                         e.reboot_type === "hard" ? "Hard Reboot" : "Reboot";
+        const reasonText = e.reason && e.reason !== "" ? 
+                          `<br><b>Reason:</b> ${e.reason}` : "";
+        
+        return `<b>${sourceLabel}</b> (${typeLabel})<br><b>Time:</b> %{x}${reasonText}<extra></extra>`;
+      }),
+      showlegend: false,
+      name: "Reboot Events",
+    };
   }, [cpeChartData]);
 
   const rebootXRange = useMemo<[string, string] | undefined>(() => {
-    const events = (cpeChartData?.reboot_timeline?.events ?? []) as Array<{ time: string }>;
-    if (events.length !== 1) return undefined;
+    const allEvents = (cpeChartData?.reboot_timeline?.all_events ?? []) as Array<{ time: string }>;
+    if (allEvents.length !== 1) return undefined;
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-    const ts = new Date(events[0].time).getTime();
+    const ts = new Date(allEvents[0].time).getTime();
     if (isNaN(ts)) return undefined;
     const pad = (n: number) => String(n).padStart(2, "0");
     const toLocal = (ms: number) => {
@@ -354,7 +431,23 @@ export default function TelemetryOverviewTab() {
                       <td className="px-2 py-1.5 text-muted-foreground">{cpe.model}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums font-medium">
                         {cpe.reboot_count > 0 ? (
-                          <span className="text-red-600 dark:text-red-400">{cpe.reboot_count}</span>
+                          <div className="inline-flex flex-col items-end gap-0.5">
+                            <span className="text-red-600 dark:text-red-400">{cpe.reboot_count}</span>
+                            {cpe.reboot_types && (cpe.reboot_types.soft > 0 || cpe.reboot_types.hard > 0) && (
+                              <div className="flex gap-1 text-[9px]">
+                                {cpe.reboot_types.soft > 0 && (
+                                  <span className="px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                                    {cpe.reboot_types.soft}S
+                                  </span>
+                                )}
+                                {cpe.reboot_types.hard > 0 && (
+                                  <span className="px-1 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+                                    {cpe.reboot_types.hard}H
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-muted-foreground">0</span>
                         )}
@@ -409,6 +502,32 @@ export default function TelemetryOverviewTab() {
                 <CloseIcon style={{ fontSize: 14 }} />
               </button>
             </div>
+            {/* Reboot Legend */}
+            {(rebootShapes.length > 0 || (cpeChartData?.reboot_timeline?.all_events ?? []).length > 0) && (
+              <div className="px-3 py-1.5 border-b border-border bg-muted/10">
+                <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+                  <span className="font-semibold">Reboot Markers:</span>
+                  <div className="flex items-center gap-1">
+                    <div className="w-5 h-0.5 bg-[#1a73e8]"></div>
+                    <span><span className="font-mono font-semibold text-[#1a73e8]">B</span> = BootTime</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-5 h-0.5 border-t-2 border-dashed border-[#d93025]"></div>
+                    <span><span className="font-mono font-semibold text-[#d93025]">TR</span> = Telemetry</span>
+                  </div>
+                  <div className="border-l border-border pl-4 ml-2 flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                      <span className="font-mono font-semibold text-[#3b82f6]">S</span>
+                      <span>= Soft (software)</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="font-mono font-semibold text-[#d93025]">H</span>
+                      <span>= Hard (power/crash)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="px-2 py-1 overflow-auto">
               {cpeChartLoading && (
                 <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
@@ -418,14 +537,17 @@ export default function TelemetryOverviewTab() {
               )}
               {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
                 <Plot
-                  data={memoryTraces.map((t) => ({
-                    type: "scatter" as const,
-                    mode: "lines" as const,
-                    x: t.times,
-                    y: t.values,
-                    name: `${t.label} (${t.unit})`,
-                    line: { color: t.style.color, width: 2, dash: t.style.dash },
-                  }))}
+                  data={[
+                    ...memoryTraces.map((t) => ({
+                      type: "scatter" as const,
+                      mode: "lines" as const,
+                      x: t.times,
+                      y: t.values,
+                      name: `${t.label} (${t.unit})`,
+                      line: { color: t.style.color, width: 2, dash: t.style.dash },
+                    })),
+                    rebootHoverTrace, // Add hover trace for reboot events
+                  ]}
                   layout={{
                     height: 340,
                     margin: { l: 50, r: 20, t: 16, b: 40 },

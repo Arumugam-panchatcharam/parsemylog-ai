@@ -22,6 +22,19 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 
 /* ================================================================ Types */
+interface RebootEvent {
+  timestamp: string;
+  reason: string;
+  reboot_type?: "soft" | "hard";
+}
+
+interface RebootSummary {
+  total: number;
+  reasons: Record<string, number>;
+  types?: { soft: number; hard: number };
+  events?: RebootEvent[];
+}
+
 interface CPESummary {
   serial: string;
   mac: string;
@@ -31,7 +44,7 @@ interface CPESummary {
   device_info: Record<string, string>;
   key_metrics: Record<string, unknown>;
   summary: { total_reports?: number; parsed_reports?: number; time_range?: Record<string, string> };
-  reboot_summary: { total: number; reasons: Record<string, number>; events?: Array<{ timestamp: string; reason: string }> };
+  reboot_summary: RebootSummary;
   pattern_summary: Record<string, { label: string; indexed: boolean; total_loglines: number; unique_patterns: number }>;
   log_stats: { file_count: number; total_size_mb: number };
   status: "parsed" | "not_parsed" | "failed";
@@ -414,69 +427,204 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
   });
   const reasons = Array.from(allReasons).sort();
 
+  // Calculate soft/hard breakdown for stacked bar chart
+  const softCounts = cpes.map((c) => c.reboot_summary.types?.soft || 0);
+  const hardCounts = cpes.map((c) => c.reboot_summary.types?.hard || 0);
+  const hasSoftRebootData = softCounts.some((c) => c > 0);
+
   return (
     <CollapsibleCard
       icon={<RestartAltIcon style={{ fontSize: 20 }} className="text-primary" />}
       title="Reboot Comparison"
     >
-      <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Total reboots bar chart */}
-        <div>
-          <Plot
-            data={[
-              {
-                type: "bar",
-                x: labels,
-                y: totals,
-                marker: { color: colors },
-                text: totals.map(String),
-                textposition: "auto" as const,
-              },
-            ]}
-            layout={{
-              title: { text: "Total Reboots per CPE" },
-              height: 380,
-              margin: { t: 40, b: 120, l: 50, r: 20 },
-              xaxis: { tickangle: -45, automargin: true },
-              yaxis: { title: { text: "Reboots" } },
-              paper_bgcolor: "transparent",
-              plot_bgcolor: "transparent",
-              font: { color: "#888" },
-            }}
-            config={{ displayModeBar: false }}
-            style={{ width: "100%" }}
-          />
+      <div className="p-4 space-y-4">
+        {/* Reboot type legend (only show if soft reboot data exists) */}
+        {hasSoftRebootData && (
+          <div className="flex items-center gap-4 text-xs bg-muted/30 rounded-lg px-3 py-2">
+            <span className="text-muted-foreground font-medium">Reboot Types:</span>
+            <div className="flex items-center gap-1.5">
+              <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium">SOFT</span>
+              <span className="text-muted-foreground">Software-initiated reboot (graceful shutdown)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium">HARD</span>
+              <span className="text-muted-foreground">Hardware/Power reboot (unexpected)</span>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Stacked bar chart: soft vs hard reboots */}
+          <div>
+            <Plot
+              data={
+                hasSoftRebootData
+                  ? [
+                      {
+                        type: "bar",
+                        name: "Soft Reboots",
+                        x: labels,
+                        y: softCounts,
+                        marker: { color: "#3b82f6" },
+                        text: softCounts.map((c) => (c > 0 ? String(c) : "")),
+                        textposition: "inside" as const,
+                      },
+                      {
+                        type: "bar",
+                        name: "Hard Reboots",
+                        x: labels,
+                        y: hardCounts,
+                        marker: { color: "#ef4444" },
+                        text: hardCounts.map((c) => (c > 0 ? String(c) : "")),
+                        textposition: "inside" as const,
+                      },
+                    ]
+                  : [
+                      {
+                        type: "bar",
+                        x: labels,
+                        y: totals,
+                        marker: { color: colors },
+                        text: totals.map(String),
+                        textposition: "auto" as const,
+                      },
+                    ]
+              }
+              layout={{
+                title: { text: hasSoftRebootData ? "Reboots by Type per CPE" : "Total Reboots per CPE" },
+                height: 380,
+                margin: { t: 40, b: 120, l: 50, r: 20 },
+                xaxis: { tickangle: -45, automargin: true },
+                yaxis: { title: { text: "Reboots" } },
+                barmode: hasSoftRebootData ? ("stack" as const) : undefined,
+                showlegend: hasSoftRebootData,
+                legend: { orientation: "h" as const, y: -0.3 },
+                paper_bgcolor: "transparent",
+                plot_bgcolor: "transparent",
+                font: { color: "#888" },
+              }}
+              config={{ displayModeBar: false }}
+              style={{ width: "100%" }}
+            />
+          </div>
+
+          {/* Reasons breakdown table with reboot type badges */}
+          {reasons.length > 0 && (
+            <div className="overflow-x-auto">
+              <p className="text-xs font-medium text-muted-foreground mb-2">Reboot Reasons Breakdown</p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/20">
+                    <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Reason</th>
+                    {cpes.map((c) => (
+                      <th key={c.serial} className="text-center px-3 py-1.5 font-medium">{cpeLabel(c)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {reasons.map((reason) => (
+                    <tr key={reason} className="border-b border-border/50">
+                      <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[200px]" title={reason}>
+                        {reason}
+                      </td>
+                      {cpes.map((c) => {
+                        const count = c.reboot_summary.reasons?.[reason] || 0;
+                        
+                        // Count soft/hard for this reason
+                        const eventsForReason = (c.reboot_summary.events || []).filter(
+                          (e) => e.reason === reason
+                        );
+                        const softForReason = eventsForReason.filter((e) => e.reboot_type === "soft").length;
+                        const hardForReason = eventsForReason.filter((e) => e.reboot_type === "hard").length;
+                        
+                        return (
+                          <td key={c.serial} className="px-3 py-1.5 text-center">
+                            {count > 0 ? (
+                              <div className="inline-flex flex-col items-center gap-0.5">
+                                <span className="font-semibold">{count}</span>
+                                {hasSoftRebootData && (softForReason > 0 || hardForReason > 0) && (
+                                  <div className="flex gap-1 text-[10px]">
+                                    {softForReason > 0 && (
+                                      <span className="px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                                        {softForReason}S
+                                      </span>
+                                    )}
+                                    {hardForReason > 0 && (
+                                      <span className="px-1 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+                                        {hardForReason}H
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
-        {/* Reasons breakdown table */}
-        {reasons.length > 0 && (
+        {/* Reboot type summary table (only if soft reboot data exists) */}
+        {hasSoftRebootData && (
           <div className="overflow-x-auto">
-            <p className="text-xs font-medium text-muted-foreground mb-2">Reboot Reasons Breakdown</p>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Reboot Type Summary</p>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/20">
-                  <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Reason</th>
+                  <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Type</th>
                   {cpes.map((c) => (
                     <th key={c.serial} className="text-center px-3 py-1.5 font-medium">{cpeLabel(c)}</th>
                   ))}
+                  <th className="text-center px-3 py-1.5 font-medium text-muted-foreground">Total</th>
                 </tr>
               </thead>
               <tbody>
-                {reasons.map((reason) => (
-                  <tr key={reason} className="border-b border-border/50">
-                    <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[200px]" title={reason}>
-                      {reason}
+                <tr className="border-b border-border/50">
+                  <td className="px-3 py-1.5 flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium">SOFT</span>
+                    <span className="text-muted-foreground text-xs">Software</span>
+                  </td>
+                  {cpes.map((c) => (
+                    <td key={c.serial} className="px-3 py-1.5 text-center font-semibold text-blue-700 dark:text-blue-300">
+                      {c.reboot_summary.types?.soft || 0}
                     </td>
-                    {cpes.map((c) => {
-                      const count = c.reboot_summary.reasons?.[reason] || 0;
-                      return (
-                        <td key={c.serial} className={`px-3 py-1.5 text-center ${count > 0 ? "font-semibold" : "text-muted-foreground"}`}>
-                          {count || "-"}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                  ))}
+                  <td className="px-3 py-1.5 text-center font-bold text-blue-700 dark:text-blue-300">
+                    {softCounts.reduce((a, b) => a + b, 0)}
+                  </td>
+                </tr>
+                <tr className="border-b border-border/50">
+                  <td className="px-3 py-1.5 flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium">HARD</span>
+                    <span className="text-muted-foreground text-xs">Hardware/Power</span>
+                  </td>
+                  {cpes.map((c) => (
+                    <td key={c.serial} className="px-3 py-1.5 text-center font-semibold text-red-700 dark:text-red-300">
+                      {c.reboot_summary.types?.hard || 0}
+                    </td>
+                  ))}
+                  <td className="px-3 py-1.5 text-center font-bold text-red-700 dark:text-red-300">
+                    {hardCounts.reduce((a, b) => a + b, 0)}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-3 py-1.5 font-medium text-muted-foreground">Total</td>
+                  {cpes.map((c) => (
+                    <td key={c.serial} className="px-3 py-1.5 text-center font-bold">
+                      {c.reboot_summary.total}
+                    </td>
+                  ))}
+                  <td className="px-3 py-1.5 text-center font-bold">
+                    {totals.reduce((a, b) => a + b, 0)}
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
