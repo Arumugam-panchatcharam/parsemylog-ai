@@ -14,6 +14,9 @@ import ErrorIcon from "@mui/icons-material/Error";
 import CloseIcon from "@mui/icons-material/Close";
 import MemoryIcon from "@mui/icons-material/Memory";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import FlashOffIcon from "@mui/icons-material/FlashOff";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 
 /* ---------------------------------------------------------------- Types */
 
@@ -85,6 +88,7 @@ export default function TelemetryOverviewTab() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selectedCpe, setSelectedCpe] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["telemetry-cross-cpe-overview", projectId],
@@ -159,7 +163,7 @@ export default function TelemetryOverviewTab() {
         line: { 
           color: lineColor,
           width: isBootTime ? 2 : 1.5, 
-          dash: isBootTime ? "solid" : "dot" as const 
+          dash: (isBootTime ? "solid" : "dot") as "solid" | "dot" | "dash" | "longdash" | "dashdot" | "longdashdot"
         },
       };
     });
@@ -371,6 +375,161 @@ export default function TelemetryOverviewTab() {
           bgClass="bg-red-50 dark:bg-red-900/20"
         />
       </div>
+
+      {/* Reboot Correlation Section */}
+      {data.reboot_correlation && data.reboot_correlation.total_clusters > 0 && (
+        <div className="flex justify-center">
+          <div className="bg-card border border-border rounded-xl overflow-hidden inline-block min-w-[600px] max-w-4xl">
+            <div className="px-3 py-1 border-b border-border bg-muted/30">
+              <div className="flex items-center justify-between">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Reboot Correlation Analysis
+                </h3>
+                <div className="flex items-center gap-3">
+                  <div className="text-[10px] text-muted-foreground">
+                    <span className="font-semibold">{data.reboot_correlation.total_clusters}</span> cluster{data.reboot_correlation.total_clusters !== 1 ? 's' : ''}
+                  </div>
+                  {data.reboot_correlation.likely_power_outages > 0 && (
+                    <div className="flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-semibold">
+                      <FlashOffIcon style={{ fontSize: 12 }} />
+                      {data.reboot_correlation.likely_power_outages} Power Outage{data.reboot_correlation.likely_power_outages !== 1 ? 's' : ''}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-auto" style={{ maxHeight: 'min(500px, calc(100vh - 400px))' }}>
+              <table className="text-[11px] border-collapse w-full">
+                <thead className="sticky top-0 z-10 bg-card">
+                  <tr className="border-b border-border bg-muted/20">
+                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground w-8"></th>
+                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground whitespace-nowrap">Time</th>
+                    <th className="text-center px-2 py-1 font-semibold text-muted-foreground whitespace-nowrap">CPEs</th>
+                    <th className="text-center px-2 py-1 font-semibold text-muted-foreground whitespace-nowrap">Hard %</th>
+                    <th className="text-center px-2 py-1 font-semibold text-muted-foreground whitespace-nowrap">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.reboot_correlation.clusters.map((cluster) => {
+                    const isExpanded = expandedClusters.has(cluster.cluster_id);
+                    const startTime = new Date(cluster.window_start);
+                    const formatTime = (d: Date) => 
+                      `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+                    
+                    // Dynamic grid columns based on number of events
+                    const eventCount = cluster.events.length;
+                    const gridCols = eventCount === 1 
+                      ? 'grid-cols-1' 
+                      : eventCount === 2 
+                      ? 'grid-cols-2' 
+                      : eventCount <= 4 
+                      ? 'grid-cols-2 lg:grid-cols-2'
+                      : eventCount <= 6
+                      ? 'grid-cols-2 lg:grid-cols-3'
+                      : 'grid-cols-2 lg:grid-cols-3 xl:grid-cols-4';
+
+                    return (
+                      <>
+                        <tr
+                          key={cluster.cluster_id}
+                          className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${
+                            cluster.likely_power_outage 
+                              ? "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800"
+                              : ""
+                          }`}
+                          onClick={() => {
+                            setExpandedClusters(prev => {
+                              const next = new Set(prev);
+                              if (next.has(cluster.cluster_id)) {
+                                next.delete(cluster.cluster_id);
+                              } else {
+                                next.add(cluster.cluster_id);
+                              }
+                              return next;
+                            });
+                          }}
+                        >
+                          <td className="px-2 py-1.5 text-muted-foreground">
+                            {isExpanded ? <ExpandLessIcon style={{ fontSize: 14 }} /> : <ExpandMoreIcon style={{ fontSize: 14 }} />}
+                          </td>
+                          <td className="px-2 py-1.5 font-medium text-foreground whitespace-nowrap">
+                            {formatTime(startTime)}
+                            <span className="text-[9px] text-muted-foreground ml-1">
+                              ({cluster.time_span_minutes.toFixed(1)}m)
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-bold tabular-nums">
+                              {cluster.cpe_count}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center tabular-nums">
+                            <span className={`font-medium ${
+                              cluster.hard_reboot_percentage > 50 
+                                ? "text-red-600 dark:text-red-400 font-bold" 
+                                : "text-blue-600 dark:text-blue-400"
+                            }`}>
+                              {cluster.hard_reboot_percentage.toFixed(0)}%
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            {cluster.likely_power_outage ? (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-[9px] font-bold">
+                                <FlashOffIcon style={{ fontSize: 10 }} />
+                                OUTAGE
+                              </span>
+                            ) : (
+                              <span className="text-[9px] text-muted-foreground">Normal</span>
+                            )}
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="border-b bg-muted/5">
+                            <td colSpan={5} className="px-4 py-3">
+                              <div className="text-[10px]">
+                                <div className="font-semibold text-muted-foreground mb-2">
+                                  Events in cluster ({cluster.events.length} CPE{cluster.events.length !== 1 ? 's' : ''}):
+                                </div>
+                                <div className={`grid ${gridCols} gap-3 max-h-[400px] overflow-y-auto`}>
+                                  {cluster.events.map((event, idx) => (
+                                    <div
+                                      key={idx}
+                                      className="flex flex-col gap-1 px-3 py-2 rounded bg-card border border-border"
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-mono text-foreground font-semibold text-[11px]">
+                                          {event.serial}
+                                        </span>
+                                        {event.reboot_type && (
+                                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold whitespace-nowrap ${
+                                            event.reboot_type === "hard"
+                                              ? "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+                                              : "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                                          }`}>
+                                            {event.reboot_type.toUpperCase()}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-muted-foreground text-[10px]">
+                                        {new Date(event.timestamp).toLocaleString()}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* CPE Detail Table */}
       <div className="flex justify-center">

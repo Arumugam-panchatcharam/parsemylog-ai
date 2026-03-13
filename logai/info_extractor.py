@@ -1147,12 +1147,16 @@ def _reboots_cache_is_fresh(
     # Check cache version
     try:
         cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
+        # Handle old cache format (plain list) vs new format (dict with version)
+        if isinstance(cache_data, list):
+            logger.info(f"[InfoExtractor] Old cache format detected (plain list), invalidating")
+            return False
         cache_version = cache_data.get("version", 1)
         if cache_version != REBOOTS_CACHE_VERSION:
             logger.info(f"[InfoExtractor] Cache version mismatch (cached: {cache_version}, expected: {REBOOTS_CACHE_VERSION}), invalidating")
             return False
     except Exception as e:
-        logger.warning(f"[InfoExtractor] Error reading cache version: {e}")
+        logger.warning(f"[InfoExtractor] Error reading cache: {e}, invalidating")
         return False
     
     # Check mtime

@@ -53,6 +53,13 @@ interface RebootTimeline {
     new_uptime: number;
     reboot_type?: "soft" | "hard";
   }>;
+  all_events?: Array<{ 
+    time: string; 
+    source?: string; 
+    label?: string;
+    reason?: string;
+    reboot_type?: "soft" | "hard";
+  }>;
 }
 interface AvailableFieldInfo {
   key: string;
@@ -458,7 +465,7 @@ export default function TelemetryPage() {
                       line: { 
                         color: lineColor, 
                         width: isBootTime ? 2 : 1.5, 
-                        dash: isBootTime ? "solid" : "dot" as const 
+                        dash: (isBootTime ? "solid" : "dot") as "solid" | "dot" | "dash" | "longdash" | "dashdot" | "longdashdot"
                       },
                     };
                   });

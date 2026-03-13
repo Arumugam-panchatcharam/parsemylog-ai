@@ -823,6 +823,149 @@ def _build_key_metrics_data(configured_fields, summary):
 # Cross-CPE Overview
 # ---------------------------------------------------------------------------
 
+def _analyze_reboot_correlation(cpe_results, window_minutes=10, min_cpes=2):
+    """
+    Analyze reboot events across CPEs to identify potential power outages.
+    
+    Args:
+        cpe_results: List of CPE entries with reboot_events
+        window_minutes: Time window in minutes for clustering (default: 10)
+        min_cpes: Minimum CPEs to form a cluster (default: 2)
+    
+    Returns:
+        Dict with clusters, statistics, and power outage indicators
+    """
+    from datetime import datetime, timedelta
+    
+    # Collect all reboot events with CPE serial
+    all_events = []
+    for cpe in cpe_results:
+        serial = cpe.get("serial", "unknown")
+        for event in cpe.get("reboot_events", []):
+            try:
+                timestamp_str = event.get("time")
+                if not timestamp_str:
+                    continue
+                
+                # Parse timestamp
+                ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                
+                all_events.append({
+                    "serial": serial,
+                    "timestamp": timestamp_str,
+                    "timestamp_dt": ts,
+                    "reboot_type": event.get("reboot_type"),
+                    "reason": event.get("reason"),
+                })
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"[RebootCorrelation] Failed to parse timestamp {timestamp_str}: {e}")
+                continue
+    
+    # Sort events by timestamp
+    all_events.sort(key=lambda x: x["timestamp_dt"])
+    
+    if len(all_events) < min_cpes:
+        return {
+            "clusters": [],
+            "total_clusters": 0,
+            "likely_power_outages": 0,
+            "window_minutes": window_minutes,
+        }
+    
+    # Find clusters using sliding window approach
+    clusters = []
+    processed_indices = set()
+    
+    for i, event in enumerate(all_events):
+        if i in processed_indices:
+            continue
+        
+        window_end = event["timestamp_dt"] + timedelta(minutes=window_minutes)
+        cluster_events = [event]
+        cluster_serials = {event["serial"]}
+        cluster_indices = {i}
+        
+        # Find all events within the window from different CPEs
+        for j in range(i + 1, len(all_events)):
+            if j in processed_indices:
+                continue
+            
+            other_event = all_events[j]
+            
+            # Stop if we're past the window
+            if other_event["timestamp_dt"] > window_end:
+                break
+            
+            # Only include events from different CPEs
+            if other_event["serial"] not in cluster_serials:
+                cluster_events.append(other_event)
+                cluster_serials.add(other_event["serial"])
+                cluster_indices.add(j)
+        
+        # Create cluster if we have enough CPEs
+        if len(cluster_serials) >= min_cpes:
+            # Calculate cluster statistics
+            timestamps = [e["timestamp_dt"] for e in cluster_events]
+            window_start = min(timestamps)
+            window_end_actual = max(timestamps)
+            
+            # Count reboot types
+            hard_count = sum(1 for e in cluster_events if e.get("reboot_type") == "hard")
+            soft_count = sum(1 for e in cluster_events if e.get("reboot_type") == "soft")
+            total_typed = hard_count + soft_count
+            hard_percentage = (hard_count / total_typed * 100) if total_typed > 0 else 0
+            
+            # Determine if likely power outage
+            time_span_minutes = (window_end_actual - window_start).total_seconds() / 60
+            likely_power_outage = (
+                hard_percentage > 50 and
+                len(cluster_serials) >= 2 and
+                time_span_minutes <= window_minutes
+            )
+            
+            # Confidence level
+            if len(cluster_serials) >= 3:
+                confidence = "high"
+            elif len(cluster_serials) == 2:
+                confidence = "medium"
+            else:
+                confidence = "low"
+            
+            cluster = {
+                "cluster_id": window_start.isoformat(),
+                "window_start": window_start.isoformat(),
+                "window_end": window_end_actual.isoformat(),
+                "affected_cpes": sorted(list(cluster_serials)),
+                "cpe_count": len(cluster_serials),
+                "events": [
+                    {
+                        "serial": e["serial"],
+                        "timestamp": e["timestamp"],
+                        "reboot_type": e.get("reboot_type"),
+                        "reason": e.get("reason"),
+                    }
+                    for e in cluster_events
+                ],
+                "likely_power_outage": likely_power_outage,
+                "confidence": confidence,
+                "hard_reboot_percentage": round(hard_percentage, 1),
+                "time_span_minutes": round(time_span_minutes, 2),
+            }
+            
+            clusters.append(cluster)
+            processed_indices.update(cluster_indices)
+    
+    # Calculate summary statistics
+    likely_power_outages = sum(1 for c in clusters if c["likely_power_outage"])
+    
+    return {
+        "clusters": clusters,
+        "total_clusters": len(clusters),
+        "likely_power_outages": likely_power_outages,
+        "window_minutes": window_minutes,
+    }
+
+
 @telemetry_bp.route("/<project_id>/telemetry/cross-cpe-overview", methods=["GET"])
 @jwt_required()
 def cross_cpe_overview(project_id):
@@ -831,13 +974,22 @@ def cross_cpe_overview(project_id):
 
     Query params:
         force (optional): Set to "1" or "true" to force re-parse all telemetry data
+        correlation_window (optional): Time window in minutes for reboot clustering (default: 10)
+        min_cpes (optional): Minimum CPEs to form a cluster (default: 2)
 
     Returns:
         {
             "cpes": [ { serial, model, memory_free_min, memory_free_avg,
                          memory_total, memory_usage_pct_peak, reboot_count,
                          reboot_events, low_memory, status } ],
-            "fleet_summary": { total, with_reboots, with_low_memory, with_both }
+            "fleet_summary": { total, with_reboots, with_low_memory, with_both },
+            "reboot_correlation": {
+                "clusters": [ { cluster_id, window_start, window_end, affected_cpes,
+                               cpe_count, events, likely_power_outage, confidence } ],
+                "total_clusters": int,
+                "likely_power_outages": int,
+                "window_minutes": int
+            }
         }
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1025,6 +1177,15 @@ def cross_cpe_overview(project_id):
         if c.get("reboot_count", 0) > 0 and c.get("low_memory")
     )
 
+    # Reboot correlation analysis
+    correlation_window = int(request.args.get("correlation_window", "10"))
+    min_cpes_for_cluster = int(request.args.get("min_cpes", "2"))
+    reboot_correlation = _analyze_reboot_correlation(
+        cpe_results,
+        window_minutes=correlation_window,
+        min_cpes=min_cpes_for_cluster
+    )
+
     return jsonify({
         "cpes": cpe_results,
         "fleet_summary": {
@@ -1033,4 +1194,5 @@ def cross_cpe_overview(project_id):
             "with_low_memory": with_low_memory,
             "with_both": with_both,
         },
+        "reboot_correlation": reboot_correlation,
     }), 200
