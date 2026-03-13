@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 import json
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func
 
 # Import the db instance from user_db_mngr
 from api.user_db_mngr import db
@@ -22,8 +23,8 @@ class AnomalyFeedback(db.Model):
     __tablename__ = "anomaly_feedback"
     
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    project_id = db.Column(db.String, db.ForeignKey('projects.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    project_id = db.Column(db.String, db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False)
     cpe_id = db.Column(db.String, nullable=False)
     domain = db.Column(db.String, nullable=False)
     template = db.Column(db.Text, nullable=False)
