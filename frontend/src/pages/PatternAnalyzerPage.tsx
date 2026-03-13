@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, memo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { patternAnalyzerApi, patternGovernanceApi, natcoApi, projectsApi } from "@/api/endpoints";
@@ -29,6 +29,9 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 import CloseIcon from "@mui/icons-material/Close";
 import PatternOverviewTab from "@/pages/PatternOverviewTab";
 
+// Memoized Plot component to prevent unnecessary re-renders
+const MemoizedPlot = memo(Plot);
+
 /* ================================================================ Types */
 interface ScanResult {
   traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
@@ -42,10 +45,15 @@ interface RebootEntry {
 
 /* ================================================================ Constants */
 const BUCKET_OPTIONS = [
-  { value: 1, label: "1 min" },
+  { value: 0, label: "Auto" },
   { value: 5, label: "5 min" },
+  { value: 10, label: "10 min" },
   { value: 15, label: "15 min" },
+  { value: 30, label: "30 min" },
   { value: 60, label: "1 hour" },
+  { value: 120, label: "2 hours" },
+  { value: 240, label: "4 hours" },
+  { value: 360, label: "6 hours" },
   { value: 1440, label: "1 day" },
 ];
 
@@ -55,6 +63,71 @@ const TRACE_COLORS = [
 ];
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
+
+/**
+ * Calculate optimal bucket size based on pattern time distribution.
+ * Returns bucket size in minutes.
+ */
+function calculateAutoBucket(scanResult: ScanResult | null): number {
+  if (!scanResult || scanResult.traces.length === 0) return 60; // default 1 hour
+  
+  // Find min and max timestamps across all traces
+  let minTime = Infinity;
+  let maxTime = -Infinity;
+  let totalPoints = 0;
+  
+  scanResult.traces.forEach((trace: any) => {
+    if (trace.times && trace.times.length > 0) {
+      totalPoints += trace.times.length;
+      trace.times.forEach((ts: string) => {
+        const ms = new Date(ts).getTime();
+        if (ms < minTime) minTime = ms;
+        if (ms > maxTime) maxTime = ms;
+      });
+    }
+  });
+  
+  if (minTime === Infinity || maxTime === -Infinity) return 60;
+  
+  const durationMs = maxTime - minTime;
+  return calculateBucketFromDuration(durationMs);
+}
+
+/**
+ * Calculate optimal bucket size based on time duration in milliseconds.
+ * Returns bucket size in minutes.
+ */
+function calculateBucketFromDuration(durationMs: number): number {
+  const durationDays = durationMs / (1000 * 60 * 60 * 24);
+  const durationHours = durationMs / (1000 * 60 * 60);
+  
+  // If distribution spans many days (>7 days), use 1 day bucket
+  if (durationDays > 7) return 1440;
+  
+  // If distribution spans multiple days (2-7 days), use 6 hour bucket
+  if (durationDays > 2) return 360;
+  
+  // If distribution spans 1-2 days, use 4 hour bucket
+  if (durationDays > 1) return 240;
+  
+  // If distribution spans 12-24 hours, use 2 hour bucket
+  if (durationHours > 12) return 120;
+  
+  // If distribution spans 6-12 hours, use 1 hour bucket
+  if (durationHours > 6) return 60;
+  
+  // If distribution spans 3-6 hours, use 30 min bucket
+  if (durationHours > 3) return 30;
+  
+  // If distribution spans 1-3 hours, use 15 min bucket
+  if (durationHours > 1) return 15;
+  
+  // If distribution spans less than 1 hour, use 10 min bucket
+  if (durationHours > 0.5) return 10;
+  
+  // For very short durations, use 5 min bucket
+  return 5;
+}
 
 /** Convert a DRAIN3 template string to a regex by replacing <*> with .* */
 function drain3ToRegex(template: string): string {
@@ -166,11 +239,14 @@ export default function PatternAnalyzerPage() {
   const [showNewDomain, setShowNewDomain] = useState(false);
 
   // Scan config
-  const [bucketMinutes, setBucketMinutes] = useState(5);
+  const [bucketMinutes, setBucketMinutes] = useState(0); // 0 = Auto
   const [filterPreNtp, setFilterPreNtp] = useState(true);
 
   // Scan results
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  
+  // Track current visible zoom range for dynamic bucket adjustment
+  const [visibleRange, setVisibleRange] = useState<{ start: string; end: string } | null>(null);
 
   // NATCO governance state
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
@@ -371,11 +447,14 @@ export default function PatternAnalyzerPage() {
   // -- Run scan mutation (two-phase: scan → fetch results) --
   const scanMutation = useMutation({
     mutationFn: async () => {
+      // Calculate effective bucket for API call
+      const effectiveBucket = bucketMinutes === 0 ? calculateAutoBucket(scanResult) : bucketMinutes;
+      
       // Phase 1: trigger scan, get lightweight metadata
       setScanStatus("Scanning log files with ripgrep...");
       const scanRes = await patternAnalyzerApi.scan(projectId!, {
         patterns: enabledPatterns,
-        bucket_minutes: bucketMinutes,
+        bucket_minutes: effectiveBucket,
         time_range: effectiveRange,
         filter_pre_ntp: filterPreNtp,
         cpe_id: cpeId,
@@ -659,25 +738,28 @@ export default function PatternAnalyzerPage() {
   };
 
   // -- Build Plotly data (time series with individual log points) --
-  // Recomputed every render so it always reflects the latest filter.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const plotData: any[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const plotShapes: any[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const plotAnnotations: any[] = [];
-  const traceNames: string[] = [];
-  let filteredMatchCount = 0;
+  // Memoized to prevent recalculation on every render
+  const { plotData, plotShapes, plotAnnotations, traceNames, filteredMatchCount, actualTimeRange } = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plotData: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plotShapes: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const plotAnnotations: any[] = [];
+    const traceNames: string[] = [];
+    let filteredMatchCount = 0;
+    let actualTimeRange: { start: string; end: string } | undefined;
 
-  if (scanResult) {
+    if (scanResult) {
     // Client-side time filter so graph updates instantly when
     // reboot selection or slider changes (without re-scanning).
     const rangeStart = effectiveRange?.start || "";
     const rangeEnd = effectiveRange?.end || "";
 
-    scanResult.traces.forEach((trace, idx) => {
+    scanResult.traces.forEach((trace: any, idx) => {
       let filteredTimes = trace.times;
       let filteredTexts = trace.texts;
+      let filteredCounts = trace.counts || trace.times.map(() => 1);
 
       if (rangeStart || rangeEnd) {
         const indices: number[] = [];
@@ -689,15 +771,27 @@ export default function PatternAnalyzerPage() {
         }
         filteredTimes = indices.map((i) => trace.times[i]);
         filteredTexts = indices.map((i) => trace.texts[i]);
+        filteredCounts = indices.map((i) => filteredCounts[i]);
       }
 
       if (filteredTimes.length === 0) return;
 
       filteredMatchCount += filteredTimes.length;
-      const label = `${trace.name} (${filteredTimes.length})`;
+      const bucketInfo = trace.bucketed 
+        ? ` [~${filteredTimes.length} buckets]` 
+        : "";
+      const label = `${trace.name} (${filteredTimes.length}${bucketInfo})`;
       traceNames.push(label);
 
       const color = TRACE_COLORS[idx % TRACE_COLORS.length];
+      
+      let markerSize: number | number[];
+      if (trace.bucketed) {
+        markerSize = filteredCounts.map((count: number) => Math.min(15, 5 + Math.log(count) * 2));
+      } else {
+        markerSize = 7;
+      }
+      
       plotData.push({
         x: filteredTimes,
         y: filteredTimes.map(() => label),
@@ -705,13 +799,18 @@ export default function PatternAnalyzerPage() {
         mode: "markers" as const,
         name: label,
         marker: {
-          size: 7,
+          size: markerSize,
           color,
           symbol: "circle",
           opacity: 0.8,
           line: { width: 0.5, color: "white" },
         },
-        text: filteredTexts,
+        text: trace.bucketed
+          ? filteredTexts.map((txt: string, i: number) => {
+              const count = filteredCounts[i];
+              return `${txt} (${count} matches in ${trace.bucket_minutes || 5}min window)`;
+            })
+          : filteredTexts,
         hovertemplate: "%{text}<extra></extra>",
       });
     });
@@ -747,7 +846,93 @@ export default function PatternAnalyzerPage() {
         bgcolor: "rgba(255,255,255,0.9)",
       });
     });
+    
+    // Calculate actual data bounds when no reboot selection to fix timeline compression
+    if (!effectiveRange && plotData.length > 0) {
+      let minTime = Infinity;
+      let maxTime = -Infinity;
+      
+      plotData.forEach((trace) => {
+        trace.x.forEach((ts: string) => {
+          const ms = new Date(ts).getTime();
+          if (ms < minTime) minTime = ms;
+          if (ms > maxTime) maxTime = ms;
+        });
+      });
+      
+      if (minTime < Infinity && maxTime > -Infinity) {
+        // Use the actual min/max timestamps WITHOUT padding
+        // Plotly handles the visual padding automatically
+        const pad = (n: number) => n.toString().padStart(2, "0");
+        const startDate = new Date(minTime);
+        const endDate = new Date(maxTime);
+        actualTimeRange = {
+          start: `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}:${pad(startDate.getSeconds())}`,
+          end: `${endDate.getFullYear()}-${pad(endDate.getMonth() + 1)}-${pad(endDate.getDate())}T${pad(endDate.getHours())}:${pad(endDate.getMinutes())}:${pad(endDate.getSeconds())}`,
+        };
+      }
+    }
   }
+
+    return { plotData, plotShapes, plotAnnotations, traceNames, filteredMatchCount, actualTimeRange };
+  }, [scanResult, effectiveRange]);
+
+  // Memoize Plotly layout to prevent unnecessary re-renders
+  const plotLayout = useMemo(() => {
+    const range = effectiveRange || actualTimeRange;
+    
+    // Calculate effective bucket based on visible range or full data
+    let effectiveBucket: number;
+    if (bucketMinutes === 0) {
+      // Auto mode: use visible range if available, otherwise full scan data
+      if (visibleRange) {
+        const startMs = new Date(visibleRange.start).getTime();
+        const endMs = new Date(visibleRange.end).getTime();
+        const durationMs = endMs - startMs;
+        effectiveBucket = calculateBucketFromDuration(durationMs);
+      } else {
+        effectiveBucket = calculateAutoBucket(scanResult);
+      }
+    } else {
+      effectiveBucket = bucketMinutes;
+    }
+    
+    return {
+      height: Math.max(300, traceNames.length * 60 + 100),
+      margin: { l: 180, r: 20, t: 10, b: 45 },
+      xaxis: {
+        title: { text: "Time", font: { size: 11 } },
+        tickfont: { size: 10 },
+        type: "date" as const,
+        ...(range
+          ? { range: [range.start, range.end], autorange: false }
+          : {}),
+        ...(effectiveBucket > 0
+          ? { dtick: effectiveBucket * 60 * 1000 }
+          : {}),
+      },
+      yaxis: {
+        tickfont: { size: 10 },
+        type: "category" as const,
+        categoryorder: "array" as const,
+        categoryarray: [...traceNames].reverse(),
+        automargin: true,
+      },
+      hovermode: "closest" as const,
+      legend: {
+        orientation: "h" as const,
+        y: 1.08,
+        x: 0.5,
+        xanchor: "center" as const,
+        font: { size: 10 },
+      },
+      shapes: plotShapes,
+      annotations: plotAnnotations,
+      paper_bgcolor: "transparent",
+      plot_bgcolor: "transparent",
+      font: { family: "Roboto, sans-serif", size: 11 },
+    };
+  }, [traceNames, effectiveRange, actualTimeRange, bucketMinutes, plotShapes, plotAnnotations, scanResult, visibleRange]);
 
   const domainNames = Object.keys(domains);
 
@@ -1402,6 +1587,22 @@ export default function PatternAnalyzerPage() {
                   </option>
                 ))}
               </select>
+              {bucketMinutes === 0 && scanResult && (
+                <div className="text-[10px] text-muted-foreground mt-1">
+                  Using: {(() => {
+                    let effectiveBucket: number;
+                    if (visibleRange) {
+                      const startMs = new Date(visibleRange.start).getTime();
+                      const endMs = new Date(visibleRange.end).getTime();
+                      const durationMs = endMs - startMs;
+                      effectiveBucket = calculateBucketFromDuration(durationMs);
+                    } else {
+                      effectiveBucket = calculateAutoBucket(scanResult);
+                    }
+                    return BUCKET_OPTIONS.find(opt => opt.value === effectiveBucket)?.label || `${effectiveBucket} min`;
+                  })()}{visibleRange ? " (zoomed)" : ""}
+                </div>
+              )}
             </div>
 
             <label className="flex items-center gap-1.5 cursor-pointer select-none" title="Exclude log lines with build-time timestamps (before NTP sync corrects the clock)">
@@ -1596,46 +1797,25 @@ export default function PatternAnalyzerPage() {
             </div>
           ) : (
             <div className="p-2">
-              <Plot
+              <MemoizedPlot
                 key={`plot-${startRebootIdx}-${endRebootIdx}-${sliderValue}-${bucketMinutes}`}
                 data={plotData}
-                layout={{
-                  height: Math.max(300, traceNames.length * 60 + 100),
-                  margin: { l: 180, r: 20, t: 10, b: 45 },
-                  xaxis: {
-                    title: { text: "Time", font: { size: 11 } },
-                    tickfont: { size: 10 },
-                    type: "date",
-                    ...(effectiveRange
-                      ? { range: [effectiveRange.start, effectiveRange.end], autorange: false }
-                      : {}),
-                    ...(bucketMinutes > 0
-                      ? { dtick: bucketMinutes * 60 * 1000 }
-                      : {}),
-                  },
-                  yaxis: {
-                    tickfont: { size: 10 },
-                    type: "category",
-                    categoryorder: "array",
-                    categoryarray: [...traceNames].reverse(),
-                    automargin: true,
-                  },
-                  hovermode: "closest",
-                  legend: {
-                    orientation: "h",
-                    y: 1.08,
-                    x: 0.5,
-                    xanchor: "center",
-                    font: { size: 10 },
-                  },
-                  shapes: plotShapes,
-                  annotations: plotAnnotations,
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                  font: { family: "Roboto, sans-serif", size: 11 },
-                }}
+                layout={plotLayout}
                 config={NO_TOOLBAR}
                 style={{ width: "100%" }}
+                onRelayout={(event: any) => {
+                  // Track visible range when user zooms
+                  if (bucketMinutes === 0 && event["xaxis.range[0]"] && event["xaxis.range[1]"]) {
+                    setVisibleRange({
+                      start: event["xaxis.range[0]"],
+                      end: event["xaxis.range[1]"]
+                    });
+                  }
+                  // Reset visible range on double-click (autorange)
+                  if (event["xaxis.autorange"] === true) {
+                    setVisibleRange(null);
+                  }
+                }}
               />
             </div>
           )}

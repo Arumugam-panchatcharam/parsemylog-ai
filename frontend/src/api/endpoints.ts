@@ -646,8 +646,8 @@ export const cpeOverviewApi = {
   },
   getPatternScan: (projectId: string) =>
     api.get<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
-  runPatternScan: (projectId: string) =>
-    api.post<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
+  runPatternScan: (projectId: string, params?: { reboot_window_minutes?: number }) =>
+    api.post<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`, params),
 };
 
 // ---------- NATCO (user-facing) ----------

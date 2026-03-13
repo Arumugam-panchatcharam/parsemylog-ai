@@ -15,7 +15,7 @@ import subprocess
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -608,6 +608,33 @@ def _run_rg_count_all_cpes(
     return counts
 
 
+def _get_reboot_time_windows(
+    project_dir: Path,
+    window_minutes_before: int
+) -> List[tuple]:
+    """Get time windows around reboots (window_minutes_before -> reboot_time)"""
+    from logai.info_extractor import find_and_extract_reboots
+    
+    reboots = find_and_extract_reboots(project_dir)
+    windows = []
+    for rb in reboots:
+        try:
+            rb_ts = datetime.fromisoformat(rb["timestamp"])
+            window_start = rb_ts - timedelta(minutes=window_minutes_before)
+            windows.append((window_start, rb_ts))
+        except (ValueError, KeyError):
+            continue
+    return windows
+
+
+def _timestamp_in_windows(
+    ts: datetime,
+    windows: List[tuple]
+) -> bool:
+    """Check if timestamp falls within any of the time windows"""
+    return any(start <= ts <= end for start, end in windows)
+
+
 def _run_rg_count_all_cpes_filtered(
     rg_binary: str,
     regex: str,
@@ -616,12 +643,19 @@ def _run_rg_count_all_cpes_filtered(
     maintenance_window: Optional[Dict[str, str]] = None,
     reboot_proximity_minutes: Optional[int] = None,
     cpe_reboots: Optional[Dict[str, List[Dict[str, str]]]] = None,
+    reboot_window_minutes: Optional[int] = None,
 ) -> Dict[str, int]:
     """Like :func:`_run_rg_count_all_cpes` but excludes matches based on
-    maintenance window and/or reboot proximity.
+    maintenance window and/or reboot proximity, or filters to only show matches
+    within a time window before reboots.
 
     Uses full ``rg`` output (not ``-c``) so that timestamps can be parsed,
     while still issuing a single subprocess for all CPEs.
+    
+    Args:
+        reboot_window_minutes: If provided, only count matches within this many
+            minutes before each reboot. If None, all matches are counted (subject
+            to other filters).
     """
     counts: Dict[str, int] = {s: 0 for s in cpe_serials}
     serial_set = set(cpe_serials)
@@ -636,6 +670,17 @@ def _run_rg_count_all_cpes_filtered(
     if reboot_proximity_minutes and cpe_reboots:
         from datetime import timedelta
         rp_delta = timedelta(minutes=reboot_proximity_minutes)
+    
+    # Precompute reboot windows per CPE if reboot_window_minutes is set
+    cpe_reboot_windows: Dict[str, List[tuple]] = {}
+    if reboot_window_minutes and cpe_reboots:
+        for serial, reboots in cpe_reboots.items():
+            if reboots:
+                cpe_dir = base_dir / serial
+                if cpe_dir.exists():
+                    windows = _get_reboot_time_windows(cpe_dir, reboot_window_minutes)
+                    if windows:
+                        cpe_reboot_windows[serial] = windows
 
     cmd = [
         rg_binary,
@@ -711,6 +756,17 @@ def _run_rg_count_all_cpes_filtered(
                     break
             if skip:
                 continue
+        
+        # Reboot window filter (only include matches within window before reboots)
+        if reboot_window_minutes and cpe_reboot_windows:
+            windows = cpe_reboot_windows.get(serial, [])
+            if windows:
+                # Only count if timestamp is within one of the reboot windows
+                if not _timestamp_in_windows(ts_dt, windows):
+                    continue
+            else:
+                # No reboots for this CPE, skip all matches when filter is active
+                continue
 
         counts[serial] += 1
 
@@ -752,6 +808,12 @@ def run_pattern_scan(project_id):
     which is very fast.  Results are written to
     ``<project_dir>/.cpe_overview_pattern_scan.json`` so subsequent page
     loads can use the GET endpoint above.
+    
+    Request body (optional):
+        {
+            "reboot_window_minutes": int  # Only count matches within this many
+                                          # minutes before each reboot (15-360)
+        }
 
     Returns:
         {
@@ -770,6 +832,17 @@ def run_pattern_scan(project_id):
     _, err = _verify_project(project_id, user_id)
     if err:
         return err
+    
+    # Get optional reboot window filter parameter
+    data = request.get_json() or {}
+    reboot_window_minutes = data.get("reboot_window_minutes")
+    if reboot_window_minutes is not None:
+        try:
+            reboot_window_minutes = int(reboot_window_minutes)
+            if not (15 <= reboot_window_minutes <= 360):
+                return jsonify({"error": "reboot_window_minutes must be between 15 and 360"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "reboot_window_minutes must be an integer"}), 400
 
     rg_binary = shutil.which("rg")
     if not rg_binary:
@@ -837,14 +910,14 @@ def run_pattern_scan(project_id):
                 task["reboot_proximity_minutes"] = pat["reboot_proximity_minutes"]
             all_tasks.append(task)
 
-    # Check if any task needs timestamp-level filtering
+    # Check if any task needs timestamp-level filtering or reboot window filter is active
     any_needs_filtering = any(
         t.get("maintenance_window") or t.get("reboot_proximity_minutes")
         for t in all_tasks
-    )
+    ) or reboot_window_minutes is not None
 
-    # Pre-load per-CPE reboots if any pattern uses reboot proximity
-    any_needs_reboots = any(t.get("reboot_proximity_minutes") for t in all_tasks)
+    # Pre-load per-CPE reboots if any pattern uses reboot proximity or reboot window filter
+    any_needs_reboots = any(t.get("reboot_proximity_minutes") for t in all_tasks) or reboot_window_minutes is not None
     cpe_reboots: Dict[str, List[Dict[str, str]]] = {}
     if any_needs_reboots and is_multi_cpe:
         from logai.info_extractor import find_and_extract_reboots as _extract_reboots
@@ -863,12 +936,14 @@ def run_pattern_scan(project_id):
             key = f"{task['domain']}::{task['idx']}"
             mw = task.get("maintenance_window")
             rp = task.get("reboot_proximity_minutes")
-            if mw or rp:
+            # Use filtered scan if any filter is active (including reboot window)
+            if mw or rp or reboot_window_minutes:
                 counts = _run_rg_count_all_cpes_filtered(
                     rg_binary, task["regex"], base_dir, cpe_serials,
                     maintenance_window=mw,
                     reboot_proximity_minutes=rp,
-                    cpe_reboots=cpe_reboots if rp else None,
+                    cpe_reboots=cpe_reboots if (rp or reboot_window_minutes) else None,
+                    reboot_window_minutes=reboot_window_minutes,
                 )
             else:
                 counts = _run_rg_count_all_cpes(

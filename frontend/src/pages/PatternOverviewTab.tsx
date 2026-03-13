@@ -57,6 +57,8 @@ export default function PatternOverviewTab() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expandedPattern, setExpandedPattern] = useState<string | null>(null);
   const [domainFilter, setDomainFilter] = useState<string>("all");
+  const [rebootWindowMinutes, setRebootWindowMinutes] = useState<number>(60); // Default 1 hour
+  const [enableRebootFilter, setEnableRebootFilter] = useState<boolean>(true);
 
   const { data: cpeList } = useQuery<Array<{ serial: string }>>({
     queryKey: ["cpe-list", projectId],
@@ -74,7 +76,10 @@ export default function PatternOverviewTab() {
   });
 
   const scanMutation = useMutation({
-    mutationFn: async () => (await cpeOverviewApi.runPatternScan(projectId!)).data,
+    mutationFn: async () => 
+      (await cpeOverviewApi.runPatternScan(projectId!, {
+        reboot_window_minutes: enableRebootFilter ? rebootWindowMinutes : undefined
+      })).data,
     onSuccess: (data) => {
       queryClient.setQueryData(["cpe-overview-pattern-scan", projectId], data);
     },
@@ -233,6 +238,45 @@ export default function PatternOverviewTab() {
 
   return (
     <div className="space-y-3">
+      {/* Reboot Timeline Filter */}
+      <div className="bg-card border border-border rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Reboot Timeline Filter
+          </h3>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enableRebootFilter}
+              onChange={(e) => setEnableRebootFilter(e.target.checked)}
+              className="h-4 w-4 accent-blue-600"
+            />
+            <span className="text-xs">Enable</span>
+          </label>
+        </div>
+        
+        {enableRebootFilter && (
+          <div>
+            <label className="text-xs text-muted-foreground block mb-2">
+              Show matches within {rebootWindowMinutes} minutes before each reboot
+            </label>
+            <input
+              type="range"
+              min="15"
+              max="360"
+              step="15"
+              value={rebootWindowMinutes}
+              onChange={(e) => setRebootWindowMinutes(Number(e.target.value))}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>15 min</span>
+              <span>6 hours</span>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Controls bar */}
       <div className="bg-card border border-border rounded-xl px-3 py-2 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3 text-xs text-muted-foreground">

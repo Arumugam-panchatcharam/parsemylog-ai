@@ -392,6 +392,60 @@ def _cleanup_old_scan_results(project_dir: Path) -> None:
             pass
 
 
+def _calculate_adaptive_bucket_minutes(times: List[str], target_points: int = 600) -> int:
+    """
+    Calculate optimal bucket size for a pattern based on its time span.
+    Returns bucket size in minutes to achieve ~target_points buckets.
+    """
+    if len(times) < 2:
+        return 0
+    
+    # Get time span of matches
+    first_ts = datetime.fromisoformat(times[0])
+    last_ts = datetime.fromisoformat(times[-1])
+    duration_minutes = (last_ts - first_ts).total_seconds() / 60
+    
+    if duration_minutes <= 0:
+        return 0
+    
+    # Calculate bucket size to achieve target points
+    bucket_minutes = max(1, int(duration_minutes / target_points))
+    
+    # Round to sensible intervals: 1, 5, 10, 15, 30, 60, 120, 240, 1440
+    sensible_intervals = [1, 5, 10, 15, 30, 60, 120, 240, 1440]
+    for interval in sensible_intervals:
+        if bucket_minutes <= interval:
+            return interval
+    return 1440  # Max 1 day
+
+
+def _bucket_matches(times: List[str], texts: List[str], bucket_minutes: int) -> tuple:
+    """Group matches into time buckets, return (bucket_times, sample_texts, counts)"""
+    if bucket_minutes <= 0:
+        return times, texts, [1] * len(times)
+    
+    buckets = {}  # timestamp -> (sample_text, count)
+    for ts, txt in zip(times, texts):
+        dt = datetime.fromisoformat(ts)
+        # Round down to bucket boundary
+        bucket_dt = dt.replace(second=0, microsecond=0)
+        bucket_minutes_offset = (bucket_dt.minute // bucket_minutes) * bucket_minutes
+        bucket_dt = bucket_dt.replace(minute=bucket_minutes_offset)
+        bucket_key = bucket_dt.isoformat()
+        
+        if bucket_key in buckets:
+            buckets[bucket_key] = (buckets[bucket_key][0], buckets[bucket_key][1] + 1)
+        else:
+            buckets[bucket_key] = (txt, 1)
+    
+    sorted_buckets = sorted(buckets.items())
+    return (
+        [k for k, _ in sorted_buckets],
+        [v[0] for _, v in sorted_buckets],
+        [v[1] for _, v in sorted_buckets]
+    )
+
+
 def _run_ripgrep_scan(
     project_dir: Path,
     patterns: List[Dict[str, Any]],
@@ -534,12 +588,29 @@ def _run_ripgrep_scan(
         total_matches += match_count
 
         if times:
-            traces.append({
-                "name": name,
-                "times": times,
-                "texts": texts,
-                "total": match_count,
-            })
+            # Apply bucketing for patterns with >500 matches (more aggressive)
+            if len(times) > 500:
+                adaptive_bucket = _calculate_adaptive_bucket_minutes(times, target_points=300)
+                bucket_times, bucket_texts, bucket_counts = _bucket_matches(times, texts, adaptive_bucket)
+                traces.append({
+                    "name": name,
+                    "times": bucket_times,
+                    "texts": bucket_texts,
+                    "counts": bucket_counts,
+                    "total": match_count,
+                    "bucketed": True,
+                    "bucket_minutes": adaptive_bucket,
+                })
+            else:
+                # Keep individual points for patterns with <500 matches
+                traces.append({
+                    "name": name,
+                    "times": times,
+                    "texts": texts,
+                    "counts": [1] * len(times),
+                    "total": match_count,
+                    "bucketed": False,
+                })
 
     return {
         "traces": traces,
