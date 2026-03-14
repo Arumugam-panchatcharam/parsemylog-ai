@@ -144,13 +144,17 @@ git clone https://github.com/your-org/parsemylog-ai.git
 cd parsemylog-ai
 cp .env_example .env
 
-# 2. Build frontend
+# 2. Download OUI database (optional - for MAC vendor lookups)
+./scripts/download-oui.sh
+# OR: wget -O oui.txt https://standards-oui.ieee.org/oui/oui.txt
+
+# 3. Build frontend
 docker compose --profile build up frontend-build
 
-# 3. Start all services
+# 4. Start all services
 docker compose up -d --build
 
-# 4. Open browser
+# 5. Open browser
 open http://localhost:40901
 ```
 

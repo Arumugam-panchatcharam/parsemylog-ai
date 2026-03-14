@@ -1399,4 +1399,7 @@ export const utilitiesApi = {
   
   ouiUpdate: () =>
     api.post<OuiUpdateResult>("/utilities/oui-update", {}, { timeout: 90_000 }),
+  
+  ouiReload: () =>
+    api.post<OuiUpdateResult>("/utilities/oui-reload", {}),
 };

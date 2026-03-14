@@ -130,7 +130,29 @@ CORS_ORIGINS=https://yourapp.com,https://www.yourapp.com
 MAX_UPLOAD_SIZE=2147483648
 ```
 
-### 4. Build Frontend
+### 4. Download OUI Database (Optional)
+
+The IEEE OUI database enables MAC address vendor lookups. It's optional but recommended for network analysis features.
+
+```bash
+# Option 1: Download using helper script
+./scripts/download-oui.sh
+
+# Option 2: Download manually
+wget -O oui.txt https://standards-oui.ieee.org/oui/oui.txt
+
+# Verify download
+ls -lh oui.txt
+# Expected: ~6MB file with ~39K entries
+```
+
+**Note**: You can also download this via the API after deployment:
+```bash
+curl -X POST http://localhost:40901/api/utilities/oui-update \
+  -H "Authorization: Bearer <your-token>"
+```
+
+### 5. Build Frontend
 
 ```bash
 # Build React SPA
@@ -140,7 +162,7 @@ docker compose --profile build up frontend-build
 # Expected: "Frontend build complete."
 ```
 
-### 5. Start Services
+### 6. Start Services
 
 ```bash
 # Start all services
@@ -153,7 +175,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-### 6. Initial Setup
+### 7. Initial Setup
 
 ```bash
 # Access the application

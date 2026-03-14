@@ -85,6 +85,21 @@ def load_local_oui_database(filepath: Optional[str] = None) -> Dict[str, str]:
 # Load the local database on module import
 _local_oui_db = load_local_oui_database()
 
+# Log initial database status
+if len(_local_oui_db) == 0 and not os.path.exists(OUI_FILE_PATH):
+    logger.warning(
+        f"OUI database not found at {OUI_FILE_PATH}. "
+        "MAC lookups will use online API only. "
+        "Use POST /utilities/oui-update to download the database for faster lookups."
+    )
+elif len(_local_oui_db) == 0:
+    logger.error(
+        f"OUI database file exists at {OUI_FILE_PATH} but failed to load. "
+        "Check file format or try re-downloading via POST /utilities/oui-update."
+    )
+else:
+    logger.info(f"OUI database loaded successfully: {len(_local_oui_db)} vendors")
+
 
 def normalize_mac(mac_str: str) -> str:
     """
@@ -371,6 +386,55 @@ def get_oui_status():
         return jsonify({
             "status": "error",
             "message": str(exc)
+        }), 500
+
+
+@utilities_bp.route("/oui-reload", methods=["POST"])
+def reload_oui_database():
+    """
+    Reload the OUI database from disk without restarting the server.
+    
+    Useful after manually placing an oui.txt file in the project root,
+    or if the database was updated but not loaded.
+    
+    Returns:
+        JSON with reload status and entry count
+    """
+    global _local_oui_db
+    
+    try:
+        filepath = str(OUI_FILE_PATH)
+        
+        if not os.path.exists(filepath):
+            return jsonify({
+                "status": "error",
+                "message": f"OUI database file not found at {filepath}. Use POST /utilities/oui-update to download it."
+            }), 404
+        
+        logger.info(f"Reloading OUI database from {filepath}")
+        _local_oui_db = load_local_oui_database(filepath)
+        
+        if len(_local_oui_db) == 0:
+            return jsonify({
+                "status": "error",
+                "message": "OUI database file exists but no entries were loaded. File may be corrupt or in wrong format.",
+                "entries": 0
+            }), 500
+        
+        logger.info(f"OUI database reloaded: {len(_local_oui_db)} entries")
+        
+        return jsonify({
+            "status": "success",
+            "message": "OUI database reloaded successfully",
+            "entries": len(_local_oui_db),
+            "size_mb": round(os.path.getsize(filepath) / (1024 * 1024), 2)
+        }), 200
+        
+    except Exception as exc:
+        logger.exception(f"Failed to reload OUI database: {exc}")
+        return jsonify({
+            "status": "error",
+            "message": f"Reload failed: {str(exc)}"
         }), 500
 
 

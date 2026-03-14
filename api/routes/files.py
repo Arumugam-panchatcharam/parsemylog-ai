@@ -79,7 +79,7 @@ def _get_status(project_id: str) -> dict:
     with _status_lock:
         return dict(_processing_status.get(project_id, {
             "status": "idle",
-            "message": "No processing in progress",
+            "message": "Processing logs in the background...",
             "progress": 0,
             "total": 0,
             "cpes": [],
@@ -139,6 +139,16 @@ def upload_files(project_id):
     # ---- Phase 2: Detect CPE zips (fast) ----
     cpe_zips = FileManager.detect_cpe_zips(project_dir)
 
+    # ---- Phase 2.5: Detect regular zip files that might contain logs ----
+    # If no CPE zips detected, check for any regular zip files
+    regular_zips = []
+    if not cpe_zips:
+        for f in project_dir.iterdir():
+            if f.is_file() and f.name.endswith('.zip'):
+                regular_zips.append(f)
+        if regular_zips:
+            logger.info(f"[Upload] Detected {len(regular_zips)} regular zip file(s) to extract")
+
     if cpe_zips:
         # ---- Multi-CPE: launch background processing ----
         cpe_count = len(set(z["serial"] for z in cpe_zips))
@@ -164,6 +174,34 @@ def upload_files(project_id):
 
         return jsonify({
             "message": f"Uploaded {len(saved_filenames)} file(s) — processing {cpe_count} CPE(s) in background",
+            "files": saved_filenames,
+            "processing": True,
+        }), 202
+
+    elif regular_zips:
+        # ---- Extract regular zip files in background ----
+        logger.info(f"[Upload] Processing {len(regular_zips)} regular zip file(s) in background")
+        _set_status(project_id,
+                    status="processing",
+                    message=f"Extracting {len(regular_zips)} archive(s)...",
+                    progress=0,
+                    total=len(regular_zips),
+                    cpes=[],
+                    error=None)
+
+        # Capture values for the background thread
+        from flask import current_app
+        flask_app = current_app._get_current_object()
+        project_name = project.name
+        t = threading.Thread(
+            target=_process_regular_archives_background,
+            args=(flask_app, project_id, user_id, project_dir, project_name, regular_zips),
+            daemon=True,
+        )
+        t.start()
+
+        return jsonify({
+            "message": f"Uploaded {len(saved_filenames)} file(s) — extracting archives in background",
             "files": saved_filenames,
             "processing": True,
         }), 202
@@ -203,6 +241,104 @@ def upload_files(project_id):
 
 
 # ---------- Background CPE Processing ----------
+
+def _process_regular_archives_background(flask_app, project_id, user_id, project_dir, project_name, archive_files):
+    """
+    Background thread: extract regular zip/tar files, merge logs, save to DB, launch indexing.
+
+    This handles generic archive uploads that don't match CPE naming conventions.
+    """
+    try:
+        with flask_app.app_context():
+            total = len(archive_files)
+            _set_status(project_id,
+                        message=f"Extracting {total} archive(s)...",
+                        total=total)
+
+            # Extract archives
+            for idx, archive_path in enumerate(archive_files, 1):
+                _set_status(project_id,
+                            message=f"Extracting archive {idx}/{total}: {archive_path.name}",
+                            progress=idx)
+                
+                try:
+                    # Create temporary extraction directory
+                    extract_dir = project_dir / f"_extract_{archive_path.stem}"
+                    extract_dir.mkdir(exist_ok=True)
+                    
+                    # Extract the archive
+                    if archive_path.name.endswith('.zip'):
+                        import zipfile
+                        with zipfile.ZipFile(archive_path, 'r') as zf:
+                            zf.extractall(extract_dir)
+                    elif archive_path.name.endswith(('.tar', '.tgz', '.tar.gz', '.tar.bz2')):
+                        import tarfile
+                        with tarfile.open(archive_path, 'r:*') as tf:
+                            tf.extractall(extract_dir)
+                    
+                    # Move extracted files to project root
+                    for item in extract_dir.rglob('*'):
+                        if item.is_file():
+                            # Try to preserve directory structure, but flatten if there are conflicts
+                            rel_path = item.relative_to(extract_dir)
+                            dest = project_dir / rel_path
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            if not dest.exists():
+                                shutil.move(str(item), str(dest))
+                            else:
+                                # File exists, use unique name
+                                counter = 1
+                                while dest.exists():
+                                    dest = project_dir / f"{rel_path.stem}_{counter}{rel_path.suffix}"
+                                    counter += 1
+                                shutil.move(str(item), str(dest))
+                    
+                    # Clean up extraction directory
+                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    
+                    # Remove the archive file
+                    archive_path.unlink()
+                    
+                except Exception as e:
+                    logger.error(f"[Upload] Failed to extract {archive_path.name}: {e}")
+
+            _set_status(project_id,
+                        message="Processing extracted files...")
+
+            # Process the extracted files using legacy path
+            file_manager = FileManager()
+            file_manager.process_uploaded_files(project_dir, project_name)
+
+            # Save merged log files to DB
+            merged_dir = project_dir / MERGED_LOGS_DIR_NAME
+            merged_count = 0
+            if merged_dir.exists():
+                for fname in os.listdir(merged_dir):
+                    dbm.save_local_file(Path(merged_dir / fname), project_id)
+                    merged_count += 1
+                logger.info(f"[Upload] Saved {merged_count} merged log files to DB")
+
+            # Clean up merged_logs directory
+            if merged_dir.exists():
+                shutil.rmtree(merged_dir)
+
+            # Launch async indexing
+            _launch_async_indexer(project_dir, project_id)
+
+            _set_status(project_id,
+                        status="completed",
+                        message=f"Done! Archives extracted and processed, indexing in background",
+                        progress=total)
+
+            logger.info(f"[Upload] Background archive processing complete: {total} archive(s)")
+
+    except Exception as e:
+        logger.exception(f"[Upload] Background archive processing failed: {e}")
+        _set_status(project_id,
+                    status="error",
+                    message=f"Processing failed: {str(e)}",
+                    error=str(e))
+
 
 def _process_multi_cpe_background(flask_app, project_id, user_id, project_dir, project_name, cpe_zips):
     """

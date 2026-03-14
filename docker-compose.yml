@@ -24,6 +24,8 @@ services:
       - ./logai_api_wsgi.py:/app/logai_api_wsgi.py:ro
       - ./run_api.py:/app/run_api.py:ro
       - ./drain3.ini:/app/drain3.ini:ro
+      # OUI database for MAC vendor lookups (bind-mount if exists, otherwise will be downloaded)
+      - ./oui.txt:/app/oui.txt
       # Persistent data
       - user_uploads:/app/user_uploads
       - bge_model:/app/bge-small-en-v1.5-local
@@ -97,6 +99,8 @@ services:
       - ./services:/app/services:ro
       - ./configs:/app/configs:ro
       - ./drain3.ini:/app/drain3.ini:ro
+      # OUI database for MAC vendor lookups
+      - ./oui.txt:/app/oui.txt
       # Shared data with API
       - user_uploads:/app/user_uploads
       - bge_model:/app/bge-small-en-v1.5-local

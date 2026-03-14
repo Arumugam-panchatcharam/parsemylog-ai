@@ -25,6 +25,7 @@ export default function MacLookupBar() {
   const [searchFilter, setSearchFilter] = useState("");
   const [ouiStatus, setOuiStatus] = useState<OuiStatus | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [reloading, setReloading] = useState(false);
 
   // Load OUI status on mount
   useEffect(() => {
@@ -115,6 +116,31 @@ export default function MacLookupBar() {
     }
   }, []);
 
+  const handleReloadOui = useCallback(async () => {
+    setReloading(true);
+    setError(null);
+
+    try {
+      const response = await utilitiesApi.ouiReload();
+      if (response.data.status === "success") {
+        // Refresh status
+        const statusResponse = await utilitiesApi.ouiStatus();
+        setOuiStatus(statusResponse.data);
+        setError(null);
+        // Show success message briefly
+        const successMsg = `✓ Reloaded: ${response.data.entries?.toLocaleString()} entries`;
+        setError(successMsg);
+        setTimeout(() => setError(null), 5000);
+      } else {
+        setError(response.data.message || "Reload failed");
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.message || err.message || "Reload failed");
+    } finally {
+      setReloading(false);
+    }
+  }, []);
+
   // Filter results based on LAA toggle and search
   const filteredResults = useMemo(() => {
     let filtered = results;
@@ -189,29 +215,64 @@ export default function MacLookupBar() {
               <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/30 text-xs">
                 <div className="flex items-center gap-3">
                   <span className="text-muted-foreground">
-                    Local Database: <span className="font-medium text-foreground">{ouiStatus.entries.toLocaleString()} vendors</span>
+                    Local Database: <span className={cn(
+                      "font-medium",
+                      ouiStatus.entries === 0 ? "text-destructive" : "text-foreground"
+                    )}>{ouiStatus.entries.toLocaleString()} vendors</span>
                   </span>
-                  <span className="text-muted-foreground">
-                    Size: <span className="font-medium text-foreground">{ouiStatus.file_size_mb} MB</span>
-                  </span>
-                  <span className="text-muted-foreground">
-                    Updated: <span className="font-medium text-foreground">{formatLastModified(ouiStatus.last_modified)}</span>
-                  </span>
-                </div>
-                <button
-                  onClick={handleUpdateOui}
-                  disabled={updating}
-                  className={cn(
-                    "flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors",
-                    updating
-                      ? "bg-muted text-muted-foreground cursor-wait"
-                      : "bg-primary/10 text-primary hover:bg-primary/20"
+                  {ouiStatus.entries > 0 && (
+                    <>
+                      <span className="text-muted-foreground">
+                        Size: <span className="font-medium text-foreground">{ouiStatus.file_size_mb} MB</span>
+                      </span>
+                      <span className="text-muted-foreground">
+                        Updated: <span className="font-medium text-foreground">{formatLastModified(ouiStatus.last_modified)}</span>
+                      </span>
+                    </>
                   )}
-                  title="Download latest OUI database from IEEE"
-                >
-                  <RefreshIcon style={{ fontSize: 12 }} className={updating ? "animate-spin" : ""} />
-                  {updating ? "Updating..." : "Update Database"}
-                </button>
+                  {ouiStatus.entries === 0 && ouiStatus.file_exists && (
+                    <span className="text-destructive text-xs">
+                      ⚠️ Database file exists but not loaded - click Reload
+                    </span>
+                  )}
+                  {ouiStatus.entries === 0 && !ouiStatus.file_exists && (
+                    <span className="text-destructive text-xs">
+                      ⚠️ Database not downloaded - click Update to download
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {ouiStatus.entries === 0 && ouiStatus.file_exists && (
+                    <button
+                      onClick={handleReloadOui}
+                      disabled={reloading}
+                      className={cn(
+                        "flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors",
+                        reloading
+                          ? "bg-muted text-muted-foreground cursor-wait"
+                          : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400"
+                      )}
+                      title="Reload database from existing file"
+                    >
+                      <RefreshIcon style={{ fontSize: 12 }} className={reloading ? "animate-spin" : ""} />
+                      {reloading ? "Reloading..." : "Reload Database"}
+                    </button>
+                  )}
+                  <button
+                    onClick={handleUpdateOui}
+                    disabled={updating}
+                    className={cn(
+                      "flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium transition-colors",
+                      updating
+                        ? "bg-muted text-muted-foreground cursor-wait"
+                        : "bg-primary/10 text-primary hover:bg-primary/20"
+                    )}
+                    title="Download latest OUI database from IEEE"
+                  >
+                    <RefreshIcon style={{ fontSize: 12 }} className={updating ? "animate-spin" : ""} />
+                    {updating ? "Updating..." : ouiStatus.entries === 0 ? "Download Database" : "Update Database"}
+                  </button>
+                </div>
               </div>
             )}
 
