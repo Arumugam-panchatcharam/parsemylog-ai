@@ -500,6 +500,23 @@ export const telemetryApi = {
     api.get<CrossCpeTelemetryOverview>(`/projects/${projectId}/telemetry/cross-cpe-overview`, {
       params: force ? { force: "1" } : undefined,
     }),
+  exportCsv: (
+    projectId: string,
+    cpeId: string,
+    profiles?: string[],
+    format?: 'combined' | 'separate'
+  ) => {
+    const params = new URLSearchParams({ cpe_id: cpeId });
+    if (profiles && profiles.length > 0) {
+      params.append('profiles', profiles.join(','));
+    }
+    if (format) {
+      params.append('format', format);
+    }
+    return api.get(`/projects/${projectId}/telemetry/export-csv?${params.toString()}`, {
+      responseType: 'blob',
+    });
+  },
 };
 
 // ---------- Semantic Search ----------

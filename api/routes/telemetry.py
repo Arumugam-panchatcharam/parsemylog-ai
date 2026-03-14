@@ -333,6 +333,7 @@ def _parse_and_build(project_dir: Path, force: bool = False):
             "total": summary.get("total", 0),
             "parsed": summary.get("parsed", 0),
             "overall_time_range": summary.get("overall_time_range", {}),
+            "profile_stats": summary.get("profile_stats", {}),
         },
         "key_metrics": key_metrics,
         "status_labels": status_labels,
@@ -1196,3 +1197,164 @@ def cross_cpe_overview(project_id):
         },
         "reboot_correlation": reboot_correlation,
     }), 200
+
+
+# ---------- CSV Export ----------
+
+@telemetry_bp.route("/<project_id>/telemetry/export-csv", methods=["GET"])
+@jwt_required()
+def export_telemetry_csv(project_id):
+    """
+    Export telemetry data to CSV format.
+    
+    Query params:
+        - cpe_id: CPE identifier (required)
+        - profiles: Comma-separated profile names (optional, exports all if not specified)
+        - format: "combined" or "separate" (default: "combined")
+    
+    Returns:
+        - If format=combined: Single CSV with all profiles
+        - If format=separate and multiple profiles: ZIP file with one CSV per profile
+        - If format=separate and single profile: Single CSV
+    """
+    from datetime import datetime
+    from io import BytesIO, StringIO
+    import zipfile
+    
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    
+    cpe_id = request.args.get("cpe_id")
+    if not cpe_id:
+        return jsonify({"error": "cpe_id is required"}), 400
+    
+    profiles_param = request.args.get("profiles", "")
+    # Empty string or no parameter means export all profiles
+    profile_filter = [p.strip() for p in profiles_param.split(",") if p.strip()] if profiles_param else None
+    
+    export_format = request.args.get("format", "combined").lower()
+    if export_format not in ("combined", "separate"):
+        export_format = "combined"
+    
+    pdir = _project_dir(user_id, project_id, cpe_id)
+    
+    try:
+        # We need the raw reports, not the cached summary
+        # Parse the telemetry file directly
+        telemetry_file = _find_telemetry_file(pdir)
+        dcmscript_file = _find_dcmscript_file(pdir)
+        
+        if not telemetry_file and not dcmscript_file:
+            return jsonify({"error": "No telemetry data found"}), 404
+        
+        primary = telemetry_file or dcmscript_file
+        reports, _merged, summary, _src = parse_telemetry_file(
+            primary, dcmscript_path=dcmscript_file,
+            cpe_dir=pdir, force=False,
+        )
+        
+        if not reports:
+            return jsonify({"error": "No telemetry reports found"}), 404
+        
+        # Convert to CSV DataFrames
+        from logai.telemetry_parser import export_telemetry_to_csv
+        csv_data = export_telemetry_to_csv(reports, profile_filter)
+        
+        dataframes = csv_data.get("dataframes", {})
+        if not dataframes:
+            return jsonify({"error": "No data to export for selected profiles"}), 404
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Generate CSV output based on format
+        if export_format == "combined":
+            # Combine all profiles into one CSV with Profile column
+            import pandas as pd
+            
+            combined_rows = []
+            for profile_name, df in dataframes.items():
+                # Add Profile column
+                df_copy = df.copy()
+                
+                # Check if Profile column already exists (can happen with TR-181 Profile field)
+                if "Profile" in df_copy.columns:
+                    # Replace existing Profile column value with profile name
+                    df_copy["Profile"] = profile_name
+                else:
+                    # Insert new Profile column
+                    df_copy.insert(1, "Profile", profile_name)
+                combined_rows.append(df_copy)
+            
+            if combined_rows:
+                combined_df = pd.concat(combined_rows, ignore_index=True)
+                
+                # Sort by timestamp
+                if "Timestamp" in combined_df.columns:
+                    combined_df = combined_df.sort_values("Timestamp")
+                
+                # Convert to CSV
+                csv_buffer = StringIO()
+                combined_df.to_csv(csv_buffer, index=False)
+                csv_content = csv_buffer.getvalue()
+                
+                filename = f"telemetry_combined_{cpe_id}_{timestamp}.csv"
+                
+                from flask import Response
+                return Response(
+                    csv_content,
+                    mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"}
+                )
+        
+        else:  # separate
+            if len(dataframes) == 1:
+                # Single profile - return CSV directly
+                profile_name = list(dataframes.keys())[0]
+                df = dataframes[profile_name]
+                
+                csv_buffer = StringIO()
+                df.to_csv(csv_buffer, index=False)
+                csv_content = csv_buffer.getvalue()
+                
+                # Sanitize profile name for filename
+                safe_profile = profile_name.replace(" ", "_").replace("/", "_")
+                filename = f"telemetry_{safe_profile}_{cpe_id}_{timestamp}.csv"
+                
+                from flask import Response
+                return Response(
+                    csv_content,
+                    mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"}
+                )
+            
+            else:
+                # Multiple profiles - return ZIP
+                zip_buffer = BytesIO()
+                
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for profile_name, df in dataframes.items():
+                        csv_buffer = StringIO()
+                        df.to_csv(csv_buffer, index=False)
+                        csv_content = csv_buffer.getvalue()
+                        
+                        # Sanitize profile name for filename
+                        safe_profile = profile_name.replace(" ", "_").replace("/", "_")
+                        csv_filename = f"telemetry_{safe_profile}_{cpe_id}_{timestamp}.csv"
+                        
+                        zip_file.writestr(csv_filename, csv_content)
+                
+                zip_buffer.seek(0)
+                filename = f"telemetry_{cpe_id}_{timestamp}.zip"
+                
+                from flask import Response
+                return Response(
+                    zip_buffer.getvalue(),
+                    mimetype="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"}
+                )
+    
+    except Exception as e:
+        logger.exception(f"[TelemetryExport] Error exporting CSV: {e}")
+        return jsonify({"error": f"Export failed: {str(e)}"}), 500

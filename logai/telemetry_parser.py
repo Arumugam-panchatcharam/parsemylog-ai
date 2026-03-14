@@ -741,7 +741,7 @@ def extract_telemetry_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
         avg_interval = sum(intervals) / len(intervals) if intervals else 0
 
         profile_stats[profile] = {
-            "count": len(reps),
+            "parsed": len(reps),
             "time_range": {
                 "first": times[0].isoformat() if times and isinstance(times[0], datetime) else (times[0] if times else None),
                 "last": times[-1].isoformat() if times and isinstance(times[-1], datetime) else (times[-1] if times else None),
@@ -787,6 +787,98 @@ def extract_telemetry_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
         "device_info": device_info,
         "overall_time_range": overall_range,
         "profile_stats": profile_stats,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CSV Export
+# ---------------------------------------------------------------------------
+
+def export_telemetry_to_csv(
+    reports: List[Dict[str, Any]],
+    profile_filter: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Convert telemetry reports to CSV-ready DataFrames grouped by profile.
+    
+    Args:
+        reports: Parsed telemetry reports from parse_telemetry_reports()
+        profile_filter: List of profile names to include, or None for all profiles
+    
+    Returns:
+        Dict with:
+            - "dataframes": Dict mapping profile names to pandas DataFrames
+            - "profile_counts": Dict mapping profile names to row counts
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        logger.error("[TelemetryExport] pandas not installed")
+        return {"dataframes": {}, "profile_counts": {}}
+    
+    # Group reports by profile
+    merged = merge_telemetry_reports(reports)
+    by_profile = merged["profiles"]
+    
+    # Filter profiles if requested
+    if profile_filter:
+        by_profile = {p: reps for p, reps in by_profile.items() if p in profile_filter}
+    
+    if not by_profile:
+        logger.warning("[TelemetryExport] No reports found matching profile filter")
+        return {"dataframes": {}, "profile_counts": {}}
+    
+    dataframes = {}
+    profile_counts = {}
+    
+    for profile_name, profile_reports in by_profile.items():
+        if not profile_reports:
+            continue
+        
+        # Build list of rows, one per report
+        rows = []
+        for report in profile_reports:
+            if not report.get("parse_ok"):
+                continue
+            
+            # Start with timestamp
+            row = {}
+            time_val = report.get("time")
+            if isinstance(time_val, datetime):
+                row["Timestamp"] = time_val.isoformat()
+            else:
+                row["Timestamp"] = str(time_val) if time_val else ""
+            
+            # Flatten all fields from the report
+            fields = report.get("fields", {})
+            for key, value in fields.items():
+                # Convert value to string for CSV compatibility
+                if value is None:
+                    row[key] = ""
+                elif isinstance(value, bool):
+                    row[key] = str(value).lower()
+                elif isinstance(value, (int, float)):
+                    row[key] = value
+                else:
+                    row[key] = str(value)
+            
+            rows.append(row)
+        
+        if rows:
+            # Create DataFrame
+            df = pd.DataFrame(rows)
+            
+            # Sort by timestamp
+            if "Timestamp" in df.columns:
+                df = df.sort_values("Timestamp")
+            
+            dataframes[profile_name] = df
+            profile_counts[profile_name] = len(df)
+            logger.info(f"[TelemetryExport] Created DataFrame for profile '{profile_name}' with {len(df)} rows")
+    
+    return {
+        "dataframes": dataframes,
+        "profile_counts": profile_counts
     }
 
 

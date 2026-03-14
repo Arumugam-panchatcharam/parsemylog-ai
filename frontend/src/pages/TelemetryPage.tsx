@@ -26,6 +26,7 @@ import ExploreIcon from "@mui/icons-material/Explore";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import CachedIcon from "@mui/icons-material/Cached";
+import DownloadIcon from "@mui/icons-material/Download";
 import SignalCellularAltIcon from "@mui/icons-material/SignalCellularAlt";
 import HomeIcon from "@mui/icons-material/Home";
 import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";
@@ -96,7 +97,12 @@ interface MeshTopology { snapshots: TopoSnapshot[]; total_snapshots: number; tim
 
 interface TelemetryData {
   device_info: Record<string, string>;
-  summary: { total: number; parsed: number; overall_time_range: { first?: string; last?: string } };
+  summary: { 
+    total: number; 
+    parsed: number; 
+    overall_time_range: { first?: string; last?: string };
+    profile_stats?: Record<string, { parsed: number }>;
+  };
   key_metrics: Array<Record<string, unknown>>;
   status_labels: Array<{ type: string; instance: string; status: string; meta: Record<string, string> }>;
   charts: Array<{ group: string; traces: Array<{ label: string; unit: string; times: string[]; values: number[]; raw_values?: number[]; raw_unit_original?: string; normalized?: boolean }> }>;
@@ -178,6 +184,7 @@ export default function TelemetryPage() {
   const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
   const [reparsing, setReparsing] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
 
   const { data: rawData, isLoading, isError, error } = useQuery<TelemetryData>({
     queryKey: ["telemetry", projectId, cpeId],
@@ -193,6 +200,38 @@ export default function TelemetryPage() {
       qc.setQueryData(["telemetry", projectId, cpeId], res.data);
     } catch { /* ignore */ }
     setReparsing(false);
+  };
+
+  const handleExportCsv = async (profiles: string[], format: 'combined' | 'separate') => {
+    if (!projectId || !cpeId) return;
+    
+    try {
+      const response = await telemetryApi.exportCsv(projectId, cpeId, profiles, format);
+      
+      // Get filename from Content-Disposition header or generate one
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'telemetry_export.csv';
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?(.+)"?/);
+        if (match) filename = match[1];
+      }
+      
+      // Create blob and download
+      const blob = new Blob([response.data]);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      setShowExportDialog(false);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Failed to export CSV. Please try again.');
+    }
   };
 
   const stColor = (v: string) => {
@@ -240,16 +279,26 @@ export default function TelemetryPage() {
         )}
         <div className="ml-auto flex items-center gap-2">
           {activeTab === "cpe" && data && (
-            <button
-              onClick={() => setShowDiscovery((v) => !v)}
-              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors"
-            >
-              <ExploreIcon style={{ fontSize: 15 }} />
-              Available Fields
-              {data.available_fields?.stats && (
-                <span className="text-[10px] bg-primary/10 text-primary rounded px-1">{data.available_fields.stats.unconfigured}</span>
-              )}
-            </button>
+            <>
+              <button
+                onClick={() => setShowExportDialog(true)}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors"
+                title="Export telemetry data to CSV"
+              >
+                <DownloadIcon style={{ fontSize: 15 }} />
+                Export CSV
+              </button>
+              <button
+                onClick={() => setShowDiscovery((v) => !v)}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors"
+              >
+                <ExploreIcon style={{ fontSize: 15 }} />
+                Available Fields
+                {data.available_fields?.stats && (
+                  <span className="text-[10px] bg-primary/10 text-primary rounded px-1">{data.available_fields.stats.unconfigured}</span>
+                )}
+              </button>
+            </>
           )}
           {activeTab === "cpe" && (
             <button
@@ -303,6 +352,17 @@ export default function TelemetryPage() {
       {/* ========== Available Fields Discovery Panel ========== */}
       {showDiscovery && data?.available_fields && (
         <AvailableFieldsPanel fields={data.available_fields} onClose={() => setShowDiscovery(false)} />
+      )}
+
+      {/* ========== CSV Export Dialog ========== */}
+      {showExportDialog && data && (
+        <ExportDialog
+          availableProfiles={data.summary?.profile_stats ? Object.keys(data.summary.profile_stats) : []}
+          onClose={() => setShowExportDialog(false)}
+          onExport={handleExportCsv}
+          profileCounts={data.summary?.profile_stats}
+          hasData={!!data.summary?.parsed}
+        />
       )}
 
       {data && (
@@ -1176,6 +1236,180 @@ function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; on
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================ CSV Export Dialog */
+function ExportDialog({
+  availableProfiles,
+  onClose,
+  onExport,
+  profileCounts,
+  hasData,
+}: {
+  availableProfiles: string[];
+  onClose: () => void;
+  onExport: (profiles: string[], format: 'combined' | 'separate') => void;
+  profileCounts?: Record<string, { parsed: number }>;
+  hasData: boolean;
+}) {
+  // If no profiles available, default to exporting all (empty array means "all")
+  const hasProfiles = availableProfiles.length > 0;
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(
+    hasProfiles ? new Set(availableProfiles) : new Set()
+  );
+  // Default to 'separate' format for better organization
+  const [format, setFormat] = useState<'combined' | 'separate'>('separate');
+
+  const toggleProfile = (profile: string) => {
+    setSelectedProfiles((prev) => {
+      const next = new Set(prev);
+      next.has(profile) ? next.delete(profile) : next.add(profile);
+      return next;
+    });
+  };
+
+  const handleExport = () => {
+    // If no profiles exist (dcmscript case), pass empty array to export all
+    if (!hasProfiles) {
+      onExport([], format);
+      return;
+    }
+    
+    // If profiles exist but none selected, show error
+    if (selectedProfiles.size === 0) {
+      alert('Please select at least one profile to export');
+      return;
+    }
+    
+    onExport(Array.from(selectedProfiles), format);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md mx-4 shadow-2xl">
+        <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-2">
+          <DownloadIcon style={{ fontSize: 16, color: "#1a73e8" }} />
+          <h3 className="text-sm font-semibold flex-1">Export Telemetry CSV</h3>
+          <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border hover:bg-muted">
+            Close
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {/* Profile Selection - only show if profiles exist */}
+          {hasProfiles ? (
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+                Select Profiles to Export
+              </label>
+              <div className="space-y-1.5">
+                {availableProfiles.map((profile) => {
+                  const count = profileCounts?.[profile]?.parsed || 0;
+                  return (
+                    <label
+                      key={profile}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedProfiles.has(profile)}
+                        onChange={() => toggleProfile(profile)}
+                        className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      />
+                      <span className="text-sm font-medium flex-1">{profile}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {count} report{count !== 1 ? 's' : ''}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs">
+              <p className="font-medium text-blue-800 dark:text-blue-400 mb-1">All Reports Selected</p>
+              <p className="text-blue-600 dark:text-blue-300">
+                This telemetry data doesn't have separate profiles. All reports will be exported together.
+              </p>
+            </div>
+          )}
+
+          {/* Format Selection - hide "separate" option if no profiles */}
+          <div>
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+              Export Format
+            </label>
+            <div className="space-y-1.5">
+              {hasProfiles && selectedProfiles.size > 0 && (
+                <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition-colors">
+                  <input
+                    type="radio"
+                    name="format"
+                    checked={format === 'separate'}
+                    onChange={() => setFormat('separate')}
+                    className="w-4 h-4 border-gray-300 text-primary focus:ring-primary"
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium">Separate Files (Recommended)</div>
+                    <div className="text-xs text-muted-foreground">
+                      {selectedProfiles.size > 1 ? 'ZIP with one CSV per profile' : 'Single CSV file'}
+                    </div>
+                  </div>
+                </label>
+              )}
+              <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition-colors">
+                <input
+                  type="radio"
+                  name="format"
+                  checked={format === 'combined'}
+                  onChange={() => setFormat('combined')}
+                  className="w-4 h-4 border-gray-300 text-primary focus:ring-primary"
+                />
+                <div className="flex-1">
+                  <div className="text-sm font-medium">
+                    {hasProfiles ? 'Combined CSV' : 'CSV File'}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {hasProfiles ? 'Single file with Profile column' : 'Single CSV with all telemetry data'}
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* Export Summary */}
+          <div className="px-3 py-2 rounded-lg bg-muted/30 border border-border text-xs">
+            <p className="font-medium mb-1">Export Summary:</p>
+            <p className="text-muted-foreground">
+              {!hasProfiles && 'All telemetry reports (CSV)'}
+              {hasProfiles && selectedProfiles.size === 0 && 'No profiles selected'}
+              {hasProfiles && selectedProfiles.size === 1 && format === 'separate' && `1 profile → Single CSV`}
+              {hasProfiles && selectedProfiles.size === 1 && format === 'combined' && `1 profile → CSV with Profile column`}
+              {hasProfiles && selectedProfiles.size > 1 && format === 'separate' && `${selectedProfiles.size} profiles → ZIP with ${selectedProfiles.size} CSVs`}
+              {hasProfiles && selectedProfiles.size > 1 && format === 'combined' && `${selectedProfiles.size} profiles → Combined CSV`}
+            </p>
+          </div>
+        </div>
+
+        <div className="px-4 py-3 border-t border-border bg-muted/20 flex items-center gap-2 justify-end">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-sm rounded-lg border hover:bg-muted transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={!hasData || (hasProfiles && selectedProfiles.size === 0)}
+            className="px-3 py-1.5 text-sm rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+          >
+            <DownloadIcon style={{ fontSize: 14 }} />
+            Export
+          </button>
+        </div>
       </div>
     </div>
   );
