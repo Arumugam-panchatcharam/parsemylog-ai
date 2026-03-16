@@ -20,10 +20,12 @@ import WifiIcon from "@mui/icons-material/Wifi";
 import TableChartIcon from "@mui/icons-material/TableChart";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import InfoIcon from "@mui/icons-material/Info";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
 import CPESelector from "@/components/CPESelector";
 import { chatApi, patternsApi } from "@/api/endpoints";
+import AboutDialog from "@/components/AboutDialog";
 
 const workspaceNav = [
   { to: "/workspace/viewer", icon: SearchIcon, label: "Log Viewer" },
@@ -43,6 +45,7 @@ export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const isWorkspace = location.pathname.startsWith("/workspace");
   const isProfile = location.pathname === "/profile";
 
@@ -259,6 +262,22 @@ export default function Sidebar() {
         )}
       </nav>
 
+      {/* About button */}
+      <div className="p-3 border-t border-sidebar-border">
+        <button
+          onClick={() => setAboutOpen(true)}
+          title={collapsed ? "About" : undefined}
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors w-full",
+            "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            collapsed && "justify-center px-2"
+          )}
+        >
+          <InfoIcon style={{ fontSize: 18 }} className="shrink-0" />
+          {!collapsed && "About"}
+        </button>
+      </div>
+
       {/* Profile avatar */}
       {user && (
         <div className="p-3 border-t border-sidebar-border">
@@ -298,6 +317,9 @@ export default function Sidebar() {
           </button>
         </div>
       )}
+
+      {/* About Dialog */}
+      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </aside>
   );
 }

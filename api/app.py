@@ -161,6 +161,7 @@ def create_api_app():
     from api.routes.ml_anomaly import ml_anomaly_bp
     from api.routes.ml_feedback import ml_feedback_bp
     from api.routes.utilities import utilities_bp
+    from api.routes.version import version_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
@@ -183,6 +184,7 @@ def create_api_app():
     app.register_blueprint(ml_anomaly_bp, url_prefix="/api/projects")
     app.register_blueprint(ml_feedback_bp, url_prefix="/api/projects")
     app.register_blueprint(utilities_bp, url_prefix="/api/utilities")
+    app.register_blueprint(version_bp, url_prefix="/api")
     
     # Create feedback tables
     with app.app_context():

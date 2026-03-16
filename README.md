@@ -1,5 +1,8 @@
 # ParseMyLog-AI
 
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](./VERSION)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
 A modern web application for comprehensive log analysis with semantic search powered by a **rg+Drain3 RAG pipeline** and **Qdrant vector database**. Features a **React 19** frontend with Material UI, a **Flask REST API** backend, multi-CPE support, machine learning anomaly detection, and a NATCO-based pattern governance system.
 
 **[📚 Full Documentation](./docs/)** | **[🚀 Quick Start](./docs/QUICK_START.md)** | **[🏗️ Architecture](./docs/ARCHITECTURE.md)** | **[✨ Features](./docs/FEATURES.md)**
@@ -282,6 +285,16 @@ We welcome contributions! Please see our contribution guidelines:
 - **Backend:** Unit tests in `api/tests/`, integration tests in `api/tests/integration/`
 - **Frontend:** Jest for unit tests, Playwright for E2E
 - Aim for >80% code coverage on new code
+
+---
+
+## Versioning
+
+ParseMyLog-AI follows [Semantic Versioning](https://semver.org/). The current version is **1.0.0**.
+
+- View version info: Click the "About" button in the sidebar
+- Version file: [`VERSION`](./VERSION)
+- Update guide: [`VERSION_MANAGEMENT.md`](./VERSION_MANAGEMENT.md)
 
 ---
 
