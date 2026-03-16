@@ -655,3 +655,251 @@ def get_aggregated_sample_logs(project_id, domain, template):
         "samples": samples
     }), 200
 
+
+# ---------- Global Export ----------
+
+@patterns_bp.route("/<project_id>/patterns/export-global", methods=["GET"])
+@jwt_required()
+def export_global_patterns(project_id):
+    """
+    Export ALL domain patterns across all CPEs to Excel.
+    Creates one sheet per source filename with an index sheet.
+    
+    Returns: Excel file (.xlsx) with:
+        - Index sheet: Domain groups, files, and navigation links
+        - Data sheets: One per source filename with columns:
+          Domain Name | File Name | Pattern | Frequency | CPE Count | Sample Log Lines
+    """
+    import re
+    from datetime import datetime
+    from io import BytesIO
+    from flask import send_file
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    
+    # Helper function to clean strings for Excel
+    ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+    
+    def clean_for_excel(text):
+        """Remove ANSI codes and illegal characters for Excel."""
+        if not isinstance(text, str):
+            text = str(text)
+        # Remove ANSI color codes
+        text = ANSI_RE.sub("", text)
+        # Remove control characters (except newline, tab, carriage return)
+        text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', '', text)
+        return text
+    
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    
+    # Build list of (label, directory) pairs to scan
+    cpes = dbm.list_project_cpes(project_id)
+    scan_entries: list[tuple[str, Path]] = []
+    if cpes:
+        for cpe in cpes:
+            scan_entries.append((cpe.serial, _project_dir(user_id, project_id, cpe.serial)))
+    else:
+        # No CPE records — fall back to project root (single-CPE uploads)
+        project_root = _project_dir(user_id, project_id)
+        scan_entries.append(("root", project_root))
+    
+    if not scan_entries:
+        return jsonify({"error": "No CPE data found"}), 404
+    
+    total_cpes = len(scan_entries)
+    
+    # Data structure: { filename: { domain: [pattern_records] } }
+    file_data = {}
+    # Track which domains have which files
+    domain_files = {}
+    
+    # Iterate through all domains and collect pattern data
+    for domain in _ALL_DOMAINS:
+        domain_label = _DOMAIN_LABELS.get(domain, domain)
+        domain_files[domain_label] = set()
+        
+        # Aggregate patterns from all CPEs for this domain
+        pattern_data = {}  # template -> {occurrence_count, cpe_details: {serial: count}}
+        
+        for label, entry_dir in scan_entries:
+            df = _load_domain_parquet(entry_dir, domain)
+            
+            if df.empty or "template" not in df.columns:
+                continue
+            
+            # Track source files
+            if "source_file" in df.columns:
+                source_files = df["source_file"].dropna().unique()
+                domain_files[domain_label].update(source_files)
+            
+            # Count occurrences per template for this CPE
+            template_counts = df["template"].value_counts()
+            
+            for template, count in template_counts.items():
+                template_str = str(template)
+                
+                # Get source file(s) for this template
+                if "source_file" in df.columns:
+                    template_df = df[df["template"] == template]
+                    source_file = template_df["source_file"].iloc[0] if len(template_df) > 0 else "unknown"
+                else:
+                    source_file = "unknown"
+                
+                # Initialize structure
+                if source_file not in file_data:
+                    file_data[source_file] = {}
+                if domain_label not in file_data[source_file]:
+                    file_data[source_file][domain_label] = {}
+                
+                if template_str not in file_data[source_file][domain_label]:
+                    file_data[source_file][domain_label][template_str] = {
+                        "occurrence_count": 0,
+                        "cpe_details": {},
+                        "sample_logs": []
+                    }
+                
+                file_data[source_file][domain_label][template_str]["occurrence_count"] += int(count)
+                file_data[source_file][domain_label][template_str]["cpe_details"][label] = int(count)
+                
+                # Get sample logs (up to 3) from first CPE
+                if len(file_data[source_file][domain_label][template_str]["sample_logs"]) == 0:
+                    template_df = df[df["template"] == template]
+                    for _, row in template_df.head(3).iterrows():
+                        sample_log = str(row.get("loglines", ""))
+                        if sample_log:
+                            file_data[source_file][domain_label][template_str]["sample_logs"].append(sample_log)
+    
+    if not file_data:
+        return jsonify({"error": "No pattern data found"}), 404
+    
+    # Create Excel workbook
+    wb = Workbook()
+    wb.remove(wb.active)  # Remove default sheet
+    
+    # Create Index sheet
+    index_sheet = wb.create_sheet("INDEX", 0)
+    
+    # Style definitions
+    header_font = Font(bold=True, size=12, color="FFFFFF")
+    header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+    link_font = Font(color="0563C1", underline="single")
+    
+    # Index sheet headers
+    index_sheet["A1"] = "DOMAIN"
+    index_sheet["B1"] = "FILES"
+    
+    for cell in ["A1", "B1"]:
+        index_sheet[cell].font = header_font
+        index_sheet[cell].fill = header_fill
+        index_sheet[cell].alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Build index data
+    index_row = 2
+    for domain_label in sorted(domain_files.keys()):
+        files = sorted(domain_files[domain_label])
+        if not files:
+            continue
+        
+        # First file row - include domain name
+        first_file = True
+        for filename in files:
+            if filename in file_data and domain_label in file_data[filename]:
+                # Sanitize sheet name
+                sheet_name = filename[:31].replace("/", "_").replace("\\", "_").replace("*", "_").replace("?", "_").replace("[", "_").replace("]", "_")
+                
+                if first_file:
+                    index_sheet[f"A{index_row}"] = domain_label
+                    index_sheet[f"A{index_row}"].font = Font(bold=True)
+                    first_file = False
+                
+                # Merge filename and hyperlink into single cell
+                index_sheet[f"B{index_row}"] = f'=HYPERLINK("#{sheet_name}!A1", "{filename}")'
+                index_sheet[f"B{index_row}"].font = link_font
+                
+                index_row += 1
+    
+    # Adjust column widths for index
+    index_sheet.column_dimensions["A"].width = 20
+    index_sheet.column_dimensions["B"].width = 50
+    
+    # Create data sheets (one per file)
+    for filename in sorted(file_data.keys()):
+        # Sanitize sheet name (max 31 chars, no special chars)
+        sheet_name = filename[:31].replace("/", "_").replace("\\", "_").replace("*", "_").replace("?", "_").replace("[", "_").replace("]", "_")
+        
+        data_sheet = wb.create_sheet(sheet_name)
+        
+        # Headers - removed "Domain Name" column
+        headers = ["File Name", "Pattern", "Frequency", "CPE Count", "Sample Log Lines"]
+        for col_idx, header in enumerate(headers, start=1):
+            cell = data_sheet.cell(row=1, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Data rows
+        row = 2
+        for domain_label in sorted(file_data[filename].keys()):
+            patterns = file_data[filename][domain_label]
+            
+            # Sort patterns by frequency (descending)
+            sorted_patterns = sorted(
+                patterns.items(),
+                key=lambda x: x[1]["occurrence_count"],
+                reverse=True
+            )
+            
+            for template, data in sorted_patterns:
+                cpe_count = len(data["cpe_details"])
+                cpe_count_str = f"{cpe_count}/{total_cpes}"
+                # Use newlines instead of pipe separator for sample logs
+                sample_logs_str = "\n".join(data["sample_logs"][:3])
+                
+                # Clean all string values for Excel compatibility
+                # Removed column 1 (domain_label) per user request
+                data_sheet.cell(row=row, column=1, value=clean_for_excel(filename))
+                data_sheet.cell(row=row, column=2, value=clean_for_excel(template))
+                data_sheet.cell(row=row, column=3, value=data["occurrence_count"])
+                data_sheet.cell(row=row, column=4, value=cpe_count_str)
+                data_sheet.cell(row=row, column=5, value=clean_for_excel(sample_logs_str))
+                
+                # Enable text wrapping for sample logs column
+                data_sheet.cell(row=row, column=5).alignment = Alignment(wrap_text=True, vertical="top")
+                
+                row += 1
+        
+        # Adjust column widths
+        data_sheet.column_dimensions["A"].width = 30
+        data_sheet.column_dimensions["B"].width = 80
+        data_sheet.column_dimensions["C"].width = 12
+        data_sheet.column_dimensions["D"].width = 12
+        data_sheet.column_dimensions["E"].width = 100
+        
+        # Freeze first row
+        data_sheet.freeze_panes = "A2"
+        
+        # Enable auto-filter
+        data_sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row-1}"
+    
+    # Save to BytesIO
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    # Generate filename in format: project_name-patterns-YYYYMMDD.xlsx
+    timestamp = datetime.now().strftime("%Y%m%d")
+    # Sanitize project name for filename (replace spaces and special chars)
+    safe_project_name = re.sub(r'[^\w\-]', '_', project.name)
+    filename = f"{safe_project_name}-patterns-{timestamp}.xlsx"
+    
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+

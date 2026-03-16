@@ -305,6 +305,37 @@ export default function PatternPage() {
     }
   };
 
+  const handleGlobalExport = async () => {
+    if (!projectId) return;
+    
+    try {
+      const response = await patternsApi.exportGlobal(projectId);
+      const blob = new Blob([response.data]);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Get filename from Content-Disposition header, fallback to default
+      let filename = 'patterns-export.xlsx';
+      const contentDisposition = response.headers['content-disposition'];
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1];
+        }
+      }
+      
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Global export failed:', error);
+      alert('Failed to export. Please try again.');
+    }
+  };
+
   // Reset when switching view modes or changing domain in aggregated view
   useEffect(() => {
     if (viewMode === "aggregated") {
@@ -319,7 +350,19 @@ export default function PatternPage() {
     <div className="p-4 space-y-3 max-w-full">
       {/* View Mode Toggle - Modernized and Compact */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold">Pattern Analysis</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold">Pattern Analysis</h2>
+          {viewMode === "aggregated" && projectId && (
+            <button
+              onClick={handleGlobalExport}
+              title="Export all domains to Excel with index (grouped by file)"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+            >
+              <DownloadIcon style={{ fontSize: 14 }} />
+              Export ALL
+            </button>
+          )}
+        </div>
         <div className="inline-flex items-center bg-muted rounded-lg p-0.5 gap-0.5">
           <button
             onClick={() => setViewMode("single")}

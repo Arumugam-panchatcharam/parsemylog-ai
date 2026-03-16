@@ -420,6 +420,10 @@ export const patternsApi = {
       `/projects/${projectId}/domains/${domain}/aggregated/${encodeURIComponent(template)}/sample-logs`,
       { params: { limit } }
     ),
+  exportGlobal: (projectId: string) =>
+    api.get<Blob>(`/projects/${projectId}/patterns/export-global`, {
+      responseType: 'blob',
+    }),
 };
 
 // ---------- Telemetry ----------

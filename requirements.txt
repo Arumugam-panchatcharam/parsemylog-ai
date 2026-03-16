@@ -52,8 +52,9 @@ pydantic==2.11.9
 pydantic_core==2.33.2
 typing_extensions==4.15.0
 
-# File handling
+# File handling (Excel support)
 openpyxl==3.1.5
+et-xmlfile==2.0.0  # Required by openpyxl for XML handling
 
 # Supporting dependencies
 annotated-types==0.7.0

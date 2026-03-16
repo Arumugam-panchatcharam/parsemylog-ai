@@ -25,7 +25,6 @@ files:
   - "*VPNManagerLog.txt*"
   - "*IPv6PrivacyLog.txt*"
   - "*network_snapshot.txt*"
-  - "*wifi_snapshot.txt*"
   - "*qos_config.log*"
   - "*rtrouted.log*"
   - "*client.sh-log*"
