@@ -428,7 +428,15 @@ export default function LogViewerPage() {
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0 flex-wrap">
         <div className="flex items-center gap-1 border border-input rounded-lg bg-background px-2 py-1 flex-1 min-w-[200px] max-w-md focus-within:ring-1 focus-within:ring-ring">
           <SearchIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
-          <input value={searchPattern} onChange={(e) => setSearchPattern(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} placeholder="Search (regex)..." title="Search logs with regex pattern (press Enter to search)" className="flex-1 bg-transparent outline-none text-xs min-w-0" />
+          <input
+            data-command-search
+            value={searchPattern}
+            onChange={(e) => setSearchPattern(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doSearch()}
+            placeholder="Search (regex)..."
+            title="Search logs with regex pattern (press Enter to search)"
+            className="min-w-0 flex-1 bg-transparent text-xs outline-none"
+          />
           <button onClick={() => doSearch()} disabled={!searchPattern.trim() || (!searchAllFiles && !selectedFile)} title="Execute search" className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0 disabled:opacity-50">Go</button>
         </div>
         <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer whitespace-nowrap" title="Search across all log files in the current CPE">

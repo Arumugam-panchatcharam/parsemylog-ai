@@ -117,7 +117,7 @@ export default function TimeZoneBar() {
   );
 
   return (
-    <div className="border-b border-border bg-card">
+    <div className="bg-card">
       {/* Toggle button row */}
       <button
         onClick={toggleExpanded}

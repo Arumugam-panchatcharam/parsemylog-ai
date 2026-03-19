@@ -1,45 +1,59 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { ProjectProvider } from "@/hooks/useProject";
 import { CPEProvider } from "@/hooks/useCPE";
 import AppLayout from "@/components/layout/AppLayout";
-import LoginPage from "@/pages/LoginPage";
-import DashboardPage from "@/pages/DashboardPage";
-import LogViewerPage from "@/pages/LogViewerPage";
-import PatternPage from "@/pages/PatternPage";
-import TelemetryPage from "@/pages/TelemetryPage";
-import AIAnalysisPage from "@/pages/AIAnalysisPage";
-import PatternAnalyzerPage from "@/pages/PatternAnalyzerPage";
-import CPEOverviewPage from "@/pages/CPEOverviewPage";
-import AdminPage from "@/pages/AdminPage";
-import ProfilePage from "@/pages/ProfilePage";
-import ChatPage from "@/pages/ChatPage";
-import PcapAnalyzerPage from "@/pages/PcapAnalyzerPage";
-import TelemetryCsvAnalyzerPage from "@/pages/TelemetryCsvAnalyzerPage";
-import BatchJobsPage from "@/pages/BatchJobsPage";
-import BatchJobDetailPage from "@/pages/BatchJobDetailPage";
-import KnowledgeGraphPage from "@/pages/KnowledgeGraphPage";
-import IssueAnalysisPage from "@/pages/IssueAnalysisPage";
-import MLPipelinePage from "@/pages/MLPipelinePage";
-import type { ReactNode } from "react";
+import { ErrorBoundary, Loading } from "@/components/ui";
+import {
+  QUERY_RETRY_DEFAULT,
+  QUERY_STALE_TIME_MS,
+} from "@/lib/constants";
+
+const LoginPage = lazy(() => import("@/pages/LoginPage"));
+const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
+const LogViewerPage = lazy(() => import("@/pages/LogViewerPage"));
+const PatternPage = lazy(() => import("@/pages/PatternPage"));
+const TelemetryPage = lazy(() => import("@/pages/TelemetryPage"));
+const AIAnalysisPage = lazy(() => import("@/pages/AIAnalysisPage"));
+const PatternAnalyzerPage = lazy(() => import("@/pages/PatternAnalyzerPage"));
+const CPEOverviewPage = lazy(() => import("@/pages/CPEOverviewPage"));
+const AdminPage = lazy(() => import("@/pages/AdminPage"));
+const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
+const ChatPage = lazy(() => import("@/pages/ChatPage"));
+const PcapAnalyzerPage = lazy(() => import("@/pages/PcapAnalyzerPage"));
+const TelemetryCsvAnalyzerPage = lazy(() => import("@/pages/TelemetryCsvAnalyzerPage"));
+const BatchJobsPage = lazy(() => import("@/pages/BatchJobsPage"));
+const BatchJobDetailPage = lazy(() => import("@/pages/BatchJobDetailPage"));
+const KnowledgeGraphPage = lazy(() => import("@/pages/KnowledgeGraphPage"));
+const IssueAnalysisPage = lazy(() => import("@/pages/IssueAnalysisPage"));
+const MLPipelinePage = lazy(() => import("@/pages/MLPipelinePage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
-      retry: 1,
+      staleTime: QUERY_STALE_TIME_MS,
+      retry: QUERY_RETRY_DEFAULT,
       refetchOnWindowFocus: false,
     },
   },
 });
 
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center p-8">
+      <Loading label="Loading page…" size="lg" />
+    </div>
+  );
+}
+
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
   if (isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center">
-        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+      <div className="flex h-screen items-center justify-center">
+        <Loading size="md" label="Checking session…" />
       </div>
     );
   }
@@ -48,7 +62,13 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
 function AdminRoute({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center p-8">
+        <Loading label="Loading…" />
+      </div>
+    );
+  }
   if (!user?.is_admin) return <Navigate to="/dashboard" />;
   return <>{children}</>;
 }
@@ -58,15 +78,18 @@ function AppRoutes() {
 
   if (isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center">
-        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+      <div className="flex h-screen items-center justify-center">
+        <Loading size="md" label="Checking session…" />
       </div>
     );
   }
 
   return (
     <Routes>
-      <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <LoginPage />} />
+      <Route
+        path="/login"
+        element={user ? <Navigate to="/dashboard" /> : <LoginPage />}
+      />
 
       <Route
         element={
@@ -80,7 +103,14 @@ function AppRoutes() {
         <Route path="/pcap" element={<PcapAnalyzerPage />} />
         <Route path="/telemetry-csv" element={<TelemetryCsvAnalyzerPage />} />
         <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+        <Route
+          path="/admin"
+          element={
+            <AdminRoute>
+              <AdminPage />
+            </AdminRoute>
+          }
+        />
         <Route path="/projects/:projectId/batch-jobs" element={<BatchJobsPage />} />
         <Route path="/projects/:projectId/batch-jobs/:jobId" element={<BatchJobDetailPage />} />
         <Route path="/workspace/viewer" element={<LogViewerPage />} />
@@ -105,9 +135,13 @@ export default function App() {
       <AuthProvider>
         <ProjectProvider>
           <CPEProvider>
-            <BrowserRouter>
-              <AppRoutes />
-            </BrowserRouter>
+            <ErrorBoundary fallbackTitle="Application error">
+              <BrowserRouter>
+                <Suspense fallback={<RouteFallback />}>
+                  <AppRoutes />
+                </Suspense>
+              </BrowserRouter>
+            </ErrorBoundary>
           </CPEProvider>
         </ProjectProvider>
       </AuthProvider>

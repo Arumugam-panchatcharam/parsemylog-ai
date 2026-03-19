@@ -194,6 +194,8 @@ python run_dev.py
 
 **Access:** [http://localhost:5173](http://localhost:5173) (Vite dev server with HMR)
 
+**Frontend:** Shared UI primitives are in `frontend/src/components/ui/` (Tailwind + MUI hybrid). Routes use lazy loading for smaller initial bundles. Shortcuts: **Ctrl/Cmd+/** opens About; **Ctrl/Cmd+K** focuses the Log Viewer search field when present (`data-command-search`).
+
 ---
 
 📖 **[Full Quick Start Guide →](./docs/QUICK_START.md)** (includes troubleshooting, common tasks, and advanced setup)

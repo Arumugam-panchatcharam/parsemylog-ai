@@ -6,7 +6,18 @@ import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { cn } from "@/lib/utils";
+import axios from "axios";
 import { utilitiesApi, type MacLookupResult, type OuiStatus } from "@/api/endpoints";
+import { getErrorMessage } from "@/lib/errors";
+import { MAC_LOOKUP_MAX_COUNT, OUI_SUCCESS_TOAST_MS } from "@/lib/constants";
+
+function getApiErrorMessage(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as { error?: string; message?: string } | undefined;
+    return data?.error ?? data?.message ?? err.message ?? "Request failed";
+  }
+  return getErrorMessage(err);
+}
 
 export default function MacLookupBar() {
   const [expanded, setExpanded] = useState(() => {
@@ -69,16 +80,16 @@ export default function MacLookupBar() {
         return;
       }
 
-      if (macs.length > 100) {
-        setError("Maximum 100 MAC addresses per lookup");
+      if (macs.length > MAC_LOOKUP_MAX_COUNT) {
+        setError(`Maximum ${MAC_LOOKUP_MAX_COUNT} MAC addresses per lookup`);
         setLoading(false);
         return;
       }
 
       const response = await utilitiesApi.macLookup(macs);
       setResults(response.data);
-    } catch (err: any) {
-      setError(err.response?.data?.error || err.message || "Lookup failed");
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err) || "Lookup failed");
     } finally {
       setLoading(false);
     }
@@ -105,12 +116,12 @@ export default function MacLookupBar() {
         // Show success message briefly
         const successMsg = `✓ Updated: ${response.data.entries?.toLocaleString()} entries (${response.data.size_mb} MB)`;
         setError(successMsg);
-        setTimeout(() => setError(null), 5000);
+        setTimeout(() => setError(null), OUI_SUCCESS_TOAST_MS);
       } else {
         setError(response.data.message || "Update failed");
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || err.message || "Update failed");
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err) || "Update failed");
     } finally {
       setUpdating(false);
     }
@@ -130,12 +141,12 @@ export default function MacLookupBar() {
         // Show success message briefly
         const successMsg = `✓ Reloaded: ${response.data.entries?.toLocaleString()} entries`;
         setError(successMsg);
-        setTimeout(() => setError(null), 5000);
+        setTimeout(() => setError(null), OUI_SUCCESS_TOAST_MS);
       } else {
         setError(response.data.message || "Reload failed");
       }
-    } catch (err: any) {
-      setError(err.response?.data?.message || err.message || "Reload failed");
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err) || "Reload failed");
     } finally {
       setReloading(false);
     }
@@ -186,7 +197,7 @@ export default function MacLookupBar() {
   }, [results]);
 
   return (
-    <div className="border-b border-border bg-card">
+    <div className="bg-card">
       {/* Toggle button row */}
       <button
         onClick={toggleExpanded}

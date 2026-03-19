@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { projectsApi, natcoApi } from "@/api/endpoints";
@@ -6,6 +6,11 @@ import type { NatcoInfo } from "@/api/endpoints";
 import { useAuth } from "@/hooks/useAuth";
 import { useProject } from "@/hooks/useProject";
 import { formatDate } from "@/lib/utils";
+import { Button } from "@/components/ui/Button";
+import { Empty } from "@/components/ui/Empty";
+import { FullPageLoading } from "@/components/ui/Loading";
+import { PageContainer } from "@/components/ui/PageContainer";
+import { PageHeader } from "@/components/ui/PageHeader";
 import AddIcon from "@mui/icons-material/Add";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -38,19 +43,18 @@ export default function DashboardPage() {
     queryFn: async () => (await natcoApi.list()).data,
   });
 
-  // Auto-select first NATCO if only one exists
-  useEffect(() => {
-    if (natcos && natcos.length === 1 && newNatcoId === null) {
-      setNewNatcoId(natcos[0].id);
-    }
-  }, [natcos, newNatcoId]);
+  const resolvedNatcoId = useMemo(() => {
+    if (newNatcoId !== null) return newNatcoId;
+    if (natcos?.length === 1) return natcos[0].id;
+    return null;
+  }, [newNatcoId, natcos]);
 
   const createMutation = useMutation({
     mutationFn: () => {
-      if (!newNatcoId) {
+      if (!resolvedNatcoId) {
         throw new Error("NATCO selection is required");
       }
-      return projectsApi.create(newName, newDesc, newNatcoId, newProjectType);
+      return projectsApi.create(newName, newDesc, resolvedNatcoId, newProjectType);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects", user?.id] });
@@ -76,52 +80,50 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FolderOpenIcon style={{ fontSize: 28 }} /> My Projects
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Welcome back, {user?.username}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => refetch()}
-            className="p-2 border border-border rounded-lg hover:bg-muted transition-colors"
-            title="Refresh"
-          >
-            <RefreshIcon style={{ fontSize: 18 }} />
-          </button>
-          <button
-            onClick={() => setShowCreate(true)}
-            title="Create a new project"
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-opacity"
-          >
-            <AddIcon style={{ fontSize: 18 }} /> New Project
-          </button>
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title={
+          <>
+            <FolderOpenIcon style={{ fontSize: 28 }} aria-hidden />
+            My Projects
+          </>
+        }
+        description={`Welcome back, ${user?.username ?? ""}`}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="icon"
+              title="Refresh"
+              aria-label="Refresh projects"
+              onClick={() => refetch()}
+            >
+              <RefreshIcon style={{ fontSize: 18 }} />
+            </Button>
+            <Button title="Create a new project" onClick={() => setShowCreate(true)}>
+              <AddIcon style={{ fontSize: 18 }} /> New Project
+            </Button>
+          </>
+        }
+      />
 
-      {/* Loading */}
-      {isLoading && (
-        <div className="text-center py-12 text-muted-foreground">Loading projects...</div>
-      )}
+      {isLoading ? (
+        <FullPageLoading label="Loading projects…" />
+      ) : (
+        <>
+          {projects?.length === 0 ? (
+            <Empty
+              icon={<FolderOpenIcon style={{ fontSize: 48, color: "#9aa0a6" }} />}
+              title="No projects yet"
+              description="Create your first project to get started"
+              actionLabel="New project"
+              onAction={() => setShowCreate(true)}
+            />
+          ) : null}
 
-      {/* Empty State */}
-      {!isLoading && projects?.length === 0 && (
-        <div className="text-center py-16 bg-card border border-border rounded-2xl">
-          <FolderOpenIcon style={{ fontSize: 48, color: "#9aa0a6" }} className="mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-muted-foreground">No projects yet</h3>
-          <p className="text-sm text-muted-foreground mt-1">Create your first project to get started</p>
-        </div>
-      )}
-
-      {/* Project Grid */}
+          {projects && projects.length > 0 ? (
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
-        {projects?.map((p: { id: string; name: string; description: string; created_at: string; project_type?: string; natco?: { code: string; name: string } | null }) => (
+        {projects.map((p: { id: string; name: string; description: string; created_at: string; project_type?: string; natco?: { code: string; name: string } | null }) => (
           <div key={p.id} className="bg-card border border-border rounded-2xl mat-card">
             <div className="p-4">
               <div className="flex items-start justify-between mb-2">
@@ -184,6 +186,9 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+          ) : null}
+        </>
+      )}
 
       {/* Create Modal */}
       {showCreate && (
@@ -216,7 +221,7 @@ export default function DashboardPage() {
                     <PublicIcon style={{ fontSize: 16 }} /> NATCO <span className="text-red-500">*</span>
                   </label>
                   <select
-                    value={newNatcoId ?? ""}
+                    value={resolvedNatcoId !== null ? String(resolvedNatcoId) : ""}
                     onChange={(e) => setNewNatcoId(e.target.value ? Number(e.target.value) : null)}
                     title="Select a country/operator for pattern management"
                     className="w-full px-3 py-2.5 border border-input rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring text-sm"
@@ -269,7 +274,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div className="flex gap-2 pt-2">
-                <button type="submit" disabled={createMutation.isPending || !newName.trim() || !newNatcoId} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">
+                <button type="submit" disabled={createMutation.isPending || !newName.trim() || !resolvedNatcoId} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">
                   {createMutation.isPending ? "Creating..." : "Create Project"}
                 </button>
                 <button type="button" onClick={() => setShowCreate(false)} className="flex-1 py-2.5 border border-border rounded-lg hover:bg-muted">
@@ -303,6 +308,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }
