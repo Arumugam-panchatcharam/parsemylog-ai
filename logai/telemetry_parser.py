@@ -71,27 +71,31 @@ _OLD_PREFIX_RE = re.compile(
 # Time format inside JSON reports
 _REPORT_TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
-# Default config path
-from logai.utils.constants import BASE_DIR
-_DEFAULT_CONFIG_PATH = Path(BASE_DIR) / "configs" / "telemetry_report_fields.yaml"
+from logai.config import LogAIConfig, default_config
 
 
 # ---------------------------------------------------------------------------
 # YAML config loading
 # ---------------------------------------------------------------------------
 
-def load_report_field_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
+def load_report_field_config(
+    config_path: Optional[Path] = None,
+    config: Optional[LogAIConfig] = None,
+) -> Dict[str, Any]:
     """
     Load the telemetry report field configuration from YAML.
 
     Args:
-        config_path: Path to YAML config. Defaults to the bundled
-                     ``configs/telemetry_report_fields.yaml``.
+        config_path: Path to YAML config. Overrides config when provided.
+        config: Optional LogAIConfig for portable path resolution.
 
     Returns:
         Parsed config dict with ``profile_filter`` and ``field_groups``.
     """
-    path = config_path or _DEFAULT_CONFIG_PATH
+    if config_path is not None:
+        path = Path(config_path)
+    else:
+        path = (config or default_config()).resolve_telemetry_fields_config_path()
     if not path.exists():
         logger.warning(f"[TelemetryParser] Config not found at {path}, using empty config")
         return {"profile_filter": "Advanced_dynamic", "field_groups": []}

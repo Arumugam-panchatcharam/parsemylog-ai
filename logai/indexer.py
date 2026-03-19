@@ -61,23 +61,17 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from logai.config import LogAIConfig, default_config
 from logai.embedding import (
-    QdrantEmbeddingStore,
     EmbeddingConfig,
+    QdrantEmbeddingStore,
     update_file_status,
 )
 from logai.pattern import Pattern
-from logai.rg_scanner import RgScanner, RgMatch, check_rg_available
-from logai.utils.constants import (
-    BASE_DIR,
-    NON_TEXT_EXTENSIONS,
-    IGNORE_FILENAME_LIST,
-)
+from logai.rg_scanner import RgMatch, RgScanner, check_rg_available
+from logai.utils.constants import IGNORE_FILENAME_LIST, NON_TEXT_EXTENSIONS
 
 logger = logging.getLogger(__name__)
-
-# Default path to rg pattern configs (relative to project root)
-DEFAULT_RG_PATTERNS_DIR = Path(BASE_DIR) / "configs" / "rg_patterns"
 
 
 class RagIndexer:
@@ -114,7 +108,8 @@ class RagIndexer:
         model_path: Optional[str] = None,
         shared_model: Optional[Any] = None,
         extra_metadata: Optional[Dict[str, Any]] = None,
-    ):
+        config: Optional[LogAIConfig] = None,
+    ) -> None:
         """
         Initialize the RAG indexer.
 
@@ -127,27 +122,29 @@ class RagIndexer:
             qdrant_url: Qdrant server URL (default: http://localhost:6333).
             collection_name: Qdrant collection name. If None, derives from
                            project_dir name.
-            rg_patterns_dir: Directory with rg pattern YAML files. Defaults to
-                           configs/rg_patterns/ in project root.
+            rg_patterns_dir: Directory with rg pattern YAML files. Overrides
+                           config when provided.
             model_path: Optional local path for the embedding model.
             shared_model: Optional pre-loaded SentenceTransformer instance.
                         Strongly recommended for multi-user deployments.
             extra_metadata: Optional metadata dict to attach to all indexed vectors
                           (e.g., {"cpe_serial": "CP2318ADA7F"} for multi-CPE projects).
+            config: Optional LogAIConfig for portable path resolution.
 
         Raises:
             RuntimeError: If ripgrep binary is not available.
         """
-        self.project_dir = project_dir
+        self.project_dir = Path(project_dir)
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self.extra_metadata = extra_metadata or {}
+        self._config = config or default_config()
 
         # Derive collection name from project directory if not specified
         if collection_name is None:
-            collection_name = f"project_{project_dir.name}"
+            collection_name = f"project_{self.project_dir.name}"
 
         # Initialize RgScanner
-        patterns_dir = rg_patterns_dir or DEFAULT_RG_PATTERNS_DIR
+        patterns_dir = rg_patterns_dir or self._config.resolve_rg_patterns_dir()
         if not check_rg_available():
             raise RuntimeError(
                 "ripgrep binary 'rg' not found. "
@@ -280,7 +277,10 @@ class RagIndexer:
             try:
                 # Parse with Drain3
                 update_file_status(self.project_dir, original_name, "queued")
-                parser = Pattern(project_dir=self.project_dir)
+                parser = Pattern(
+                    project_dir=self.project_dir,
+                    config=self._config,
+                )
                 result_df, result_df_path = parser.parse_logs(file_path)
 
                 if result_df is not None and not result_df.empty and result_df_path:
@@ -439,7 +439,11 @@ class RagIndexer:
         # Stage 2: Drain3 on all filtered lines (per-domain state file)
         matched_lines = [m.match_text for m in matches]
         source_files = [Path(m.file).name for m in matches]  # original filenames
-        parser = Pattern(project_dir=self.project_dir, state_name=domain)
+        parser = Pattern(
+            project_dir=self.project_dir,
+            state_name=domain,
+            config=self._config,
+        )
         source_name = f"{domain}_rg"
         df, parquet_path = parser.parse_lines(
             matched_lines, source_name, source_files=source_files

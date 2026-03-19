@@ -12,8 +12,9 @@ Currently supports:
     - selfHeal.txt: IPv6 support, Telemetry 2.0 flag, CPU usage samples, MemTotal/MemFree/MemAvailable
     - telemetry_marker.txt: WAN mode, Processor Temperature, Flash Usage, Available Memory, Process Memory by feature
 
-The extracted info is used by the Telemetry tab to enrich the Device Info card
-and by the Regex Analyzer page for reboot boundary detection.
+Library usage (multi-agent / portable):
+    All parse_* functions accept raw content strings. Use extract_device_info_from_paths()
+    for explicit path-based extraction without assuming project structure.
 """
 
 from __future__ import annotations
@@ -915,6 +916,144 @@ def find_and_build_fallback_device_info(
         )
 
     _write_json_cache(cache_path, device_info)
+    return device_info
+
+
+def extract_device_info_from_paths(
+    paths: Dict[str, Path],
+    *,
+    use_cache: bool = False,
+    cache_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """
+    Portable API: extract device info from explicit file paths.
+
+    Use in multi-agent environments where log files are downloaded to
+    arbitrary locations. No assumption about project_dir structure.
+
+    Args:
+        paths: Dict mapping logical names to file paths, e.g.:
+            {"PARODUSlog": Path("/tmp/logs/PARODUSlog.txt")},
+            {"version": Path("/tmp/logs/version.txt")},
+            {"telemetry_marker": Path("/tmp/logs/telemetry_marker.txt")},
+            {"parodusStart": Path("/tmp/logs/parodusStart-log.txt")},
+            {"BootTime": Path("/tmp/logs/BootTime.log")},
+            {"Consolelog": Path("/tmp/logs/Consolelog.txt")},
+        use_cache: If True, read/write cache in cache_dir (for repeated calls).
+        cache_dir: Required when use_cache=True.
+
+    Returns:
+        Dict with keys: model, serial, manufacturer, mac, version, wan_type,
+        sdk_version, sw_upgrade, last_reboot_reason, reboots (if BootTime/Consolelog).
+    """
+    device_info: Dict[str, Any] = {}
+
+    def _apply_parodus(parodus: Dict[str, Any]) -> None:
+        mapping = {
+            "hw_model": "model",
+            "serial_number": "serial",
+            "manufacturer": "manufacturer",
+            "mac": "mac",
+            "fw_name": "version",
+            "last_reboot_reason": "last_reboot_reason",
+        }
+        for src_key, dst_key in mapping.items():
+            if parodus.get(src_key):
+                device_info[dst_key] = str(parodus[src_key])
+
+    # PARODUSlog or parodusStart
+    parodus_path = paths.get("PARODUSlog") or paths.get("parodus")
+    if parodus_path and parodus_path.exists():
+        try:
+            raw = parodus_path.read_text(encoding="utf-8", errors="ignore")
+            parodus = parse_parodus_log(raw)
+            if parodus:
+                _apply_parodus(parodus)
+        except OSError as e:
+            logger.warning(f"[InfoExtractor] Error reading PARODUSlog {parodus_path}: {e}")
+
+    if not device_info.get("model") or not device_info.get("serial"):
+        start_path = paths.get("parodusStart") or paths.get("parodus_start")
+        if start_path and start_path.exists():
+            try:
+                raw = start_path.read_text(encoding="utf-8", errors="ignore")
+                start_data = parse_parodus_start_log(raw)
+                if start_data:
+                    _apply_parodus(start_data)
+            except OSError as e:
+                logger.warning(f"[InfoExtractor] Error reading parodusStart {start_path}: {e}")
+
+    # telemetry_marker — WAN mode
+    marker_path = paths.get("telemetry_marker") or paths.get("telemetry_marker_txt")
+    if marker_path and marker_path.exists():
+        try:
+            raw = marker_path.read_text(encoding="utf-8", errors="ignore")
+            wan_mode = parse_wan_mode_from_marker(raw)
+            if wan_mode:
+                device_info["wan_type"] = wan_mode
+        except OSError as e:
+            logger.warning(f"[InfoExtractor] Error reading marker {marker_path}: {e}")
+
+    # version.txt
+    version_path = paths.get("version") or paths.get("version_txt")
+    if version_path and version_path.exists():
+        try:
+            raw = version_path.read_text(encoding="utf-8", errors="ignore")
+            version_info = parse_version_txt(raw)
+            if version_info:
+                if version_info.get("sdk_version"):
+                    device_info["sdk_version"] = version_info["sdk_version"]
+                device_info["sw_upgrade"] = (
+                    f"Yes ({version_info['sw_upgrade_detail']})"
+                    if version_info.get("sw_upgrade_detected")
+                    else "No"
+                )
+                if not device_info.get("model") and version_info.get("machine_name"):
+                    device_info["model"] = version_info["machine_name"]
+        except OSError as e:
+            logger.warning(f"[InfoExtractor] Error reading version {version_path}: {e}")
+
+    # Reboots (BootTime + Consolelog for soft/hard classification)
+    bt_path = paths.get("BootTime") or paths.get("BootTime_log")
+    console_path = paths.get("Consolelog") or paths.get("Consolelog_txt")
+    if bt_path and bt_path.exists():
+        try:
+            raw = bt_path.read_text(encoding="utf-8", errors="ignore")
+            bt_info = parse_boottime_log(raw)
+            reboots: List[Dict[str, str]] = []
+            for cycle in bt_info.get("reboot_history", []):
+                ts = cycle.get("timestamp", "")
+                reason = cycle.get("reason", "unknown")
+                if ts:
+                    reboots.append({"timestamp": ts, "reason": reason})
+            device_info["reboots"] = reboots
+        except OSError as e:
+            logger.warning(f"[InfoExtractor] Error reading BootTime {bt_path}: {e}")
+
+    if device_info.get("reboots") and console_path and console_path.exists():
+        try:
+            from datetime import datetime, timedelta
+
+            raw = console_path.read_text(encoding="utf-8", errors="ignore")
+            soft_ts = parse_consolelog_for_soft_reboots(raw)
+            tolerance = timedelta(minutes=30)
+            for r in device_info.get("reboots", []):
+                r["reboot_type"] = "hard"
+                try:
+                    r_dt = datetime.fromisoformat(r["timestamp"])
+                    for st in soft_ts:
+                        try:
+                            st_dt = datetime.fromisoformat(st)
+                            if abs(r_dt - st_dt) <= tolerance:
+                                r["reboot_type"] = "soft"
+                                break
+                        except (ValueError, TypeError):
+                            continue
+                except (ValueError, TypeError):
+                    pass
+        except OSError as e:
+            logger.warning(f"[InfoExtractor] Error reading Consolelog {console_path}: {e}")
+
     return device_info
 
 

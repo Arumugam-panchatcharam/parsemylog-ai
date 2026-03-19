@@ -26,20 +26,22 @@ Example:
     >>> print(df["template"].value_counts().head())
 """
 
-import re
-import os
+from __future__ import annotations
+
 import logging
-import pandas as pd
-from pathlib import Path
+import re
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import List, Optional, Tuple
 
+import pandas as pd
 from dateutil import parser as dateparser
-
 from drain3 import TemplateMiner
-from drain3.template_miner_config import TemplateMinerConfig
 from drain3.file_persistence import FilePersistence
-import time
+from drain3.template_miner_config import TemplateMinerConfig
+
+from logai.config import LogAIConfig, default_config
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,14 @@ class Pattern:
         preprocess_regex: Regex for extracting timestamps from log lines.
     """
 
-    def __init__(self, project_dir=None, state_name=None, sim_th=None, depth=None):
+    def __init__(
+        self,
+        project_dir: Optional[Path] = None,
+        state_name: Optional[str] = None,
+        sim_th: Optional[float] = None,
+        depth: Optional[int] = None,
+        config: Optional[LogAIConfig] = None,
+    ) -> None:
         """
         Initialize the pattern parser with Drain3 configuration.
 
@@ -71,15 +80,18 @@ class Pattern:
                        others. Defaults to "drain3_state" (shared state).
             sim_th: Unused (kept for backward compatibility).
             depth: Unused (kept for backward compatibility).
+            config: Optional LogAIConfig for portable path resolution.
         """
         self.project_dir = project_dir
-        config = TemplateMinerConfig()
-        # Use absolute path to drain3.ini to work from any working directory
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "drain3.ini")
-        if os.path.exists(config_path):
-            config.load(config_path)
+        self._config = config or default_config()
+        drain3_config_path = self._config.resolve_drain3_config_path()
+        config_obj = TemplateMinerConfig()
+        if drain3_config_path.exists():
+            config_obj.load(str(drain3_config_path))
         else:
-            logger.warning(f"config file not found: {config_path}, using defaults")
+            logger.warning(
+                f"[Pattern] config file not found: {drain3_config_path}, using defaults"
+            )
         self.preprocess_regex = re.compile(
                 r"^(?P<timestamp>("
                 r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"          # 2023-10-02T12:34:56
@@ -94,28 +106,31 @@ class Pattern:
         # Build per-domain state file path
         fname = f"drain3_{state_name}.json" if state_name else "drain3_state.json"
         persistence = None
-        if project_dir and os.path.exists(project_dir):
-            state_path = f"{project_dir}/{fname}"
-            persistence = FilePersistence(state_path)
+        proj_path = Path(project_dir) if project_dir else None
+        if proj_path and proj_path.exists():
+            state_path = proj_path / fname
+            persistence = FilePersistence(str(state_path))
             # Validate the state file is readable; remove if corrupted
-            if os.path.exists(state_path):
+            if state_path.exists():
                 try:
-                    TemplateMiner(persistence, config=config)
+                    TemplateMiner(persistence, config=config_obj)
                 except Exception as e:
                     logger.warning(
                         f"[Pattern] Corrupted drain3 state at {state_path}, "
                         f"removing and starting fresh: {e}"
                     )
                     try:
-                        os.remove(state_path)
+                        state_path.unlink()
                     except OSError:
                         pass
-                    persistence = FilePersistence(state_path)
-        self.template_miner = TemplateMiner(persistence, config=config)
+                    persistence = FilePersistence(str(state_path))
+        self.template_miner = TemplateMiner(persistence, config=config_obj)
         self.log_df = pd.DataFrame()
         self.results = pd.DataFrame()
 
-    def parse_logs(self, fpath):
+    def parse_logs(
+        self, fpath: str | Path
+    ) -> Tuple[pd.DataFrame, Optional[Path]]:
         """
         Parse a full log file: extract timestamps, run Drain3 on every line.
 
@@ -132,7 +147,7 @@ class Pattern:
         tmp_result_file_path = Path(str(fpath) + ".parquet.tmp")
 
         # Return cached result if available
-        if os.path.exists(result_file_path):
+        if result_file_path.exists():
             return pd.read_parquet(result_file_path), result_file_path
 
         self.log_df = self._read_logs(fpath)
@@ -155,7 +170,7 @@ class Pattern:
 
         self.results = self.log_df[['timestamp', 'loglines', 'template', 'parameter_list']].copy()
         self.results.to_parquet(tmp_result_file_path, index=False)
-        os.replace(str(tmp_result_file_path), str(result_file_path))
+        Path(tmp_result_file_path).replace(Path(result_file_path))
 
         try:
             self.template_miner.save_state()
@@ -245,7 +260,7 @@ class Pattern:
 
         # Save to parquet cache (atomic write)
         result_df.to_parquet(tmp_path, index=False)
-        os.replace(str(tmp_path), str(parquet_path))
+        Path(tmp_path).replace(Path(parquet_path))
 
         # Save Drain3 state for incremental learning
         try:
@@ -255,22 +270,26 @@ class Pattern:
 
         return result_df, parquet_path
     
-    def _read_logs(self, fpath):
+    def _read_logs(self, fpath: str | Path) -> pd.DataFrame:
+        """Read log file and convert to DataFrame with timestamp extraction."""
         logdf = pd.DataFrame()
         try:
-            with open(fpath, "r", encoding='utf-8', errors='ignore') as fin:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as fin:
                 lines = fin.readlines()
                 start = time.perf_counter()
                 logdf = self._logs_to_dataframe(lines)
-                end = time.perf_counter()
-                print(f"Execution time: {end - start:.4f} seconds")
-        except Exception as e:
-            print("Read log file failed. Exception {} filename {}".format(e, fpath))
-        #print(logdf)
+                elapsed = time.perf_counter() - start
+                logger.debug(f"[Pattern] _read_logs: {elapsed:.4f}s for {fpath}")
+        except OSError as e:
+            logger.warning(f"[Pattern] Read log file failed: {e} filename={fpath}")
         return logdf
 
 
-    def _logs_to_dataframe(self, log_lines, extra_columns=None):
+    def _logs_to_dataframe(
+        self,
+        log_lines: List[str],
+        extra_columns: Optional[dict[str, List[str]]] = None,
+    ) -> pd.DataFrame:
         """
         Convert raw log lines to a DataFrame with timestamp extraction.
 
@@ -344,9 +363,8 @@ class Pattern:
 
         df["timestamp"] = df["raw_timestamp"].apply(try_parse)
 
-        # Quick diagnostic
         parsed_count = df["timestamp"].notna().sum()
-        print(f"Parsed timestamps: {parsed_count}/{len(df)}")
+        logger.debug(f"[Pattern] Parsed timestamps: {parsed_count}/{len(df)}")
 
         # Step 3: Determine base_time using only parsed timestamps (no forward-fill yet)
         real_times = df["timestamp"].dropna()
@@ -381,7 +399,7 @@ class Pattern:
                 current_year = base_time.year
                 df.loc[syslog_mask, "timestamp"] = df.loc[syslog_mask, "timestamp"].apply(lambda dt: dt.replace(year=current_year))
         except Exception as e:
-            print("Syslog year injection failed:", e)
+            logger.debug(f"[Pattern] Syslog year injection: {e}")
 
         # Step 7: Final normalization: ensure dtype is datetime64[ns] and tz-naive
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").dt.tz_localize(None)
@@ -391,13 +409,13 @@ class Pattern:
 
         remaining_nat = df["timestamp"].isna().sum()
         if remaining_nat:
-            print(f"Remaining NaT timestamps after processing: {remaining_nat}")
+            logger.debug(f"[Pattern] Remaining NaT timestamps: {remaining_nat}")
 
         # Step 9: Cleanup loglines (strip, remove empty lines)
         df = self.cleanup_loglines(df)
         return df
 
-    def cleanup_loglines(self, df):
+    def cleanup_loglines(self, df: pd.DataFrame) -> pd.DataFrame:
         df["loglines"] = df["loglines"].astype(str).str.strip()
         df = df[df["loglines"].ne("")]   # keep non-empty rows only
         df = df[~df["loglines"].eq("\\n")]  # drop literal "\n" if any
@@ -405,33 +423,32 @@ class Pattern:
         df = df.reset_index(drop=True)
         return df
     
-    def _normalize_timestamp(ts_str, base_time=None):
+    @staticmethod
+    def _normalize_timestamp(
+        ts_str: str, base_time: Optional[datetime] = None
+    ) -> Optional[datetime]:
         """
         Try to parse timestamp string into datetime.
         - If it's a float-like uptime (e.g. 175383.097855), convert to base_time + timedelta
         - Else, use dateutil.parser
         """
         try:
-            # hostapd uptime style
             if re.match(r"^\d+\.\d+$", ts_str):
                 if base_time is None:
-                    # Default base: UNIX epoch (1970-01-01)
                     base_time = datetime(1970, 1, 1)
-                seconds = float(ts_str)
-                return base_time + timedelta(seconds=seconds)
-            
-            # try parsing standard datetime formats
+                return base_time + timedelta(seconds=float(ts_str))
             return dateparser.parse(ts_str)
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
 
 def extract_parameters(
     template: str,
     loglines: List[str],
-    project_dir: str = None,
-    domain: str = None,
-) -> List[list]:
+    project_dir: Optional[str | Path] = None,
+    domain: Optional[str] = None,
+    config: Optional[LogAIConfig] = None,
+) -> List[List[str]]:
     """
     Extract positional parameters from log lines using Drain3's native API.
 
@@ -464,20 +481,20 @@ def extract_parameters(
 
     # Load a TemplateMiner with the masking config from drain3.ini.
     # If a saved state exists for the domain, load it for accuracy.
+    cfg = config or default_config()
     try:
-        config = TemplateMinerConfig()
-        # Use absolute path to drain3.ini to work from any working directory
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "drain3.ini")
-        if os.path.exists(config_path):
-            config.load(config_path)
+        miner_config = TemplateMinerConfig()
+        drain3_path = cfg.resolve_drain3_config_path()
+        if drain3_path.exists():
+            miner_config.load(str(drain3_path))
 
         persistence = None
         if project_dir and domain:
-            state_path = os.path.join(str(project_dir), f"drain3_{domain}.json")
-            if os.path.exists(state_path):
-                persistence = FilePersistence(state_path)
+            state_path = Path(project_dir) / f"drain3_{domain}.json"
+            if state_path.exists():
+                persistence = FilePersistence(str(state_path))
 
-        miner = TemplateMiner(persistence, config=config)
+        miner = TemplateMiner(persistence, config=miner_config)
     except Exception as e:
         logger.warning(f"[extract_parameters] Failed to init TemplateMiner: {e}")
         return [[] for _ in loglines]
