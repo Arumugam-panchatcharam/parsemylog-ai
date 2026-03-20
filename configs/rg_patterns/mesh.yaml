@@ -7,7 +7,7 @@ domain: mesh
 # Log files to scan (glob patterns)
 # Leading * handles both clean names and timestamp-prefixed filenames
 files:
-  - "*wifi_vendor_apps.log*"
+  - "*wifi_vendor_apps*"
   - "*airties.log*"
 
 # Number of context lines before/after each match
@@ -26,8 +26,9 @@ literals:
 regex:
   # Generic error/failure indicators
   - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
-  # Generic mesh issue keywords (position-independent)
-  - "\\b(backhaul|topology|steer(ing)?|agent|controller|satellite|extender|pod|offline|unstable|degrade|conflict|easymesh|ieee1905|1905)\\b"
+  # Generic mesh issue keywords (position-independent). Do not add bare \\b1905\\b
+  # (WiFi chanspec counter rows use 1905 as a numeric column — see README.md).
+  - "\\b(backhaul|topology|steer(ing)?|agent|controller|satellite|extender|pod|offline|unstable|degrade|conflict|easymesh|ieee1905)\\b"
   # Backhaul issues
   - "\\b(backhaul)\\s+(down|fail|lost|disconnect|degrade)\\b"
   # Topology changes

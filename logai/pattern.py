@@ -46,6 +46,28 @@ from logai.config import LogAIConfig, default_config
 logger = logging.getLogger(__name__)
 
 
+def _canonical_drain3_templates_per_row(
+    template_miner: TemplateMiner,
+    cluster_ids: List[int],
+    fallbacks: List[str],
+) -> List[str]:
+    """
+    Resolve each row to its cluster's template *after* all ``add_log_message`` calls.
+
+    Drain3 updates a cluster's template when a new line merges (e.g. ``wl0`` vs
+    ``wl1`` → ``<*>``). ``add_log_message`` still returns the template at that
+    instant, so the first row can show ``wl0 ...`` while later rows show
+    ``<*> ...`` for the same cluster. Downstream code uses ``template`` per row
+    for ``nunique`` / ``value_counts``, which would otherwise over-count patterns.
+    """
+    drain = template_miner.drain
+    out: List[str] = []
+    for cid, fb in zip(cluster_ids, fallbacks):
+        cluster = drain.id_to_cluster.get(cid)
+        out.append(cluster.get_template() if cluster is not None else fb)
+    return out
+
+
 class Pattern:
     """
     Drain3-based log template extractor.
@@ -156,17 +178,24 @@ class Pattern:
 
         self.results = pd.DataFrame()
 
-        def extract_template_and_args(logline):
-            """Extract Drain3 template and parameters from a log line."""
+        cluster_ids: List[int] = []
+        fallbacks: List[str] = []
+        for logline in self.log_df["loglines"]:
             result = self.template_miner.add_log_message(logline)
-            template = result["template_mined"]
-            params = self.template_miner.get_parameter_list(template, logline)
-            return template, params
+            cluster_ids.append(result["cluster_id"])
+            fallbacks.append(result["template_mined"])
 
-        # Apply Drain3 to each log line
-        self.log_df[["template", "parameter_list"]] = self.log_df["loglines"].apply(
-            lambda x: pd.Series(list(extract_template_and_args(x)))
+        canonical_templates = _canonical_drain3_templates_per_row(
+            self.template_miner, cluster_ids, fallbacks
         )
+        parameter_lists: List[List[str]] = []
+        for logline, template in zip(self.log_df["loglines"], canonical_templates):
+            parameter_lists.append(
+                self.template_miner.get_parameter_list(str(template), str(logline))
+            )
+
+        self.log_df["template"] = canonical_templates
+        self.log_df["parameter_list"] = parameter_lists
 
         self.results = self.log_df[['timestamp', 'loglines', 'template', 'parameter_list']].copy()
         self.results.to_parquet(tmp_result_file_path, index=False)
@@ -239,10 +268,12 @@ class Pattern:
         # Extract templates via Drain3 (parameter extraction is deferred
         # to on-demand calls via extract_parameters() for performance).
         start = time.perf_counter()
-        templates = []
+        cluster_ids: List[int] = []
+        fallbacks: List[str] = []
         for logline in log_df["loglines"]:
             result = self.template_miner.add_log_message(logline)
-            templates.append(result["template_mined"])
+            cluster_ids.append(result["cluster_id"])
+            fallbacks.append(result["template_mined"])
         elapsed = time.perf_counter() - start
 
         logger.info(
@@ -250,7 +281,9 @@ class Pattern:
             f"template extraction took {elapsed:.4f}s for {source_name}"
         )
 
-        log_df["template"] = templates
+        log_df["template"] = _canonical_drain3_templates_per_row(
+            self.template_miner, cluster_ids, fallbacks
+        )
 
         # Prepare result -- include source_file if available
         cols = ["timestamp", "loglines", "template"]

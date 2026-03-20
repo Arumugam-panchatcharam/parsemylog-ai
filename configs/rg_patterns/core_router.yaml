@@ -49,7 +49,7 @@ literals:
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|crash|abort|timeout|bad|not successful|not found|not connected|not authorized|not authenticated|not authorized|not authenticated)\\b"
+  - "\\b(err|error|fail(ed|ure)?|crash|abort|timeout|bad|not successful|not found|not connected|not authorized|not authenticated)\\b"
   # Generic connectivity/session issue keywords (position-independent)
   - "\\b(disconnect(ed)?|connection.?lost|retry|unreachable|flap|sync.?loss|terminated|deregister)\\b"
   # PSM/data-model issues
