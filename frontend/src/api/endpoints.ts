@@ -670,6 +670,8 @@ export const patternAnalyzerApi = {
 // ---------- CPE Overview ----------
 export interface PatternScanDomain {
   patterns: string[];
+  /** Same length/order as `patterns`; absent on caches from older scans. */
+  pattern_regexes?: string[];
   cpes: Array<{ serial: string; counts: number[] }>;
 }
 export interface PatternScanResult {

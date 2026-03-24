@@ -823,6 +823,7 @@ def run_pattern_scan(project_id):
             "domains": {
                 "<domain>": {
                     "patterns": [str, ...],
+                    "pattern_regexes": [str, ...],  # same order as patterns
                     "cpes": [{"serial": str, "counts": [int, ...]}, ...]
                 }
             }
@@ -896,6 +897,7 @@ def run_pattern_scan(project_id):
 
         result_domains[domain_name] = {
             "patterns": [p["name"] for p in enabled],
+            "pattern_regexes": [p["regex"] for p in enabled],
             "cpes": [],
         }
         for idx, pat in enumerate(enabled):

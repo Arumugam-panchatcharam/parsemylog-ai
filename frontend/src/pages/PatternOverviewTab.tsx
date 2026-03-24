@@ -16,6 +16,8 @@ import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 interface PatternRow {
   domain: string;
   name: string;
+  /** Regex used for the scan; undefined if cache predates API support. */
+  regex?: string;
   cpesAffected: number;
   pctAffected: number;
   totalMatches: number;
@@ -26,12 +28,32 @@ type SortKey = "name" | "cpesAffected" | "pctAffected" | "totalMatches";
 
 /* ---------------------------------------------------------------- Constants */
 
+/**
+ * Light categorical domain colors: pastel blues / indigos / violets / cyans.
+ * Avoids status-like hues (red, green, orange, brown) and their shades.
+ */
 const DOMAIN_COLORS: string[] = [
-  "#1a73e8", "#d93025", "#188038", "#e8710a", "#9334e6",
-  "#00acc1", "#c2185b", "#689f38", "#ff6d00", "#5c6bc0",
+  "#93C5FD",
+  "#A5B4FC",
+  "#C4B5FD",
+  "#7DD3FC",
+  "#67E8F9",
+  "#D8B4FE",
+  "#99B9F1",
+  "#A8C5DA",
+  "#C9B8E8",
+  "#BFDBFE",
 ];
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
+
+function escapeHtmlForPlotlyHover(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 function severityClass(pct: number): string {
   if (pct >= 80) return "bg-red-50 dark:bg-red-900/15 border-red-200 dark:border-red-800";
@@ -120,6 +142,7 @@ export default function PatternOverviewTab() {
         allRows.push({
           domain,
           name: patName,
+          regex: dd.pattern_regexes?.[pIdx],
           cpesAffected: affected,
           pctAffected: totalCpes > 0 ? Math.round((affected / totalCpes) * 100) : 0,
           totalMatches: total,
@@ -175,7 +198,13 @@ export default function PatternOverviewTab() {
       y: sorted.map((r) => r.name),
       x: sorted.map((r) => r.pctAffected),
       colors: sorted.map((r) => domainColorMap[r.domain] ?? "#888"),
-      customdata: sorted.map((r) => [r.cpesAffected, totalCpes, r.totalMatches, r.domain]),
+      customdata: sorted.map((r) => {
+        const trimmed = r.regex?.trim();
+        const regexSuffix = trimmed
+          ? `<br>Regex: ${escapeHtmlForPlotlyHover(trimmed)}`
+          : "";
+        return [r.cpesAffected, totalCpes, r.totalMatches, r.domain, regexSuffix] as const;
+      }),
     };
   }, [filteredRows, domainNames, totalCpes]);
 
@@ -343,7 +372,7 @@ export default function PatternOverviewTab() {
                     "<b>%{y}</b> (%{customdata[3]})<br>" +
                     "CPEs affected: %{customdata[0]} / %{customdata[1]}<br>" +
                     "Spread: %{x}%<br>" +
-                    "Total matches: %{customdata[2]}<extra></extra>",
+                    "Total matches: %{customdata[2]}%{customdata[4]}<extra></extra>",
                   text: chartData.x.map((v) => `${v}%`),
                   textposition: "outside",
                   textfont: { size: 9 },
@@ -446,14 +475,19 @@ export default function PatternOverviewTab() {
                     >
                       <td className="px-2 py-1 align-top">
                         <span
-                          className="inline-block px-1.5 py-px rounded text-[10px] font-medium truncate max-w-[110px]"
-                          style={{ backgroundColor: `${domainColor}18`, color: domainColor }}
+                          className="inline-block px-1.5 py-px rounded text-[10px] font-medium truncate max-w-[110px] text-foreground border-l-[3px]"
+                          style={{
+                            backgroundColor: `${domainColor}33`,
+                            borderLeftColor: domainColor,
+                          }}
                         >
                           {row.domain}
                         </span>
                       </td>
                       <td className="px-2 py-1 font-medium text-foreground">
-                        <div className="truncate" title={row.name}>{row.name}</div>
+                        <div className="truncate" title={row.name}>
+                          {row.name}
+                        </div>
                       </td>
                       <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap align-top">
                         {row.cpesAffected}/{totalCpes}

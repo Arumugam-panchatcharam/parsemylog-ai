@@ -57,9 +57,21 @@ const BUCKET_OPTIONS = [
   { value: 1440, label: "1 day" },
 ];
 
+/**
+ * Light trace colors: pastel blues / indigos / violets / cyans.
+ * Avoids status-like hues (red, green, orange, brown) and their shades.
+ */
 const TRACE_COLORS = [
-  "#1a73e8", "#d93025", "#188038", "#e8710a", "#9334e6",
-  "#00acc1", "#c2185b", "#689f38", "#ff6d00", "#5c6bc0",
+  "#93C5FD",
+  "#A5B4FC",
+  "#C4B5FD",
+  "#7DD3FC",
+  "#67E8F9",
+  "#D8B4FE",
+  "#99B9F1",
+  "#A8C5DA",
+  "#C9B8E8",
+  "#BFDBFE",
 ];
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
