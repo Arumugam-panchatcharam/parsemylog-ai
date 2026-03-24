@@ -23,7 +23,7 @@ literals:
 
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|incorrect|crash|abort|panic)\\b"
+  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|incorrect|crash|abort|panic|restart|stop|start)\\b"
   # Generic auth/disassociation keywords (position-independent)
   - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?)\\b"
   # Station events (client left/removed/kicked)

@@ -15,7 +15,6 @@ import ChatIcon from "@mui/icons-material/Chat";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import CircularProgress from "@mui/material/CircularProgress";
 import { cn } from "@/lib/utils";
 
@@ -63,15 +62,6 @@ export default function ChatPage() {
   const [streamContext, setStreamContext] = useState<Record<string, unknown> | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
 
-  // File context selection
-  const [availableFiles, setAvailableFiles] = useState<{
-    logs: Array<{ name: string; path: string; size: number }>;
-    csv: Array<{ name: string; size: number }>;
-    pcap: Array<{ name: string; size: number }>;
-  } | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [showFileSelector, setShowFileSelector] = useState(false);
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -113,25 +103,12 @@ export default function ChatPage() {
     }
   }, [projectId]);
 
-  // ------------------------------------------------------------------ Load available files
-  const loadAvailableFiles = useCallback(async () => {
-    if (!projectId) return;
-    try {
-      const res = await chatApi.listFiles(projectId, cpeId);
-      setAvailableFiles(res.data);
-    } catch (err) {
-      console.error("Failed to load available files:", err);
-      setAvailableFiles(null);
-    }
-  }, [projectId, cpeId]);
-
   useEffect(() => {
-    const canAccess = llmAvailable && (llmEnabled || user?.is_admin);
+    const canAccess = llmEnabled && (llmAvailable || user?.is_admin);
     if (canAccess) {
       loadConversations();
-      loadAvailableFiles();
     }
-  }, [llmEnabled, llmAvailable, loadConversations, loadAvailableFiles, user?.is_admin]);
+  }, [llmEnabled, llmAvailable, loadConversations, user?.is_admin]);
 
   // ------------------------------------------------------------------ Load messages
   useEffect(() => {
@@ -218,7 +195,6 @@ export default function ChatPage() {
           body: JSON.stringify({
             conversation_id: activeConvId,
             message: userMsg,
-            selected_files: selectedFiles.length > 0 ? selectedFiles : undefined,
           }),
         }
       );
@@ -362,7 +338,7 @@ export default function ChatPage() {
       }
       return (
         <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
-          <CloudUploadIcon style={{ fontSize: 64, opacity: 0.3 }} />
+          <div style={{ fontSize: 64, opacity: 0.3 }}>📋</div>
           <h2 className="text-xl font-semibold text-muted-foreground">No Logs Available</h2>
           <p className="text-sm text-muted-foreground max-w-md">
             Please upload log files to this project first. AI Chat requires parsed and indexed logs to provide answers.
@@ -509,130 +485,6 @@ export default function ChatPage() {
 
             {/* Input area - 70% width, centered, reasonable height */}
             <div className="border-t border-border px-4 py-4 flex flex-col items-center justify-center">
-              {/* File selector - 70% width */}
-              {availableFiles && (
-                <div className="w-[70%] mb-3">
-                  <button
-                    onClick={() => setShowFileSelector(!showFileSelector)}
-                    className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1.5"
-                  >
-                    <CloudUploadIcon style={{ fontSize: 14 }} />
-                    {selectedFiles.length > 0 
-                      ? `${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} selected`
-                      : 'Select files for context'
-                    }
-                    {showFileSelector ? (
-                      <ExpandLessIcon style={{ fontSize: 14 }} />
-                    ) : (
-                      <ExpandMoreIcon style={{ fontSize: 14 }} />
-                    )}
-                  </button>
-
-                  {showFileSelector && (
-                    <div className="bg-muted/30 rounded-lg p-3 space-y-2 max-h-40 overflow-y-auto">
-                      {/* Log files */}
-                      {availableFiles.logs.length > 0 && (
-                        <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Log Files</p>
-                          <div className="space-y-1">
-                            {availableFiles.logs.map((file) => (
-                              <label key={file.path} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 p-1.5 rounded">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedFiles.includes(file.path)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setSelectedFiles([...selectedFiles, file.path]);
-                                    } else {
-                                      setSelectedFiles(selectedFiles.filter(f => f !== file.path));
-                                    }
-                                  }}
-                                  className="rounded"
-                                />
-                                <span className="flex-1 truncate">{file.name}</span>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {(file.size / 1024).toFixed(0)}KB
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* CSV files */}
-                      {availableFiles.csv.length > 0 && (
-                        <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Telemetry CSV</p>
-                          <div className="space-y-1">
-                            {availableFiles.csv.map((file) => (
-                              <label key={file.name} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 p-1.5 rounded">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedFiles.includes(`csv:${file.name}`)}
-                                  onChange={(e) => {
-                                    const fileKey = `csv:${file.name}`;
-                                    if (e.target.checked) {
-                                      setSelectedFiles([...selectedFiles, fileKey]);
-                                    } else {
-                                      setSelectedFiles(selectedFiles.filter(f => f !== fileKey));
-                                    }
-                                  }}
-                                  className="rounded"
-                                />
-                                <span className="flex-1 truncate">{file.name}</span>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {(file.size / 1024).toFixed(0)}KB
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* PCAP files */}
-                      {availableFiles.pcap.length > 0 && (
-                        <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">PCAP Files</p>
-                          <div className="space-y-1">
-                            {availableFiles.pcap.map((file) => (
-                              <label key={file.name} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 p-1.5 rounded">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedFiles.includes(`pcap:${file.name}`)}
-                                  onChange={(e) => {
-                                    const fileKey = `pcap:${file.name}`;
-                                    if (e.target.checked) {
-                                      setSelectedFiles([...selectedFiles, fileKey]);
-                                    } else {
-                                      setSelectedFiles(selectedFiles.filter(f => f !== fileKey));
-                                    }
-                                  }}
-                                  className="rounded"
-                                />
-                                <span className="flex-1 truncate">{file.name}</span>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {(file.size / 1024 / 1024).toFixed(1)}MB
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Clear selection button */}
-                      {selectedFiles.length > 0 && (
-                        <button
-                          onClick={() => setSelectedFiles([])}
-                          className="text-xs text-muted-foreground hover:text-foreground underline"
-                        >
-                          Clear selection
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Input box - 70% width with Send button inside */}
               <div className="w-[70%]">
                 {/* Textarea with button inside */}
@@ -679,12 +531,6 @@ export default function ChatPage() {
                   </button>
                 </div>
 
-                {/* Info text below */}
-                {selectedFiles.length > 0 && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Analyzing {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''}
-                  </p>
-                )}
               </div>
             </div>
           </>

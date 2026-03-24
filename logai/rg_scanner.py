@@ -5,9 +5,13 @@ Ripgrep Scanner Module
 Pre-filters RDK log files using ripgrep (rg) to extract only error-class and
 state-change lines before feeding them to Drain3 for template extraction.
 
+When ``ignore_literals`` is set for a domain, a second ripgrep pass runs on the
+first-pass match lines: ``rg -v -F -e ...`` drops noise before Drain3.
+
 This two-stage approach provides 6-10x speedup over full-file Drain3 parsing:
 1. Stage 1 (rg): Scans logs at native speed (~0.3s for 500K lines)
-2. Stage 2 (Drain3): Templates only the filtered subset (~5-15% of lines)
+2. Stage 2 (optional rg): Remove lines matching ignore literals (fixed strings)
+3. Stage 3 (Drain3): Templates only the filtered subset (~5-15% of lines)
 
 Requirements:
     - ripgrep (rg) binary must be installed and accessible
@@ -95,6 +99,7 @@ class DomainPatternConfig:
         case_insensitive: Whether to use case-insensitive matching.
         literals: Literal string patterns (fast path, rg -F).
         regex: Regex patterns (rg -e).
+        ignore_literals: Fixed strings; second rg pass (-v -F) drops matching lines.
     """
     domain: str
     files: List[str]
@@ -102,6 +107,7 @@ class DomainPatternConfig:
     case_insensitive: bool = True
     literals: List[str] = field(default_factory=list)
     regex: List[str] = field(default_factory=list)
+    ignore_literals: List[str] = field(default_factory=list)
 
 
 # ============================================================================
@@ -217,13 +223,15 @@ class RgScanner:
                     case_insensitive=raw.get("case_insensitive", True),
                     literals=raw.get("literals", []),
                     regex=raw.get("regex", []),
+                    ignore_literals=raw.get("ignore_literals", []),
                 )
 
                 self.domain_configs[config.domain] = config
                 logger.info(
                     f"Loaded pattern config: {config.domain} "
                     f"({len(config.literals)} literals, {len(config.regex)} regex, "
-                    f"{len(config.files)} file globs)"
+                    f"{len(config.files)} file globs, "
+                    f"{len(config.ignore_literals)} ignore_literals)"
                 )
 
             except Exception as e:
@@ -475,7 +483,10 @@ class RgScanner:
                 logger.debug(f"[RgScanner] No matches found for domain: {config.domain}")
                 return []
 
-            return self._parse_rg_json(result.stdout)
+            parsed = self._parse_rg_json(result.stdout)
+            return _second_pass_drop_ignore_literals(
+                self.rg_binary, parsed, config
+            )
 
         except subprocess.TimeoutExpired:
             logger.error("[RgScanner] ripgrep timed out after 60s")
@@ -599,6 +610,7 @@ class RgScanner:
                 "file_globs": len(config.files),
                 "context_lines": config.context_lines,
                 "case_insensitive": config.case_insensitive,
+                "ignore_literals": len(config.ignore_literals),
             }
         return stats
 
@@ -606,6 +618,95 @@ class RgScanner:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+
+def _second_pass_drop_ignore_literals(
+    rg_binary: str,
+    matches: List[RgMatch],
+    config: DomainPatternConfig,
+) -> List[RgMatch]:
+    """
+    Second ripgrep pass: drop first-pass matches that contain any ignore literal.
+
+    Uses ``rg -v -F -e <lit> ...`` on stdin (indexed lines) so duplicates and
+    order are preserved correctly.
+    """
+    literals = [s.strip() for s in config.ignore_literals if s and str(s).strip()]
+    if not literals or not matches:
+        return matches
+
+    filtered = _rg_filter_out_literal_matches(
+        rg_binary, matches, literals, config.case_insensitive
+    )
+    dropped = len(matches) - len(filtered)
+    if dropped:
+        logger.debug(
+            f"[RgScanner] Second pass (rg -v -F): dropped {dropped} match line(s) "
+            f"for domain '{config.domain}'"
+        )
+    return filtered
+
+
+def _rg_filter_out_literal_matches(
+    rg_binary: str,
+    matches: List[RgMatch],
+    ignore_literals: List[str],
+    case_insensitive: bool,
+) -> List[RgMatch]:
+    """Run ripgrep -v -F on indexed match lines; return RgMatch list for kept indices."""
+    # One stdin line per match: "index\ttext" so rg never merges duplicate texts.
+    chunks: List[str] = []
+    for i, m in enumerate(matches):
+        safe = m.match_text.replace("\r", " ").replace("\n", " ")
+        chunks.append(f"{i}\t{safe}\n")
+    stdin_payload = "".join(chunks)
+
+    cmd: List[str] = [
+        rg_binary,
+        "--color=never",
+        "-v",
+        "-F",
+    ]
+    for lit in ignore_literals:
+        cmd.extend(["-e", lit])
+    if case_insensitive:
+        cmd.append("-i")
+    cmd.append("-")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=stdin_payload,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("[RgScanner] Second-pass ripgrep timed out after 60s")
+        return matches
+    except Exception as e:
+        logger.error(f"[RgScanner] Second-pass ripgrep failed: {e}")
+        return matches
+
+    if result.returncode == 2:
+        logger.error(
+            f"[RgScanner] Second-pass ripgrep error: {result.stderr.strip()}"
+        )
+        return matches
+
+    kept_indices: List[int] = []
+    for out_line in result.stdout.splitlines():
+        tab = out_line.find("\t")
+        if tab <= 0:
+            continue
+        try:
+            idx = int(out_line[:tab])
+        except ValueError:
+            continue
+        kept_indices.append(idx)
+
+    return [matches[i] for i in kept_indices]
+
 
 def _escape_regex(literal: str) -> str:
     """

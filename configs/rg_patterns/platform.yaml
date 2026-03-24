@@ -35,6 +35,16 @@ context_lines: 3
 # Case-insensitive matching
 case_insensitive: true
 
+# Second ripgrep pass on first-pass matches: rg -v -F drops these literals
+# (same semantics as ripgrep -F; use domain case_insensitive for -i).
+ignore_literals:
+  - "CURL_CMD:"
+  - "CURL command is :"
+  - "CURL_CMD2:"
+  - "/SelfHeal.txt.0"
+  - "/kernel"
+  - "lighttpd.error.log"
+
 # Literal string patterns (fast path, uses rg -F)
 literals:
   - "Segmentation fault"
@@ -59,9 +69,7 @@ regex:
   # Memory issues
   - "\\b(oom|OOM|out.of.memory|memory.?(leak|exhausted|low))\\b"
   # Kernel issues
-  - "\\b(kernel|hung_task|soft.?lockup|oops|BUG)\\b"
-  # Reboot/restart events
-  - "\\b(reboot|restart|shutdown|reset|power.?cycle)\\b"
+  - "\\b(hung_task|soft.?lockup|oops|BUG)\\b"
   # Process crash/exit
   - "\\b(process|daemon|service)\\s+(crash|exit|kill|died|terminated)\\b"
   # SelfHeal actions
