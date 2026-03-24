@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = (os.environ.get("OPENAI_API_KEY") or "").strip()
 OPENAI_ENDPOINT = os.environ.get("OPENAI_BASE_URL", "https://home-openai-v1.openai.azure.com").strip().rstrip('/')
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1")
 OPENAI_API_VERSION = os.environ.get("OPENAI_API_VERSION", "2024-08-01-preview")
 OPENAI_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "4096"))
 

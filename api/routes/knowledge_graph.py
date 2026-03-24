@@ -3,7 +3,7 @@ Knowledge Graph API Routes
 ===========================
 
 CRUD endpoints for managing knowledge graphs, nodes, and edges.
-Supports import/export of graph templates for sharing across NATCOs.
+Supports import/export of graph templates for sharing.
 """
 
 import json
@@ -28,16 +28,12 @@ def _graph_to_dict(graph, include_children=False):
     d = {
         "id": graph.id,
         "name": graph.name,
-        "natco_id": graph.natco_id,
         "description": graph.description,
         "is_template": graph.is_template,
         "created_by": graph.created_by,
         "created_at": graph.created_at.isoformat() if graph.created_at else None,
         "updated_at": graph.updated_at.isoformat() if graph.updated_at else None,
     }
-    if graph.natco:
-        d["natco_code"] = graph.natco.code
-        d["natco_name"] = graph.natco.name
     if include_children:
         d["nodes"] = [_node_to_dict(n) for n in graph.nodes]
         d["edges"] = [_edge_to_dict(e) for e in graph.edges]
@@ -82,10 +78,6 @@ def list_graphs():
     KG = dbm.KnowledgeGraph
     q = dbm.db.session.query(KG)
 
-    natco_id = request.args.get("natco_id")
-    if natco_id:
-        q = q.filter(KG.natco_id == int(natco_id))
-
     is_template = request.args.get("is_template")
     if is_template is not None:
         q = q.filter(KG.is_template == (is_template.lower() == "true"))
@@ -107,7 +99,6 @@ def create_graph():
     graph = dbm.KnowledgeGraph(
         id=str(uuid.uuid4()),
         name=name,
-        natco_id=data.get("natco_id"),
         description=data.get("description", ""),
         is_template=data.get("is_template", False),
         created_by=user_id,
@@ -115,6 +106,80 @@ def create_graph():
     dbm.db.session.add(graph)
     dbm.db.session.commit()
     return jsonify(_graph_to_dict(graph)), 201
+
+
+@knowledge_graph_bp.route("/architecture/rdkb", methods=["GET"])
+@jwt_required()
+def get_rdkb_architecture_graph():
+    """
+    Static RDK-B module / component graph from configs/rdkb_module_graph.yaml
+    for the Knowledge Graph page Architecture tab (read-only).
+    """
+    from logai.rdkb_knowledge import load_module_graph
+
+    try:
+        g = load_module_graph()
+    except Exception as e:
+        logger.exception("Failed to load RDK-B module graph: %s", e)
+        return jsonify(
+            {
+                "version": 0,
+                "architecture_references": [],
+                "nodes": [],
+                "edges": [],
+                "warning": "Failed to load architecture graph.",
+            }
+        ), 200
+
+    raw_nodes = g.get("nodes") or []
+    raw_edges = g.get("edges") or []
+
+    nodes_out = []
+    for n in raw_nodes:
+        mid = n.get("module_id")
+        if not mid:
+            continue
+        nodes_out.append(
+            {
+                "id": mid,
+                "label": n.get("display_name") or mid,
+                "domains": n.get("primary_domains") or [],
+                "description": (n.get("description") or "")[:2000],
+            }
+        )
+
+    edges_out = []
+    for i, e in enumerate(raw_edges):
+        src = e.get("source")
+        tgt = e.get("target")
+        if not src or not tgt:
+            continue
+        edges_out.append(
+            {
+                "id": f"e_{i}_{src}_{tgt}",
+                "source": src,
+                "target": tgt,
+                "relationship": e.get("relationship") or "",
+                "notes": (e.get("notes") or "")[:500] if e.get("notes") else None,
+                "confidence": e.get("confidence"),
+            }
+        )
+
+    warning = None
+    if not raw_nodes and not raw_edges:
+        warning = "No nodes or edges in rdkb_module_graph.yaml (missing or empty file)."
+
+    return jsonify(
+        {
+            "version": g.get("version", 0),
+            "architecture_references": g.get("architecture_references") or [],
+            "nodes": nodes_out,
+            "edges": edges_out,
+            "node_count": len(nodes_out),
+            "edge_count": len(edges_out),
+            **({"warning": warning} if warning else {}),
+        }
+    )
 
 
 @knowledge_graph_bp.route("/<graph_id>", methods=["GET"])
@@ -138,8 +203,6 @@ def update_graph(graph_id):
         graph.name = data["name"]
     if "description" in data:
         graph.description = data["description"]
-    if "natco_id" in data:
-        graph.natco_id = data["natco_id"]
     if "is_template" in data:
         graph.is_template = data["is_template"]
 
@@ -342,7 +405,6 @@ def import_graph():
     graph = dbm.KnowledgeGraph(
         id=graph_id,
         name=tpl.get("name", "Imported Graph"),
-        natco_id=data.get("natco_id") or tpl.get("natco_id"),
         description=tpl.get("description", ""),
         is_template=tpl.get("is_template", False),
         created_by=user_id,

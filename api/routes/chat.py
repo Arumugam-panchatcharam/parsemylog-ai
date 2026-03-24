@@ -260,6 +260,7 @@ def send_message(project_id):
                 project_id=project_id,
                 cpe_id=cpe_id,
                 user_query=user_message,
+                user_id=user_id,
             )
 
             # Get last N messages (conversation memory) for follow-up context

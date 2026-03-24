@@ -1,4 +1,5 @@
-from typing import Optional, Any, Tuple
+import json
+from typing import Optional, Any, Tuple, List
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
@@ -257,14 +258,12 @@ class KnowledgeGraph(db.Model):
 
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(256), nullable=False)
-    natco_id = db.Column(db.Integer, db.ForeignKey("natcos.id", ondelete="SET NULL"), nullable=True)
     description = db.Column(db.Text, nullable=True)
     is_template = db.Column(db.Boolean, default=False)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
-    natco = db.relationship("Natco")
     creator = db.relationship("User", foreign_keys=[created_by])
     nodes = db.relationship(
         "KnowledgeNode", back_populates="graph",
@@ -287,6 +286,8 @@ class KnowledgeNode(db.Model):
       patterns: [str]          -- regex patterns for log matching
       keywords: [str]          -- keyword patterns (compiled as regex)
       source_domains: [str]    -- parquet domains to search
+      template_patterns: [str]   -- regex matched against Drain3 template column (parquet path)
+      template_keywords: [str]   -- case-insensitive substring match on template column
       threshold: {metric, operator, value}
       exclusions: [str]        -- regex exclusion patterns
 
@@ -339,6 +340,26 @@ class KnowledgeEdge(db.Model):
     target_node = db.relationship("KnowledgeNode", foreign_keys=[target_node_id])
 
 
+class TemplatePatternBaseline(db.Model):
+    """
+    Known-good / historical Drain3 templates for novelty detection.
+    scope_type: ``project`` | ``global``
+    """
+
+    __tablename__ = "template_pattern_baselines"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    scope_type = db.Column(db.String(20), nullable=False, default="project")
+    project_id = db.Column(
+        db.String(256), db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    templates_json = db.Column(db.Text, nullable=False, default="[]")
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    project = db.relationship("Project", foreign_keys=[project_id])
+
+
 class DBManager:
     def __init__(self, upload_root: str = BASE_DIR):
         self.db = db
@@ -361,6 +382,7 @@ class DBManager:
         self.KnowledgeGraph = KnowledgeGraph
         self.KnowledgeNode = KnowledgeNode
         self.KnowledgeEdge = KnowledgeEdge
+        self.TemplatePatternBaseline = TemplatePatternBaseline
 
     # ---------------- Initialization ----------------
     def init_app(self, app):
@@ -682,7 +704,52 @@ class DBManager:
     def get_project_by_id(self, project_id: str) -> Optional[Any]:
         #print(self.db.session.query(self.Project).filter_by(project_id=project_id).first())
         return self.db.session.query(self.Project).filter_by(id=project_id).first()
-    
+
+    def get_template_pattern_baseline(
+        self,
+        project_id: Optional[str] = None,
+    ) -> Optional[Any]:
+        q = self.db.session.query(self.TemplatePatternBaseline)
+        if project_id:
+            return q.filter_by(scope_type="project", project_id=project_id).first()
+        return q.filter_by(scope_type="global").first()
+
+    def set_template_pattern_baseline(
+        self,
+        templates: List[str],
+        *,
+        project_id: Optional[str] = None,
+        merge: bool = False,
+    ) -> Any:
+        scope_type = "project" if project_id else "global"
+        rec = self.get_template_pattern_baseline(
+            project_id=project_id
+        )
+        if merge and rec:
+            cur = set(json.loads(rec.templates_json or "[]"))
+            cur.update(str(t) for t in templates)
+            new_list = sorted(cur)
+        else:
+            new_list = []
+            seen: set = set()
+            for t in templates:
+                s = str(t)
+                if s not in seen:
+                    seen.add(s)
+                    new_list.append(s)
+        payload = json.dumps(new_list)
+        if rec is None:
+            rec = self.TemplatePatternBaseline(
+                scope_type=scope_type,
+                project_id=project_id,
+                templates_json=payload,
+            )
+            self.db.session.add(rec)
+        else:
+            rec.templates_json = payload
+        self.db.session.commit()
+        return rec
+
     def _delete_qdrant_collections(self, project_id: str) -> None:
         """
         Delete all Qdrant vector collections for a project.

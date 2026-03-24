@@ -102,14 +102,16 @@ export default function ChatPage() {
     if (!projectId) return;
     setLoadingConvs(true);
     try {
-      const res = await chatApi.listConversations(projectId, cpeId);
+      // Load all conversations for this project, regardless of selected CPE
+      // This includes single-CPE and multi-CPE ("all devices") conversations
+      const res = await chatApi.listConversations(projectId);
       setConversations(res.data);
     } catch {
       setConversations([]);
     } finally {
       setLoadingConvs(false);
     }
-  }, [projectId, cpeId]);
+  }, [projectId]);
 
   // ------------------------------------------------------------------ Load available files
   const loadAvailableFiles = useCallback(async () => {
@@ -154,7 +156,9 @@ export default function ChatPage() {
   const handleNewConversation = async () => {
     if (!projectId) return;
     try {
-      const res = await chatApi.createConversation(projectId, "New conversation", cpeId);
+      // Always create conversations with cpe_id=null (all CPEs)
+      // The LLM will detect specific CPE mentions in the message and filter if needed
+      const res = await chatApi.createConversation(projectId, "New conversation", null);
       setConversations((prev) => [{ ...res.data, created_at: null, updated_at: null }, ...prev]);
       setActiveConvId(res.data.id);
       setMessages([]);
@@ -453,7 +457,7 @@ export default function ChatPage() {
           </div>
         ) : (
           <>
-            {/* Messages area */}
+            {/* Messages area - fills all available space */}
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
               {loadingMsgs ? (
                 <div className="flex justify-center py-8">
@@ -503,11 +507,11 @@ export default function ChatPage() {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input area */}
-            <div className="border-t border-border px-4 py-3">
-              {/* File selector section */}
+            {/* Input area - 70% width, centered, reasonable height */}
+            <div className="border-t border-border px-4 py-4 flex flex-col items-center justify-center">
+              {/* File selector - 70% width */}
               {availableFiles && (
-                <div className="max-w-3xl mx-auto mb-2">
+                <div className="w-[70%] mb-3">
                   <button
                     onClick={() => setShowFileSelector(!showFileSelector)}
                     className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1.5"
@@ -525,7 +529,7 @@ export default function ChatPage() {
                   </button>
 
                   {showFileSelector && (
-                    <div className="bg-muted/30 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
+                    <div className="bg-muted/30 rounded-lg p-3 space-y-2 max-h-40 overflow-y-auto">
                       {/* Log files */}
                       {availableFiles.logs.length > 0 && (
                         <div>
@@ -629,45 +633,59 @@ export default function ChatPage() {
                 </div>
               )}
 
-              <div className="flex gap-2 items-end max-w-3xl mx-auto">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Ask about the logs..."
-                  disabled={streaming}
-                  rows={1}
-                  className="flex-1 resize-none rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 max-h-32"
-                  style={{ minHeight: "2.5rem" }}
-                  onInput={(e) => {
-                    const el = e.target as HTMLTextAreaElement;
-                    el.style.height = "auto";
-                    el.style.height = Math.min(el.scrollHeight, 128) + "px";
-                  }}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={streaming || !input.trim()}
-                  className="shrink-0 h-10 w-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 disabled:opacity-40 transition-colors"
-                >
-                  {streaming ? (
-                    <CircularProgress size={18} sx={{ color: "inherit" }} />
-                  ) : (
-                    <SendIcon style={{ fontSize: 18 }} />
-                  )}
-                </button>
+              {/* Input box - 70% width with Send button inside */}
+              <div className="w-[70%]">
+                {/* Textarea with button inside */}
+                <div className="relative">
+                  <textarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask about the logs... (Ctrl+Enter to send)"
+                    disabled={streaming}
+                    className="w-full resize-none rounded-xl border border-border bg-background px-4 py-3 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+                    style={{
+                      minHeight: "3rem",      // ~2 lines (48px)
+                      maxHeight: "15rem",     // reasonable max (240px)
+                      lineHeight: "1.5rem",
+                      overflow: "hidden",
+                    }}
+                    onInput={(e) => {
+                      const el = e.target as HTMLTextAreaElement;
+                      el.style.height = "auto";
+                      const scrollHeight = el.scrollHeight;
+                      const newHeight = Math.min(Math.max(scrollHeight, 48), 240);
+                      el.style.height = newHeight + "px";
+                    }}
+                  />
+                  
+                  {/* Send button inside textarea - centered vertically and right-aligned */}
+                  <button
+                    onClick={handleSend}
+                    disabled={streaming || !input.trim()}
+                    className="absolute top-1/2 right-2 -translate-y-1/2 h-8 px-3 rounded-lg bg-primary text-primary-foreground flex items-center gap-1 hover:bg-primary/90 disabled:opacity-40 transition-colors text-xs font-medium"
+                    title="Send message (Ctrl+Enter)"
+                  >
+                    {streaming ? (
+                      <>
+                        <CircularProgress size={14} sx={{ color: "inherit" }} />
+                      </>
+                    ) : (
+                      <>
+                        <SendIcon style={{ fontSize: 14 }} />
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Info text below */}
+                {selectedFiles.length > 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Analyzing {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''}
+                  </p>
+                )}
               </div>
-              {selectedFiles.length > 0 && (
-                <p className="text-xs text-muted-foreground text-center mt-1.5">
-                  AI will analyze: {selectedFiles.join(', ')} • Shift+Enter for new line
-                </p>
-              )}
-              {selectedFiles.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center mt-1.5">
-                  Responses are grounded in parsed log evidence. Press Shift+Enter for a new line.
-                </p>
-              )}
             </div>
           </>
         )}
@@ -677,6 +695,33 @@ export default function ChatPage() {
   );
 }
 
+
+/* ================================================================ StatusBadge */
+interface StatusBadgeProps {
+  text: string;
+}
+
+function StatusBadge({ text }: StatusBadgeProps) {
+  const lowerText = text.toLowerCase().trim();
+  const getStatusStyle = (status: string) => {
+    if (status.includes("success") || status.includes("ok") || status.includes("healthy") || status.includes("active") || status.includes("online"))
+      return { bg: "bg-green-100 dark:bg-green-900/30", text: "text-green-700 dark:text-green-400", icon: "✓" };
+    if (status.includes("error") || status.includes("failed") || status.includes("down") || status.includes("offline") || status.includes("critical"))
+      return { bg: "bg-red-100 dark:bg-red-900/30", text: "text-red-700 dark:text-red-400", icon: "✕" };
+    if (status.includes("warning") || status.includes("degraded") || status.includes("pending") || status.includes("unstable"))
+      return { bg: "bg-yellow-100 dark:bg-yellow-900/30", text: "text-yellow-700 dark:text-yellow-400", icon: "⚠" };
+    if (status.includes("info") || status.includes("neutral") || status.includes("running"))
+      return { bg: "bg-blue-100 dark:bg-blue-900/30", text: "text-blue-700 dark:text-blue-400", icon: "ℹ" };
+    return { bg: "bg-gray-100 dark:bg-gray-900/30", text: "text-gray-700 dark:text-gray-400", icon: "◆" };
+  };
+  const style = getStatusStyle(lowerText);
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md font-medium text-xs ${style.bg} ${style.text}`}>
+      <span>{style.icon}</span>
+      {text}
+    </span>
+  );
+}
 
 /* ================================================================ MessageBubble */
 function MessageBubble({ message }: { message: Message }) {
@@ -712,8 +757,53 @@ function MessageBubble({ message }: { message: Message }) {
         {isUser ? (
           <p className="text-sm whitespace-pre-wrap">{message.content}</p>
         ) : (
-          <div className="prose prose-sm dark:prose-invert max-w-none">
-            <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+          <div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto [&_table]:border-2 [&_table]:border-border [&_table]:rounded-lg [&_table]:overflow-hidden [&_th]:border [&_th]:border-border [&_th]:bg-muted/80 [&_th]:px-3 [&_th]:py-2 [&_th]:font-semibold [&_th]:text-left [&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-2 [&_tr:nth-child(odd)_td]:bg-muted/30 prose-code:bg-muted prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-pre:p-3 prose-pre:rounded-lg prose-blockquote:border-l-4 prose-blockquote:border-primary prose-blockquote:px-4 prose-blockquote:py-2 prose-blockquote:bg-muted/50 prose-blockquote:italic prose-headings:font-bold prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-a:text-primary prose-a:underline prose-a:hover:text-primary/80 prose-strong:font-semibold prose-em:italic prose-ul:list-disc prose-ol:list-decimal prose-li:my-1">
+            <Markdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                table: ({ children, ...props }: any) => (
+                  <div className="my-4 rounded-lg overflow-hidden border-2 border-border bg-background">
+                    <table className="w-full text-sm" {...props}>
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children, ...props }: any) => (
+                  <thead className="bg-muted/80 border-b-2 border-border" {...props}>
+                    {children}
+                  </thead>
+                ),
+                th: ({ children }: any) => (
+                  <th className="px-3 py-2 font-semibold text-left border-r border-border last:border-r-0">
+                    {children}
+                  </th>
+                ),
+                td: ({ children }: any) => (
+                  <td className="px-3 py-2 border-r border-border last:border-r-0">
+                    {children}
+                  </td>
+                ),
+                tr: ({ children, ...props }: any) => (
+                  <tr className="border-b border-border last:border-b-0 hover:bg-muted/20 transition-colors" {...props}>
+                    {children}
+                  </tr>
+                ),
+                code: ({ children, inline }: any) => {
+                  const text = String(children).trim();
+                  // Detect status/stat patterns
+                  if (inline && (text.match(/^\w+[:=]/))) {
+                    return <StatusBadge text={text} />;
+                  }
+                  return (
+                    <code className="bg-muted px-1.5 py-0.5 rounded text-sm font-mono">
+                      {text}
+                    </code>
+                  );
+                },
+              }}
+            >
+              {message.content}
+            </Markdown>
           </div>
         )}
 

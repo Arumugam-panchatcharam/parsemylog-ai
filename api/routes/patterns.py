@@ -5,6 +5,7 @@ Pattern Analysis API Routes
 Endpoints for domain-based Drain3 pattern analysis.
 """
 
+import json
 import logging
 from pathlib import Path
 
@@ -455,6 +456,7 @@ def get_aggregated_patterns(project_id, domain):
         - page_size: Items per page (default 50)
         - sort: 'frequency' or 'alphabetical' (default 'frequency')
         - file_filter: Comma-separated list of filenames to filter
+        - with_baseline: if true, each pattern includes in_baseline and prevalence (vs project baseline)
     
     Returns: {
         "domain": str,
@@ -486,7 +488,8 @@ def get_aggregated_patterns(project_id, domain):
     sort_by = request.args.get("sort", "frequency")
     file_filter_str = request.args.get("file_filter", "")
     file_filter = [f.strip() for f in file_filter_str.split(",") if f.strip()] if file_filter_str else None
-    
+    with_baseline = request.args.get("with_baseline", "").lower() in ("1", "true", "yes")
+
     # Build list of (label, directory) pairs to scan
     cpes = dbm.list_project_cpes(project_id)
     scan_entries: list[tuple[str, Path]] = []
@@ -567,10 +570,25 @@ def get_aggregated_patterns(project_id, domain):
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
     paginated_patterns = patterns_list[start_idx:end_idx]
-    
+    total_cpes = len(scan_entries)
+
+    if with_baseline:
+        row = dbm.get_template_pattern_baseline(project_id=project_id)
+        baseline_set: set = set()
+        if row:
+            try:
+                baseline_set = set(json.loads(row.templates_json or "[]"))
+            except json.JSONDecodeError:
+                baseline_set = set()
+        for p in paginated_patterns:
+            p["in_baseline"] = p["template"] in baseline_set
+            p["prevalence"] = (
+                round(len(p["cpe_details"]) / total_cpes, 4) if total_cpes else 0.0
+            )
+
     return jsonify({
         "domain": domain,
-        "total_cpes": len(scan_entries),
+        "total_cpes": total_cpes,
         "total_unique_patterns": total_patterns,
         "page": page,
         "page_size": page_size,
@@ -653,6 +671,93 @@ def get_aggregated_sample_logs(project_id, domain, template):
     return jsonify({
         "template": template,
         "samples": samples
+    }), 200
+
+
+# ---------- Template baseline (novelty vs known patterns) ----------
+
+@patterns_bp.route("/<project_id>/patterns/template-baseline", methods=["GET"])
+@jwt_required()
+def get_template_pattern_baseline_route(project_id):
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    scope = (request.args.get("scope") or "project").lower()
+    if scope == "global":
+        row = dbm.get_template_pattern_baseline()
+    else:
+        row = dbm.get_template_pattern_baseline(project_id=project_id)
+    if not row:
+        return jsonify({"scope_type": scope, "templates": [], "count": 0}), 200
+    try:
+        templates = json.loads(row.templates_json or "[]")
+    except json.JSONDecodeError:
+        templates = []
+    return jsonify({
+        "scope_type": row.scope_type,
+        "project_id": row.project_id,
+        "templates": templates,
+        "count": len(templates),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }), 200
+
+
+@patterns_bp.route("/<project_id>/patterns/template-baseline", methods=["PUT"])
+@jwt_required()
+def put_template_pattern_baseline_route(project_id):
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    templates = body.get("templates")
+    if templates is None or not isinstance(templates, list):
+        return jsonify({"error": "Body must include templates: string[]"}), 400
+    merge = bool(body.get("merge", False))
+    scope = (body.get("scope") or "project").lower()
+    if scope == "global":
+        row = dbm.set_template_pattern_baseline(
+            [str(t) for t in templates], merge=merge,
+        )
+    else:
+        row = dbm.set_template_pattern_baseline(
+            [str(t) for t in templates],
+            project_id=project_id,
+            merge=merge,
+        )
+    out = json.loads(row.templates_json or "[]")
+    return jsonify({
+        "scope_type": row.scope_type,
+        "count": len(out),
+        "message": "baseline saved",
+    }), 200
+
+
+# ---------- Fleet template transitions (Drain3 bigrams) ----------
+
+@patterns_bp.route("/<project_id>/patterns/template-flow-fleet", methods=["GET"])
+@jwt_required()
+def get_template_flow_fleet(project_id):
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+    from logai.template_flow import aggregate_fleet_template_bigrams
+
+    cpes = dbm.list_project_cpes(project_id)
+    scan_entries: list[tuple[str, Path]] = []
+    if cpes:
+        for cpe in cpes:
+            scan_entries.append((cpe.serial, _project_dir(user_id, project_id, cpe.serial)))
+    else:
+        project_root = _project_dir(user_id, project_id)
+        scan_entries.append(("root", project_root))
+
+    rows, stats = aggregate_fleet_template_bigrams(scan_entries)
+    return jsonify({
+        "total_cpes": stats.get("total_cpes", 0),
+        "bigrams": rows,
     }), 200
 
 
@@ -775,7 +880,13 @@ def export_global_patterns(project_id):
     
     if not file_data:
         return jsonify({"error": "No pattern data found"}), 404
-    
+
+    min_prevalence = request.args.get("min_prevalence", type=float)
+    include_prevalence_sheet = request.args.get(
+        "include_prevalence_sheet", "true"
+    ).lower() not in ("0", "false", "no")
+    high_prevalence_rows: list[dict] = []
+
     # Create Excel workbook
     wb = Workbook()
     wb.remove(wb.active)  # Remove default sheet
@@ -832,58 +943,108 @@ def export_global_patterns(project_id):
         sheet_name = filename[:31].replace("/", "_").replace("\\", "_").replace("*", "_").replace("?", "_").replace("[", "_").replace("]", "_")
         
         data_sheet = wb.create_sheet(sheet_name)
-        
-        # Headers - removed "Domain Name" column
-        headers = ["File Name", "Pattern", "Frequency", "CPE Count", "Sample Log Lines"]
+
+        headers = [
+            "File Name",
+            "Pattern",
+            "Frequency",
+            "CPE Count",
+            "Prevalence",
+            "Sample Log Lines",
+        ]
         for col_idx, header in enumerate(headers, start=1):
             cell = data_sheet.cell(row=1, column=col_idx, value=header)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
-        
-        # Data rows
+
         row = 2
         for domain_label in sorted(file_data[filename].keys()):
             patterns = file_data[filename][domain_label]
-            
-            # Sort patterns by frequency (descending)
+
             sorted_patterns = sorted(
                 patterns.items(),
                 key=lambda x: x[1]["occurrence_count"],
-                reverse=True
+                reverse=True,
             )
-            
+
             for template, data in sorted_patterns:
                 cpe_count = len(data["cpe_details"])
+                prevalence_f = cpe_count / total_cpes if total_cpes else 0.0
+                if min_prevalence is not None and prevalence_f < min_prevalence:
+                    continue
+
                 cpe_count_str = f"{cpe_count}/{total_cpes}"
-                # Use newlines instead of pipe separator for sample logs
                 sample_logs_str = "\n".join(data["sample_logs"][:3])
-                
-                # Clean all string values for Excel compatibility
-                # Removed column 1 (domain_label) per user request
+
+                if prevalence_f >= 0.5:
+                    high_prevalence_rows.append({
+                        "domain": domain_label,
+                        "filename": filename,
+                        "template": clean_for_excel(str(template)),
+                        "frequency": data["occurrence_count"],
+                        "cpe_count_str": cpe_count_str,
+                        "prevalence": prevalence_f,
+                        "samples": clean_for_excel(sample_logs_str),
+                    })
+
                 data_sheet.cell(row=row, column=1, value=clean_for_excel(filename))
                 data_sheet.cell(row=row, column=2, value=clean_for_excel(template))
                 data_sheet.cell(row=row, column=3, value=data["occurrence_count"])
                 data_sheet.cell(row=row, column=4, value=cpe_count_str)
-                data_sheet.cell(row=row, column=5, value=clean_for_excel(sample_logs_str))
-                
-                # Enable text wrapping for sample logs column
-                data_sheet.cell(row=row, column=5).alignment = Alignment(wrap_text=True, vertical="top")
-                
+                prev_cell = data_sheet.cell(row=row, column=5, value=prevalence_f)
+                prev_cell.number_format = "0.00%"
+                data_sheet.cell(row=row, column=6, value=clean_for_excel(sample_logs_str))
+                data_sheet.cell(row=row, column=6).alignment = Alignment(
+                    wrap_text=True, vertical="top"
+                )
+
                 row += 1
-        
-        # Adjust column widths
+
         data_sheet.column_dimensions["A"].width = 30
         data_sheet.column_dimensions["B"].width = 80
         data_sheet.column_dimensions["C"].width = 12
         data_sheet.column_dimensions["D"].width = 12
-        data_sheet.column_dimensions["E"].width = 100
-        
-        # Freeze first row
+        data_sheet.column_dimensions["E"].width = 14
+        data_sheet.column_dimensions["F"].width = 100
+
         data_sheet.freeze_panes = "A2"
-        
-        # Enable auto-filter
-        data_sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{row-1}"
+        last_row = max(1, row - 1)
+        data_sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{last_row}"
+
+    if include_prevalence_sheet and high_prevalence_rows:
+        ps = wb.create_sheet("Prevalence_ge_50pct")
+        ph = [
+            "Domain",
+            "File Name",
+            "Pattern",
+            "Frequency",
+            "CPE Count",
+            "Prevalence",
+            "Sample Log Lines",
+        ]
+        for col_idx, header in enumerate(ph, start=1):
+            c = ps.cell(row=1, column=col_idx, value=header)
+            c.font = header_font
+            c.fill = header_fill
+            c.alignment = Alignment(horizontal="center", vertical="center")
+        high_prevalence_rows.sort(key=lambda r: (-r["prevalence"], -r["frequency"]))
+        pr = 2
+        for rec in high_prevalence_rows:
+            ps.cell(row=pr, column=1, value=rec["domain"])
+            ps.cell(row=pr, column=2, value=rec["filename"])
+            ps.cell(row=pr, column=3, value=rec["template"])
+            ps.cell(row=pr, column=4, value=rec["frequency"])
+            ps.cell(row=pr, column=5, value=rec["cpe_count_str"])
+            pc = ps.cell(row=pr, column=6, value=rec["prevalence"])
+            pc.number_format = "0.00%"
+            ps.cell(row=pr, column=7, value=rec["samples"])
+            ps.cell(row=pr, column=7).alignment = Alignment(wrap_text=True, vertical="top")
+            pr += 1
+        for col, w in zip("ABCDEFG", (14, 28, 60, 12, 12, 14, 100)):
+            ps.column_dimensions[col].width = w
+        ps.freeze_panes = "A2"
+        ps.auto_filter.ref = f"A1:{get_column_letter(len(ph))}{max(1, pr - 1)}"
     
     # Save to BytesIO
     output = BytesIO()

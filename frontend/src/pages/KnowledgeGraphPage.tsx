@@ -22,19 +22,18 @@ import "@xyflow/react/dist/style.css";
 
 import {
   knowledgeGraphApi,
-  natcoApi,
   type KnowledgeGraphSummary,
   type KnowledgeNodeData,
   type KnowledgeEdgeData,
 } from "../api/endpoints";
 
+import { ArchitectureGraphView } from "@/components/knowledge-graph/ArchitectureGraphView";
 import { cn } from "@/lib/utils";
 
 import CircularProgress from "@mui/material/CircularProgress";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SaveIcon from "@mui/icons-material/Save";
-import UploadIcon from "@mui/icons-material/Upload";
 import DownloadIcon from "@mui/icons-material/Download";
 import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import CloseIcon from "@mui/icons-material/Close";
@@ -240,25 +239,16 @@ export default function KnowledgeGraphPage() {
   const qc = useQueryClient();
 
   // Graph list
-  const [filterNatcoId, setFilterNatcoId] = useState<number | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(224);
 
   const { data: graphs, isLoading: graphsLoading } = useQuery({
-    queryKey: ["knowledgeGraphs", filterNatcoId],
-    queryFn: async () => {
-      const params: { natco_id?: number } = {};
-      if (filterNatcoId) params.natco_id = filterNatcoId;
-      return (await knowledgeGraphApi.list(params)).data;
-    },
+    queryKey: ["knowledgeGraphs"],
+    queryFn: async () => (await knowledgeGraphApi.list()).data,
   });
   const { data: templates } = useQuery({
     queryKey: ["kgTemplates"],
     queryFn: async () => (await knowledgeGraphApi.listTemplates()).data,
-  });
-  const { data: natcos } = useQuery({
-    queryKey: ["natcos"],
-    queryFn: async () => (await natcoApi.list()).data,
   });
 
   const [selectedGraphId, setSelectedGraphId] = useState<string | null>(null);
@@ -267,7 +257,7 @@ export default function KnowledgeGraphPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newGraphName, setNewGraphName] = useState("");
   const [newGraphDesc, setNewGraphDesc] = useState("");
-  const [newGraphNatcoId, setNewGraphNatcoId] = useState<number | null>(null);
+  const [activeView, setActiveView] = useState<"editor" | "architecture">("editor");
 
   // Load selected graph
   const { data: graphData, isLoading: graphLoading } = useQuery({
@@ -341,7 +331,7 @@ export default function KnowledgeGraphPage() {
 
   // Mutations
   const createGraphMut = useMutation({
-    mutationFn: (data: { name: string; description?: string; natco_id?: number | null }) =>
+    mutationFn: (data: { name: string; description?: string }) =>
       knowledgeGraphApi.create(data),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["knowledgeGraphs"] });
@@ -354,10 +344,7 @@ export default function KnowledgeGraphPage() {
 
   const importMut = useMutation({
     mutationFn: (template: string) =>
-      knowledgeGraphApi.importGraph({
-        template,
-        ...(filterNatcoId ? { natco_id: filterNatcoId } : {}),
-      }),
+      knowledgeGraphApi.importGraph({ template }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["knowledgeGraphs"] });
       setSelectedGraphId(res.data.id);
@@ -366,10 +353,7 @@ export default function KnowledgeGraphPage() {
 
   const importJsonMut = useMutation({
     mutationFn: (payload: Record<string, unknown>) =>
-      knowledgeGraphApi.importGraph({
-        ...payload,
-        ...(filterNatcoId ? { natco_id: filterNatcoId } : {}),
-      } as { template?: string; natco_id?: number } & Record<string, unknown>),
+      knowledgeGraphApi.importGraph(payload as { template?: string } & Record<string, unknown>),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["knowledgeGraphs"] });
       setSelectedGraphId(res.data.id);
@@ -574,18 +558,6 @@ export default function KnowledgeGraphPage() {
         {!sidebarCollapsed && (
           <>
             <div className="p-3 border-b border-border">
-              {natcos && natcos.length > 0 && (
-                <select
-                  value={filterNatcoId ?? ""}
-                  onChange={(e) => setFilterNatcoId(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full px-2 py-1 text-xs border border-border rounded-md bg-background mb-2"
-                >
-                  <option value="">All NATCOs</option>
-                  {natcos.map((nc: { id: number; code: string; name: string }) => (
-                    <option key={nc.id} value={nc.id}>{nc.code} - {nc.name}</option>
-                  ))}
-                </select>
-              )}
               <div className="flex gap-1.5">
                 <button
                   onClick={() => setShowCreateDialog(true)}
@@ -611,6 +583,21 @@ export default function KnowledgeGraphPage() {
               </div>
             </div>
 
+            {/* Architecture */}
+            <div className="px-3 py-2 border-b border-border">
+              <button
+                onClick={() => setActiveView("architecture")}
+                className={`w-full text-left text-xs px-2 py-1.5 rounded flex items-center gap-1.5 ${
+                  activeView === "architecture"
+                    ? "bg-blue-100 dark:bg-blue-900/40 border border-blue-300 dark:border-blue-700 font-medium text-blue-900 dark:text-blue-100"
+                    : "hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                <HubIcon sx={{ fontSize: 16 }} className={activeView === "architecture" ? "text-blue-600 dark:text-blue-400" : ""} />
+                <span>RDK-B Architecture</span>
+              </button>
+            </div>
+
             {/* Templates */}
             {templates && templates.length > 0 && (
               <div className="px-3 py-2 border-b border-border">
@@ -622,7 +609,7 @@ export default function KnowledgeGraphPage() {
                     disabled={importMut.isPending}
                     className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted mb-1 flex items-center gap-1"
                   >
-                    <UploadIcon sx={{ fontSize: 14 }} className="text-muted-foreground" />
+                    <AddIcon sx={{ fontSize: 14 }} className="text-muted-foreground" />
                     <span className="truncate">{t.name}</span>
                     <span className="ml-auto text-[10px] text-muted-foreground">{t.node_count}n</span>
                   </button>
@@ -639,21 +626,19 @@ export default function KnowledgeGraphPage() {
                 <div
                   key={g.id}
                   className={`group flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs transition-colors cursor-pointer ${
-                    selectedGraphId === g.id
+                    selectedGraphId === g.id && activeView === "editor"
                       ? "bg-blue-100 dark:bg-blue-900/40 border border-blue-300 dark:border-blue-700"
                       : "hover:bg-muted"
                   }`}
                   onClick={() => {
                     setSelectedGraphId(g.id);
+                    setActiveView("editor");
                     setEditingNode(null);
                     setEditingEdge(null);
                   }}
                 >
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate">{g.name}</div>
-                    {g.natco_code && (
-                      <span className="text-[10px] text-muted-foreground">{g.natco_code}</span>
-                    )}
                   </div>
                   <button
                     onClick={(e) => {
@@ -683,19 +668,24 @@ export default function KnowledgeGraphPage() {
       </div>
 
       {/* Main canvas area */}
-      <div className="flex-1 relative">
-        {!selectedGraphId ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
-            <div className="text-center">
-              <HubIcon sx={{ fontSize: 48 }} className="text-muted-foreground/30 mb-3" />
-              <p>Select or create a knowledge graph to get started</p>
+      <div className="flex-1 relative flex flex-col">
+        <div className="flex-1 relative overflow-hidden">
+          {activeView === "architecture" ? (
+            <div className="h-full min-h-0 p-2 md:p-4">
+              <ArchitectureGraphView />
             </div>
-          </div>
-        ) : graphLoading ? (
-          <div className="flex items-center justify-center h-full">
-            <CircularProgress size={32} />
-          </div>
-        ) : (
+          ) : !selectedGraphId ? (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <div className="text-center">
+                <HubIcon sx={{ fontSize: 48 }} className="text-muted-foreground/30 mb-3" />
+                <p>Select or create a knowledge graph to get started</p>
+              </div>
+            </div>
+          ) : graphLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <CircularProgress size={32} />
+            </div>
+          ) : (
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -766,11 +756,12 @@ export default function KnowledgeGraphPage() {
 
 
           </ReactFlow>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Right panel - property editor */}
-      {(editingNode || editingEdge) && (
+      {(editingNode || editingEdge) && activeView === "editor" && (
         <div className="w-80 border-l border-border bg-card overflow-y-auto">
           {editingNode && (
             <NodeEditor
@@ -817,22 +808,10 @@ export default function KnowledgeGraphPage() {
                 rows={3}
                 className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background resize-none"
               />
-              {natcos && natcos.length > 0 && (
-                <select
-                  value={newGraphNatcoId ?? ""}
-                  onChange={(e) => setNewGraphNatcoId(e.target.value ? Number(e.target.value) : null)}
-                  className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background"
-                >
-                  <option value="">Global (no NATCO)</option>
-                  {natcos.map((nc: { id: number; code: string; name: string }) => (
-                    <option key={nc.id} value={nc.id}>{nc.code} - {nc.name}</option>
-                  ))}
-                </select>
-              )}
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button
-                onClick={() => { setShowCreateDialog(false); setNewGraphNatcoId(null); }}
+                onClick={() => { setShowCreateDialog(false); }}
                 className="px-3 py-1.5 text-sm rounded-lg border border-border hover:bg-muted"
               >
                 Cancel
@@ -842,7 +821,6 @@ export default function KnowledgeGraphPage() {
                   createGraphMut.mutate({
                     name: newGraphName,
                     description: newGraphDesc,
-                    natco_id: newGraphNatcoId,
                   })
                 }
                 disabled={!newGraphName.trim() || createGraphMut.isPending}
@@ -891,6 +869,15 @@ function NodeEditor({
   const [exclusions, setExclusions] = useState(
     node.detection_config?.exclusions?.join("\n") ?? ""
   );
+  const [patterns, setPatterns] = useState(
+    node.detection_config?.patterns?.join("\n") ?? ""
+  );
+  const [templatePatterns, setTemplatePatterns] = useState(
+    node.detection_config?.template_patterns?.join("\n") ?? ""
+  );
+  const [templateKeywords, setTemplateKeywords] = useState(
+    node.detection_config?.template_keywords?.join("\n") ?? ""
+  );
   const [refGraphId, setRefGraphId] = useState(
     node.detection_config?.referenced_graph_id ?? ""
   );
@@ -907,6 +894,9 @@ function NodeEditor({
     setKeywords(node.detection_config?.keywords?.join("\n") ?? "");
     setSourceDomains(node.detection_config?.source_domains?.join(", ") ?? "");
     setExclusions(node.detection_config?.exclusions?.join("\n") ?? "");
+    setPatterns(node.detection_config?.patterns?.join("\n") ?? "");
+    setTemplatePatterns(node.detection_config?.template_patterns?.join("\n") ?? "");
+    setTemplateKeywords(node.detection_config?.template_keywords?.join("\n") ?? "");
     setRefGraphId(node.detection_config?.referenced_graph_id ?? "");
     setActivationMode(node.detection_config?.activation_mode ?? "any_issue");
   }, [node]);
@@ -916,16 +906,31 @@ function NodeEditor({
   const handleSave = () => {
     let dc: KnowledgeNodeData["detection_config"] = null;
     if (nodeType === "EVENT") {
+      const patLines = patterns
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const tmplPatLines = templatePatterns
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const tmplKwLines = templateKeywords
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
       dc = {
         method: "keyword",
         keywords: keywords
           .split("\n")
           .map((s) => s.trim())
           .filter(Boolean),
+        patterns: patLines.length ? patLines : undefined,
         source_domains: sourceDomains
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
+        template_patterns: tmplPatLines.length ? tmplPatLines : undefined,
+        template_keywords: tmplKwLines.length ? tmplKwLines : undefined,
         exclusions: exclusions
           .split("\n")
           .map((s) => s.trim())
@@ -1031,6 +1036,45 @@ function NodeEditor({
 
             <div>
               <label className="block text-xs text-muted-foreground mb-1">
+                Log line regex — patterns (one per line, optional)
+              </label>
+              <textarea
+                value={patterns}
+                onChange={(e) => setPatterns(e.target.value)}
+                rows={3}
+                placeholder={"Separate from keywords when using explicit patterns[] API"}
+                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-background resize-none font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Drain3 template regex (one per line, optional)
+              </label>
+              <textarea
+                value={templatePatterns}
+                onChange={(e) => setTemplatePatterns(e.target.value)}
+                rows={3}
+                placeholder={"WIFI.*disassoc\n<*>\\s+timeout"}
+                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-background resize-none font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
+                Drain3 template substrings (one per line, optional)
+              </label>
+              <textarea
+                value={templateKeywords}
+                onChange={(e) => setTemplateKeywords(e.target.value)}
+                rows={2}
+                placeholder={"disassoc\ntimeout"}
+                className="w-full px-2 py-1.5 text-xs border border-border rounded-md bg-background resize-none font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">
                 Source Domains (comma-separated)
               </label>
               <input
@@ -1069,7 +1113,7 @@ function NodeEditor({
                 <option value="">-- Select a graph --</option>
                 {availableGraphs.map((g) => (
                   <option key={g.id} value={g.id}>
-                    {g.name} {g.natco_code ? `(${g.natco_code})` : ""}
+                    {g.name}
                   </option>
                 ))}
               </select>

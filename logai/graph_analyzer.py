@@ -30,7 +30,6 @@ import os
 import re
 import shutil
 import tempfile
-from datetime import datetime
 import subprocess
 import time
 from collections import Counter, defaultdict
@@ -50,6 +49,7 @@ from logai.info_extractor import (
     find_and_parse_version_txt,
     find_and_build_fallback_device_info,
 )
+from logai.rdkb_knowledge import chain_module_plausibility, resolve_modules
 from logai.telemetry_parser import parse_telemetry_file
 
 logger = logging.getLogger(__name__)
@@ -245,6 +245,45 @@ def _compile_node_patterns(node: Dict) -> Tuple[List[re.Pattern], List[re.Patter
     return patterns, exclusions
 
 
+def _detection_uses_parquet(node: Dict[str, Any]) -> bool:
+    """When True, use parquet-backed detection for this node (avoids double-count with rg)."""
+    dc = node.get("detection_config") or {}
+    return bool(dc.get("template_patterns") or dc.get("template_keywords"))
+
+
+def _compile_template_patterns(
+    dc: Dict[str, Any],
+) -> Tuple[List[re.Pattern], List[str]]:
+    """Compile ``template_patterns`` (regex) and lowercase ``template_keywords``."""
+    patterns: List[re.Pattern] = []
+    keywords: List[str] = []
+    for rx in dc.get("template_patterns") or []:
+        if not rx:
+            continue
+        try:
+            patterns.append(re.compile(str(rx), re.IGNORECASE))
+        except re.error:
+            logger.warning("Bad template regex in detection_config: %s", rx)
+    for kw in dc.get("template_keywords") or []:
+        if kw:
+            keywords.append(str(kw).lower())
+    return patterns, keywords
+
+
+def _template_field_matches(
+    template_value: str,
+    tmpl_pats: List[re.Pattern],
+    tmpl_kwds: List[str],
+) -> bool:
+    if not tmpl_pats and not tmpl_kwds:
+        return False
+    t = template_value or ""
+    if any(p.search(t) for p in tmpl_pats):
+        return True
+    tl = t.lower()
+    return any(k in tl for k in tmpl_kwds if k)
+
+
 # ---------------------------------------------------------------------------
 # Ripgrep-based detection
 # ---------------------------------------------------------------------------
@@ -262,52 +301,25 @@ _RG_SKIP_FILES = frozenset({
     ".device_info_cache.json", ".reboots_cache.json",
 })
 
+# Avoid huge argv / regex limits; spill union pattern to a temp file for rg -f.
+_RG_UNION_PATTERN_INLINE_MAX = 120_000
 
-def _run_rg_for_node(
-    node: Dict,
-    cpe_dir: Path,
-) -> List[Dict[str, Any]]:
-    """Run ripgrep for a single EVENT node and return structured matches.
 
-    Each match dict contains ``text`` (the matched line, up to 400 chars),
-    ``file`` (relative filename), and ``timestamp`` (ISO string or ``""``).
-    """
-    if not _RG_BIN:
-        return []
-
-    dc = node.get("detection_config") or {}
-    raw_patterns = list(dc.get("keywords", [])) + list(dc.get("patterns", []))
-    if not raw_patterns:
-        return []
-
-    combined = "|".join(f"({p})" for p in raw_patterns)
-
-    cmd = [
-        _RG_BIN, "--json", "-i", "-e", combined,
-        "--max-filesize", "50M",
-    ]
+def _rg_path_and_glob_args(cpe_dir: Path) -> List[str]:
+    """Ripgrep path + skip globs (shared by all rg invocations)."""
+    args: List[str] = ["--max-filesize", "50M"]
     for skip in _RG_SKIP_DIRS:
-        cmd.extend(["--glob", f"!{skip}/"])
+        args.extend(["--glob", f"!{skip}/"])
     for skip in _RG_SKIP_FILES:
-        cmd.extend(["--glob", f"!{skip}"])
-    cmd.append(str(cpe_dir))
+        args.extend(["--glob", f"!{skip}"])
+    args.append(str(cpe_dir))
+    return args
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning(f"[GraphAnalyzer] rg timeout for node {node.get('name')}")
-        return []
-    except Exception as exc:
-        logger.warning(f"[GraphAnalyzer] rg error for node {node.get('name')}: {exc}")
-        return []
 
+def _parse_rg_json_stdout(stdout: str, cpe_dir: Path) -> List[Dict[str, Any]]:
+    """Parse ``rg --json`` lines into match dicts (text, file, timestamp)."""
     matches: List[Dict[str, Any]] = []
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
@@ -330,8 +342,161 @@ def _run_rg_for_node(
             "file": rel,
             "timestamp": ts_str,
         })
-
     return matches
+
+
+def _run_rg_with_pattern(cpe_dir: Path, pattern: str) -> List[Dict[str, Any]]:
+    """Run a single ripgrep search with ``-e pattern`` (or ``-f`` if very long)."""
+    if not _RG_BIN or not pattern.strip():
+        return []
+
+    tmp_path: Optional[str] = None
+    try:
+        if len(pattern) > _RG_UNION_PATTERN_INLINE_MAX:
+            fd, tmp_path = tempfile.mkstemp(suffix=".rgpat", text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(pattern)
+            except Exception:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                raise
+            cmd = [
+                _RG_BIN, "--json", "-i", "-f", tmp_path,
+                *_rg_path_and_glob_args(cpe_dir),
+            ]
+        else:
+            cmd = [
+                _RG_BIN, "--json", "-i", "-e", pattern,
+                *_rg_path_and_glob_args(cpe_dir),
+            ]
+
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("[GraphAnalyzer] rg timeout (unified or single pattern)")
+        return []
+    except Exception as exc:
+        logger.warning("[GraphAnalyzer] rg error: %s", exc)
+        return []
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    if proc.returncode not in (0, 1):
+        err = (proc.stderr or "").strip()
+        if err:
+            logger.warning("[GraphAnalyzer] rg exit %s: %s", proc.returncode, err[:500])
+        return []
+
+    return _parse_rg_json_stdout(proc.stdout, cpe_dir)
+
+
+def _build_union_pattern_for_rg_nodes(rg_nodes: List[Dict]) -> str:
+    """Single alternation over all keywords/patterns so one ``rg`` pass suffices."""
+    parts: List[str] = []
+    for node in rg_nodes:
+        dc = node.get("detection_config") or {}
+        raw_patterns = list(dc.get("keywords", [])) + list(dc.get("patterns", []))
+        for p in raw_patterns:
+            ps = str(p).strip()
+            if not ps:
+                continue
+            parts.append(f"(?:{ps})")
+    return "|".join(parts)
+
+
+def _empty_rg_evidence() -> Dict[str, Any]:
+    return {
+        "count": 0,
+        "sample_lines": [],
+        "timestamps": [],
+        "rdk_modules": [],
+    }
+
+
+def _classify_unified_rg_matches(
+    matches: List[Dict[str, Any]],
+    rg_nodes: List[Dict],
+    compiled_map: Dict[str, Tuple[List[re.Pattern], List[re.Pattern]]],
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Turn one unified ``rg`` result into per-node evidence (exclusions + windows)."""
+    out: Dict[str, Dict[str, Any]] = {
+        n["id"]: _empty_rg_evidence() for n in rg_nodes
+    }
+    if not matches or not rg_nodes:
+        return out
+
+    node_rows: List[Tuple[str, List[re.Pattern], List[re.Pattern]]] = []
+    for n in rg_nodes:
+        nid = n["id"]
+        pats, excl = compiled_map[nid]
+        if not pats:
+            continue
+        node_rows.append((nid, pats, excl))
+
+    for m in matches:
+        text = m["text"]
+        ts = _parse_ts(m["timestamp"]) if m.get("timestamp") else None
+        if window_start is not None and (ts is None or ts < window_start):
+            continue
+        if window_end is not None and (ts is None or ts > window_end):
+            continue
+
+        for nid, pats, excl in node_rows:
+            if excl and any(ex.search(text) for ex in excl):
+                continue
+            if not any(p.search(text) for p in pats):
+                continue
+            ev = out[nid]
+            ev["count"] += 1
+            if ts:
+                ev["timestamps"].append(ts.isoformat())
+            if len(ev["sample_lines"]) < 5:
+                ev["sample_lines"].append(text)
+
+    return out
+
+
+def _run_rg_for_node(
+    node: Dict,
+    cpe_dir: Path,
+) -> List[Dict[str, Any]]:
+    """Run ripgrep for a single EVENT node and return structured matches.
+
+    Each match dict contains ``text`` (the matched line, up to 400 chars),
+    ``file`` (relative filename), and ``timestamp`` (ISO string or ``""``).
+    """
+    dc = node.get("detection_config") or {}
+    raw_patterns = list(dc.get("keywords", [])) + list(dc.get("patterns", []))
+    if not raw_patterns:
+        return []
+
+    combined = "|".join(f"({p})" for p in raw_patterns)
+    return _run_rg_with_pattern(cpe_dir, combined)
+
+
+def _unified_rg_matches_for_nodes(
+    cpe_dir: Path,
+    rg_nodes: List[Dict],
+) -> List[Dict[str, Any]]:
+    """One directory scan for all *rg_nodes*; empty list if rg unavailable."""
+    union = _build_union_pattern_for_rg_nodes(rg_nodes)
+    if not union:
+        return []
+    return _run_rg_with_pattern(cpe_dir, union)
 
 
 def _detect_events_via_rg(
@@ -343,10 +508,15 @@ def _detect_events_via_rg(
 ) -> Dict[str, Any]:
     """Detect events for a node using ripgrep on the raw CPE directory.
 
-    This replaces the parquet-based ``_detect_events_for_node`` and
-    eliminates the need for ``source_domains``.
+    Prefer :func:`_classify_unified_rg_matches` with a precomputed match list
+    when analyzing many nodes on the same directory.
     """
-    evidence: Dict[str, Any] = {"count": 0, "sample_lines": [], "timestamps": []}
+    evidence: Dict[str, Any] = {
+        "count": 0,
+        "sample_lines": [],
+        "timestamps": [],
+        "rdk_modules": [],
+    }
 
     rg_matches = _run_rg_for_node(node, cpe_dir)
     if not rg_matches:
@@ -421,45 +591,81 @@ def _detect_events_for_node(
     window_start: Optional[datetime] = None,
     window_end: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Match a single node's patterns against a (windowed) DataFrame."""
+    """Match a single node's patterns against a (windowed) DataFrame.
+
+    Uses logline regex/keywords (``patterns`` / ``keywords``) and/or
+    ``template_patterns`` / ``template_keywords`` on the Drain3 template
+    column. Resolves ``rdk_modules`` from ``configs/rdkb_module_graph.yaml``.
+    """
     dc = node.get("detection_config") or {}
     source_domains = set(dc.get("source_domains", []))
+    tmpl_pats, tmpl_kwds = _compile_template_patterns(dc)
 
-    evidence = {"count": 0, "sample_lines": [], "timestamps": []}
+    evidence: Dict[str, Any] = {
+        "count": 0,
+        "sample_lines": [],
+        "timestamps": [],
+        "rdk_modules": [],
+    }
 
-    if df.empty or not compiled_patterns:
+    has_log = bool(compiled_patterns)
+    has_tmpl = bool(tmpl_pats or tmpl_kwds)
+    if df.empty or (not has_log and not has_tmpl):
         return evidence
 
     mask = pd.Series(True, index=df.index)
-    if source_domains:
+    if source_domains and "_domain" in df.columns:
         mask &= df["_domain"].isin(source_domains)
     if window_start is not None and "_ts" in df.columns:
         mask &= df["_ts"].notna() & (df["_ts"] >= window_start)
     if window_end is not None and "_ts" in df.columns:
         mask &= df["_ts"].notna() & (df["_ts"] <= window_end)
 
-    subset = df[mask]
+    subset = df.loc[mask]
     if subset.empty:
         return evidence
 
+    has_template_col = "template" in subset.columns
+    rdk_acc: Dict[str, Dict[str, Any]] = {}
+
     for _, row in subset.iterrows():
         text = str(row.get("loglines", ""))
-        if not text:
+        tmpl = str(row.get("template", "")) if has_template_col else ""
+
+        if compiled_exclusions:
+            if text and any(ex.search(text) for ex in compiled_exclusions):
+                continue
+            if tmpl and any(ex.search(tmpl) for ex in compiled_exclusions):
+                continue
+
+        log_ok = bool(text) and any(p.search(text) for p in compiled_patterns)
+        tmpl_ok = has_template_col and _template_field_matches(tmpl, tmpl_pats, tmpl_kwds)
+
+        if has_log and has_tmpl:
+            matched = log_ok or tmpl_ok
+        elif has_log:
+            matched = log_ok
+        else:
+            matched = tmpl_ok
+
+        if not matched:
             continue
 
-        if compiled_exclusions and any(ex.search(text) for ex in compiled_exclusions):
-            continue
+        evidence["count"] += 1
+        ts = row.get("_ts")
+        if ts:
+            evidence["timestamps"].append(ts.isoformat())
+        if len(evidence["sample_lines"]) < 5:
+            evidence["sample_lines"].append((text or tmpl)[:400])
 
-        for pat in compiled_patterns:
-            if pat.search(text):
-                evidence["count"] += 1
-                ts = row.get("_ts")
-                if ts:
-                    evidence["timestamps"].append(ts.isoformat())
-                if len(evidence["sample_lines"]) < 5:
-                    evidence["sample_lines"].append(text[:400])
-                break
+        dom = str(row.get("_domain", "")) if "_domain" in row.index else ""
+        src_file = str(row.get("source_file", "")) if "source_file" in row.index else ""
+        for m in resolve_modules(dom, src_file, tmpl, text):
+            mid = m.get("module_id")
+            if mid and mid not in rdk_acc:
+                rdk_acc[mid] = m
 
+    evidence["rdk_modules"] = list(rdk_acc.values())[:12]
     return evidence
 
 
@@ -561,6 +767,50 @@ def _evaluate_graph(
         "activated_issues": activated_nodes,
         "causal_chains": causal_chains,
     }
+
+
+def _apply_module_plausibility_to_chains_and_roots(
+    chains: List[Dict[str, Any]],
+    root_causes: List[Dict[str, Any]],
+    G: Any,
+    event_nodes: List[Dict[str, Any]],
+    node_evidence: Dict[str, Dict[str, Any]],
+) -> None:
+    """Augment *chains* and *root_causes* in place using RDK-B module graph."""
+    name_to_mods: Dict[str, List[str]] = {}
+    for n in event_nodes:
+        ev = node_evidence.get(n["id"], {})
+        mods = [
+            str(x["module_id"])
+            for x in (ev.get("rdk_modules") or [])
+            if x.get("module_id")
+        ]
+        name_to_mods[n["name"]] = mods
+
+    for c in chains:
+        path_ids = c.get("path_ids") or []
+        mids: List[str] = []
+        for nid in path_ids:
+            nd = G.nodes.get(nid, {})
+            if nd.get("node_type") != "EVENT":
+                continue
+            nm = nd.get("name")
+            lst = name_to_mods.get(nm, [])
+            if lst:
+                mids.append(lst[0])
+        c["module_plausibility"] = round(chain_module_plausibility(mids), 3)
+
+    for rc in root_causes:
+        issue_name = rc.get("name")
+        rel = [
+            float(ch.get("module_plausibility", 0.85))
+            for ch in chains
+            if ch.get("path") and ch["path"] and ch["path"][-1] == issue_name
+        ]
+        pl = max(rel) if rel else 0.85
+        base = float(rc.get("score", 0))
+        rc["score"] = round(base * (0.75 + 0.25 * pl), 3)
+        rc["module_plausibility"] = round(pl, 3)
 
 
 def _determine_likely_trigger(
@@ -826,19 +1076,39 @@ def _resolve_subgraph_nodes(
             sub_compiled[sn["id"]] = _compile_node_patterns(sn)
 
         sub_evidence: Dict[str, Dict[str, Any]] = {}
-        if use_rg:
-            for sn in sub_event_nodes:
-                _, excl = sub_compiled[sn["id"]]
-                sub_evidence[sn["id"]] = _detect_events_via_rg(
-                    sn, cpe_dir, excl, window_start, window_end,
+        sub_needs_parquet = any(_detection_uses_parquet(sn) for sn in sub_event_nodes)
+        sub_df = all_events
+        if sub_needs_parquet or not use_rg:
+            if sub_df is None or getattr(sub_df, "empty", True):
+                sub_df = _load_all_parquet_events(cpe_dir) if cpe_dir else pd.DataFrame()
+        if sub_df is None:
+            sub_df = pd.DataFrame()
+
+        sub_rg_nodes = [
+            sn for sn in sub_event_nodes
+            if use_rg and not _detection_uses_parquet(sn)
+        ]
+        sub_rg_ids = {sn["id"] for sn in sub_rg_nodes}
+        sub_unified = (
+            _unified_rg_matches_for_nodes(cpe_dir, sub_rg_nodes)
+            if (cpe_dir and sub_rg_nodes)
+            else []
+        )
+
+        for sn in sub_event_nodes:
+            if sn["id"] in sub_rg_ids:
+                continue
+            pats, excl = sub_compiled[sn["id"]]
+            sub_evidence[sn["id"]] = _detect_events_for_node(
+                sn, sub_df, pats, excl, window_start, window_end,
+            )
+        if sub_rg_nodes:
+            sub_evidence.update(
+                _classify_unified_rg_matches(
+                    sub_unified, sub_rg_nodes, sub_compiled,
+                    window_start, window_end,
                 )
-        else:
-            for sn in sub_event_nodes:
-                pats, excl = sub_compiled[sn["id"]]
-                sub_evidence[sn["id"]] = _detect_events_for_node(
-                    sn, all_events if all_events is not None else pd.DataFrame(),
-                    pats, excl, window_start, window_end,
-                )
+            )
 
         _resolve_subgraph_nodes(
             sub_def, sub_evidence, cpe_dir=cpe_dir,
@@ -881,6 +1151,7 @@ def _resolve_subgraph_nodes(
                 "confidence": max_conf,
                 "sample_lines": sample_lines[:10],
                 "timestamps": [],
+                "rdk_modules": [],
                 "subgraph_name": sub_def.get("name", ""),
                 "subgraph_result": sub_result,
             }
@@ -919,6 +1190,15 @@ def analyze_cpe(
     for n in event_nodes:
         compiled_map[n["id"]] = _compile_node_patterns(n)
 
+    needs_parquet = (not use_rg) or any(
+        _detection_uses_parquet(n) for n in event_nodes
+    )
+    parquet_events: Optional[pd.DataFrame] = (
+        _load_all_parquet_events(cpe_dir) if needs_parquet else None
+    )
+    if parquet_events is not None and parquet_events.empty:
+        parquet_events = None
+
     # Telemetry (uses raw cache when available)
     t2_path = cpe_dir / "telemetry2_0.txt"
     dcm_path = cpe_dir / "dcmscript.log"
@@ -940,23 +1220,30 @@ def analyze_cpe(
             reboots.append({"timestamp": ur["timestamp"], "reason": ur["reason"]})
     reboots.sort(key=lambda r: r.get("timestamp", ""))
 
-    # Load parquet events as fallback when rg is unavailable
-    all_events: Optional[pd.DataFrame] = None
-    if not use_rg:
-        all_events = _load_all_parquet_events(cpe_dir)
+    all_events: Optional[pd.DataFrame] = parquet_events
+
+    rg_nodes = [n for n in event_nodes if use_rg and not _detection_uses_parquet(n)]
+    rg_node_ids = {n["id"] for n in rg_nodes}
+    unified_rg_matches: List[Dict[str, Any]] = (
+        _unified_rg_matches_for_nodes(cpe_dir, rg_nodes) if rg_nodes else []
+    )
 
     # -- Global evidence (across all time) --
     global_evidence: Dict[str, Dict[str, Any]] = {}
-    if use_rg:
-        for n in event_nodes:
-            _, excl = compiled_map[n["id"]]
-            global_evidence[n["id"]] = _detect_events_via_rg(n, cpe_dir, excl)
-    else:
-        for n in event_nodes:
-            pats, excl = compiled_map[n["id"]]
-            global_evidence[n["id"]] = _detect_events_for_node(
-                n, all_events, pats, excl,
+    for n in event_nodes:
+        if n["id"] in rg_node_ids:
+            continue
+        pats, excl = compiled_map[n["id"]]
+        df = parquet_events if parquet_events is not None else pd.DataFrame()
+        global_evidence[n["id"]] = _detect_events_for_node(
+            n, df, pats, excl,
+        )
+    if rg_nodes:
+        global_evidence.update(
+            _classify_unified_rg_matches(
+                unified_rg_matches, rg_nodes, compiled_map,
             )
+        )
 
     # Resolve SUBGRAPH nodes (recursive evaluation of referenced graphs)
     _resolve_subgraph_nodes(
@@ -985,18 +1272,21 @@ def analyze_cpe(
         win_end = rb_ts + timedelta(minutes=REBOOT_WINDOW_AFTER_MIN)
 
         window_evidence: Dict[str, Dict[str, Any]] = {}
-        if use_rg:
-            for n in event_nodes:
-                _, excl = compiled_map[n["id"]]
-                window_evidence[n["id"]] = _detect_events_via_rg(
-                    n, cpe_dir, excl, win_start, win_end,
+        for n in event_nodes:
+            if n["id"] in rg_node_ids:
+                continue
+            pats, excl = compiled_map[n["id"]]
+            df = parquet_events if parquet_events is not None else pd.DataFrame()
+            window_evidence[n["id"]] = _detect_events_for_node(
+                n, df, pats, excl, win_start, win_end,
+            )
+        if rg_nodes:
+            window_evidence.update(
+                _classify_unified_rg_matches(
+                    unified_rg_matches, rg_nodes, compiled_map,
+                    win_start, win_end,
                 )
-        else:
-            for n in event_nodes:
-                pats, excl = compiled_map[n["id"]]
-                window_evidence[n["id"]] = _detect_events_for_node(
-                    n, all_events, pats, excl, win_start, win_end,
-                )
+            )
 
         _resolve_subgraph_nodes(
             graph_def, window_evidence, cpe_dir=cpe_dir,
@@ -1012,6 +1302,7 @@ def analyze_cpe(
                 "count": ev["count"],
                 "sample_lines": ev["sample_lines"],
                 "timestamps": ev["timestamps"],
+                "rdk_modules": ev.get("rdk_modules", []),
             }
         for n in graph_def["nodes"]:
             if n["node_type"] == "SUBGRAPH" and n["id"] in window_evidence:
@@ -1079,6 +1370,18 @@ def analyze_cpe(
         })
     root_causes.sort(key=lambda x: x["score"], reverse=True)
 
+    _apply_module_plausibility_to_chains_and_roots(chains, root_causes, G, event_nodes, global_evidence)
+
+    from logai.template_flow import build_template_flow_summary
+
+    template_flow_summary = build_template_flow_summary(
+        cpe_dir,
+        reboots,
+        before_min=REBOOT_WINDOW_BEFORE_MIN,
+        after_min=REBOOT_WINDOW_AFTER_MIN,
+        parquet_df=parquet_events,
+    )
+
     elapsed_ms = round((time.time() - t0) * 1000)
 
     return {
@@ -1093,6 +1396,7 @@ def analyze_cpe(
         "root_causes": root_causes,
         "graph_name": graph_def.get("name", ""),
         "analysis_elapsed_ms": elapsed_ms,
+        "template_flow": template_flow_summary,
     }
 
 

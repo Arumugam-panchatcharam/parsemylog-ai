@@ -1,11 +1,10 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useProject } from "@/hooks/useProject";
 import {
   knowledgeGraphApi,
   issueAnalysisApi,
   batchJobsApi,
-  projectsApi,
   type KnowledgeGraphSummary,
   type IssueAnalysisOverview,
   type IssueAnalysisCPEReport,
@@ -51,34 +50,11 @@ export default function IssueAnalysisPage() {
   // For single-CPE projects, auto-set the job ID to "__direct__" sentinel
   const effectiveJobId = isBatchProject ? selectedJobId : "__direct__";
 
-  // Fetch project detail to know NATCO
-  const { data: projectDetail } = useQuery({
-    queryKey: ["projectDetail", projectId],
-    queryFn: async () => (await projectsApi.get(projectId!)).data,
-    enabled: !!projectId,
-  });
-  const projectNatcoId = (projectDetail as any)?.natco_id as number | null | undefined;
-
-  // Fetch knowledge graphs: NATCO-specific + global
-  const { data: natcoGraphs } = useQuery({
-    queryKey: ["knowledgeGraphs", "natco", projectNatcoId],
-    queryFn: async () =>
-      (await knowledgeGraphApi.list({ natco_id: projectNatcoId! })).data,
-    enabled: !!projectNatcoId,
-  });
-  const { data: globalGraphs } = useQuery({
+  // Fetch knowledge graphs
+  const { data: graphs } = useQuery({
     queryKey: ["knowledgeGraphs", "global"],
     queryFn: async () => (await knowledgeGraphApi.list()).data,
   });
-
-  const graphs = useMemo(() => {
-    if (!projectNatcoId) return globalGraphs ?? [];
-    const natcoSet = new Set((natcoGraphs ?? []).map((g) => g.id));
-    const globals = (globalGraphs ?? []).filter(
-      (g) => !g.natco_id && !natcoSet.has(g.id)
-    );
-    return [...(natcoGraphs ?? []), ...globals];
-  }, [projectNatcoId, natcoGraphs, globalGraphs]);
 
   // Fetch analysis results
   const {
@@ -217,9 +193,9 @@ export default function IssueAnalysisPage() {
               className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background"
             >
               <option value="">Select graph...</option>
-              {graphs.map((g: KnowledgeGraphSummary) => (
+              {graphs?.map((g: KnowledgeGraphSummary) => (
                 <option key={g.id} value={g.id}>
-                  {g.name} {g.natco_code ? `(${g.natco_code})` : "(Global)"}
+                  {g.name}
                 </option>
               ))}
             </select>

@@ -144,9 +144,6 @@ export const batchJobsApi = {
 export interface KnowledgeGraphSummary {
   id: string;
   name: string;
-  natco_id: number | null;
-  natco_code?: string;
-  natco_name?: string;
   description: string;
   is_template: boolean;
   created_by: number | null;
@@ -167,6 +164,8 @@ export interface KnowledgeNodeData {
     keywords?: string[];
     patterns?: string[];
     source_domains?: string[];
+    template_patterns?: string[];
+    template_keywords?: string[];
     exclusions?: string[];
     threshold?: { metric: string; operator: string; value: number };
     referenced_graph_id?: string;
@@ -206,14 +205,46 @@ export interface GraphTemplate {
   edge_count: number;
 }
 
+/** RDK-B module graph from configs/rdkb_module_graph.yaml (Architecture tab). */
+export interface RdkbArchitectureReference {
+  title: string;
+  url: string;
+}
+
+export interface RdkbArchitectureNode {
+  id: string;
+  label: string;
+  domains: string[];
+  description: string;
+}
+
+export interface RdkbArchitectureEdge {
+  id: string;
+  source: string;
+  target: string;
+  relationship: string;
+  notes?: string | null;
+  confidence?: number;
+}
+
+export interface RdkbArchitectureGraphResponse {
+  version: number;
+  architecture_references: RdkbArchitectureReference[];
+  nodes: RdkbArchitectureNode[];
+  edges: RdkbArchitectureEdge[];
+  node_count?: number;
+  edge_count?: number;
+  warning?: string;
+}
+
 export const knowledgeGraphApi = {
-  list: (params?: { natco_id?: number; is_template?: boolean }) =>
+  list: (params?: { is_template?: boolean }) =>
     api.get<KnowledgeGraphSummary[]>("/knowledge-graphs/", { params }),
-  create: (data: { name: string; natco_id?: number | null; description?: string; is_template?: boolean }) =>
+  create: (data: { name: string; description?: string; is_template?: boolean }) =>
     api.post<KnowledgeGraphSummary>("/knowledge-graphs/", data),
   get: (graphId: string) =>
     api.get<KnowledgeGraphFull>(`/knowledge-graphs/${graphId}`),
-  update: (graphId: string, data: { name?: string; description?: string; natco_id?: number | null; is_template?: boolean }) =>
+  update: (graphId: string, data: { name?: string; description?: string; is_template?: boolean }) =>
     api.put<KnowledgeGraphSummary>(`/knowledge-graphs/${graphId}`, data),
   delete: (graphId: string) =>
     api.delete(`/knowledge-graphs/${graphId}`),
@@ -232,12 +263,15 @@ export const knowledgeGraphApi = {
   deleteEdge: (graphId: string, edgeId: string) =>
     api.delete(`/knowledge-graphs/${graphId}/edges/${edgeId}`),
 
-  importGraph: (data: { template?: string; natco_id?: number } & Record<string, unknown>) =>
+  importGraph: (data: { template?: string } & Record<string, unknown>) =>
     api.post<KnowledgeGraphFull>("/knowledge-graphs/import", data),
   exportGraph: (graphId: string) =>
     api.get<{ name: string; description: string; nodes: unknown[]; edges: unknown[] }>(`/knowledge-graphs/${graphId}/export`),
   listTemplates: () =>
     api.get<GraphTemplate[]>("/knowledge-graphs/templates"),
+
+  getRdkbArchitectureGraph: () =>
+    api.get<RdkbArchitectureGraphResponse>("/knowledge-graphs/architecture/rdkb"),
 };
 
 // ---------- Issue Analysis ----------

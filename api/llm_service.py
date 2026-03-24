@@ -161,7 +161,15 @@ def _load_reboots(project_dir: Path) -> str:
     if not cache.exists():
         return "No reboot data available."
     try:
-        reboots = json.loads(cache.read_text(encoding="utf-8"))
+        data = json.loads(cache.read_text(encoding="utf-8"))
+        # Handle both old format (list) and new format (dict with "reboots" key)
+        if isinstance(data, dict) and "reboots" in data:
+            reboots = data["reboots"]
+        elif isinstance(data, list):
+            reboots = data
+        else:
+            return "Invalid reboot cache format."
+        
         if not reboots:
             return "No reboots detected."
         lines = [f"Total reboots: {len(reboots)}"]
@@ -176,30 +184,133 @@ def _load_reboots(project_dir: Path) -> str:
 
 
 def _load_telemetry_summary(project_dir: Path) -> str:
-    """Load telemetry summary from cache."""
+    """Load telemetry summary from cache and format for LLM context."""
     cache = project_dir / "telemetry" / "response.json"
     if not cache.exists():
         return "No telemetry data available."
     try:
         data = json.loads(cache.read_text(encoding="utf-8"))
-        summary = data.get("summary", {})
-        if not summary:
-            return "Telemetry parsed but no summary available."
-
+        
         lines = []
-        device = summary.get("device_info", {})
+        
+        # === Device Info ===
+        device = data.get("device_info", {})
         if device:
-            lines.append("Device Info:")
+            lines.append("Device Information:")
             for k, v in device.items():
                 lines.append(f"  {k}: {v}")
-
-        status = summary.get("status_labels", [])
-        if status:
-            lines.append("\nStatus Labels:")
-            for s in status[:15]:
-                lines.append(f"  {s.get('group', '?')}/{s.get('label', '?')}: {s.get('value', 'N/A')}")
-
-        return "\n".join(lines) if lines else "Telemetry data present but no summary fields."
+        
+        # === Telemetry Summary (time range and report stats) ===
+        summary = data.get("summary", {})
+        if summary:
+            lines.append("\nTelemetry Summary:")
+            if "total" in summary or "parsed" in summary:
+                lines.append(f"  Reports: {summary.get('parsed', 0)}/{summary.get('total', 0)}")
+            if "overall_time_range" in summary and summary["overall_time_range"]:
+                time_range = summary["overall_time_range"]
+                start = time_range.get("first") or time_range.get("start", "?")
+                end = time_range.get("last") or time_range.get("end", "?")
+                lines.append(f"  Time range: {start} to {end}")
+        
+        # === Key Metrics (performance indicators) ===
+        key_metrics = data.get("key_metrics", [])
+        if key_metrics:
+            lines.append("\nKey Metrics:")
+            for metric in key_metrics:
+                label = metric.get("label", "Unknown")
+                
+                # Format based on metric type
+                if label == "Reports":
+                    value = metric.get("value", "N/A")
+                    time_range = metric.get("time_range", "")
+                    lines.append(f"  {label}: {value}" + (f" ({time_range})" if time_range else ""))
+                
+                elif label == "Memory Free":
+                    first = metric.get("first")
+                    last = metric.get("last")
+                    total = metric.get("total")
+                    unit = metric.get("unit", "KB")
+                    trend = metric.get("trend", "stable")
+                    if first is not None and last is not None:
+                        lines.append(f"  {label}: {first}{unit} → {last}{unit} (total: {total or '?'}{unit}, trend: {trend})")
+                    else:
+                        lines.append(f"  {label}: Not available")
+                
+                elif label == "CPU Usage":
+                    avg = metric.get("avg")
+                    peak = metric.get("peak")
+                    unit = metric.get("unit", "%")
+                    if avg is not None and peak is not None:
+                        lines.append(f"  {label}: avg {avg}{unit}, peak {peak}{unit}")
+                    else:
+                        lines.append(f"  {label}: Not available")
+                
+                elif label == "Uptime":
+                    first = metric.get("first")
+                    last = metric.get("last")
+                    resets = metric.get("resets", 0)
+                    unit = metric.get("unit", "")
+                    if first is not None and last is not None:
+                        lines.append(f"  {label}: {first}{unit} → {last}{unit} (resets: {resets})")
+                    else:
+                        lines.append(f"  {label}: Not available")
+                
+                elif label == "Reboot Reasons":
+                    counts = metric.get("counts", {})
+                    if counts:
+                        reasons_str = ", ".join(f"{reason} ({count})" for reason, count in counts.items())
+                        lines.append(f"  {label}: {reasons_str}")
+                    else:
+                        lines.append(f"  {label}: None detected")
+                
+                elif label == "Connected Devices":
+                    avg = metric.get("avg")
+                    peak = metric.get("peak")
+                    if avg is not None and peak is not None:
+                        lines.append(f"  {label}: avg {avg}, peak {peak}")
+                    else:
+                        lines.append(f"  {label}: Not available")
+                
+                elif label in ("DSL Downstream", "DSL Upstream"):
+                    min_val = metric.get("min")
+                    max_val = metric.get("max")
+                    unit = metric.get("unit", "")
+                    if min_val is not None and max_val is not None:
+                        lines.append(f"  {label}: {min_val}{unit} - {max_val}{unit}")
+                    else:
+                        lines.append(f"  {label}: Not available")
+                
+                else:
+                    # Generic fallback
+                    value = metric.get("value") or metric.get("avg") or metric.get("first") or "N/A"
+                    lines.append(f"  {label}: {value}")
+        
+        # === Status Labels (device health/connectivity) ===
+        status_labels = data.get("status_labels", [])
+        if status_labels:
+            lines.append("\nStatus Labels (Device Health):")
+            for label in status_labels:
+                label_type = label.get("type", "Unknown")
+                instance = label.get("instance", "")
+                status = label.get("status", "Unknown")
+                meta = label.get("meta", {})
+                
+                # Format label line
+                if instance:
+                    label_line = f"  {label_type} {instance}: {status}"
+                else:
+                    label_line = f"  {label_type}: {status}"
+                
+                # Add metadata if present
+                if meta:
+                    meta_str = ", ".join(f"{k}={v}" for k, v in meta.items())
+                    label_line += f" ({meta_str})"
+                
+                lines.append(label_line)
+        
+        result = "\n".join(lines)
+        return result if result.strip() else "Telemetry data present but empty."
+    
     except Exception as e:
         logger.warning(f"[LLM] Error loading telemetry: {e}")
         return "Error loading telemetry data."
@@ -227,6 +338,62 @@ def _load_device_info(project_dir: Path) -> str:
     except Exception as e:
         logger.warning(f"[LLM] Error loading device info: {e}")
         return "Error loading device info."
+
+
+def _detect_cpe_mention(user_query: str, project_id: str, user_id: int) -> Optional[str]:
+    """
+    Detect if user mentioned a specific CPE by MAC, serial, or ID in their message.
+    Returns the CPE ID if found, otherwise None (indicating multi-CPE analysis).
+    """
+    if not user_query:
+        return None
+    
+    query_lower = user_query.lower()
+    
+    # Try to find all available CPEs for this project
+    from pathlib import Path
+    from logai.utils.constants import UPLOAD_DIRECTORY
+    
+    project_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+    if not project_dir.exists():
+        return None
+    
+    # Get all CPE directories
+    cpe_dirs = []
+    for item in project_dir.iterdir():
+        if item.is_dir() and not item.name.startswith(('.', '_')):
+            cpe_id = item.name
+            # Check if it looks like a valid CPE
+            if (item / "telemetry" / "response.json").exists() or \
+               (item / ".reboots_cache.json").exists():
+                cpe_dirs.append(cpe_id)
+    
+    if not cpe_dirs:
+        return None
+    
+    # Check if any CPE ID is mentioned directly
+    for cpe_id in cpe_dirs:
+        if cpe_id.lower() in query_lower:
+            return cpe_id
+        # Also check partial matches (first 8 chars of serial)
+        if len(cpe_id) >= 8 and cpe_id[:8].lower() in query_lower:
+            return cpe_id
+    
+    # Check for common MAC address patterns (XX:XX:XX:XX:XX:XX or XXXXXXXXXXXX)
+    import re
+    mac_pattern = r'([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}|[0-9a-fA-F]{12}'
+    mac_matches = re.findall(mac_pattern, query_lower)
+    
+    if mac_matches:
+        # Try to find CPE with this MAC
+        for cpe_id in cpe_dirs:
+            cpe_dir = project_dir / cpe_id
+            device_info = _load_device_info(cpe_dir)
+            if device_info and any(mac.replace(':', '').lower() in device_info.lower() for mac in mac_matches):
+                return cpe_id
+    
+    # No specific CPE mentioned, use all CPEs
+    return None
 
 
 def _load_rag_context(project_id: str, cpe_id: Optional[str],
@@ -290,32 +457,129 @@ def _load_rag_context(project_id: str, cpe_id: Optional[str],
         return "Semantic search unavailable."
 
 
+def _get_all_cpe_dirs(project_root: Path) -> List[tuple[str, Path]]:
+    """Get all CPE directories in the project root."""
+    cpe_dirs = []
+    if not project_root.exists():
+        return cpe_dirs
+    
+    for item in project_root.iterdir():
+        if item.is_dir() and not item.name.startswith(('.', '_')):
+            # Check if this looks like a CPE directory (contains telemetry or log files)
+            if (item / "telemetry" / "response.json").exists() or \
+               (item / ".reboots_cache.json").exists() or \
+               any(item.glob("*.txt")) or \
+               any(item.glob("*.log")):
+                cpe_dirs.append((item.name, item))
+    
+    return sorted(cpe_dirs)
+
+
+def _load_all_cpes_summary(project_root: Path) -> str:
+    """Load summary from all CPEs in project when no specific CPE is selected."""
+    cpe_dirs = _get_all_cpe_dirs(project_root)
+    
+    if not cpe_dirs:
+        return "No CPE data available."
+    
+    if len(cpe_dirs) == 1:
+        # Single CPE, load normally
+        cpe_id, cpe_dir = cpe_dirs[0]
+        return _load_telemetry_summary(cpe_dir)
+    
+    # Multiple CPEs: aggregate summary
+    lines = [f"Project has {len(cpe_dirs)} devices:\n"]
+    
+    for cpe_id, cpe_dir in cpe_dirs:
+        lines.append(f"\n=== Device: {cpe_id} ===")
+        
+        # Device info
+        device = _load_device_info(cpe_dir)
+        if device and "No device info" not in device:
+            # Just get the first line (model/version)
+            first_line = device.split('\n')[0] if '\n' in device else device
+            lines.append(first_line)
+        
+        # Reboots summary
+        reboots = _load_reboots(cpe_dir)
+        if "No reboot" not in reboots:
+            # Extract count
+            lines.append(reboots.split('\n')[0] if '\n' in reboots else reboots)
+        
+        # Telemetry status
+        telemetry = _load_telemetry_summary(cpe_dir)
+        if telemetry and "No telemetry" not in telemetry:
+            # Extract key metrics only (skip full details)
+            for line in telemetry.split('\n'):
+                if any(x in line for x in ['Memory Free', 'CPU Usage', 'Reboot Reasons', 'Connected Devices']):
+                    lines.append(f"  {line.strip()}")
+    
+    return "\n".join(lines) if lines else "No CPE data available."
+
+
 def build_system_prompt(project_name: str, project_dir: Path,
                         project_id: str, cpe_id: Optional[str],
-                        user_query: str) -> str:
+                        user_query: str, user_id: int = 1) -> str:
     """
     Build a grounded system prompt with all available pipeline evidence.
+    
+    When cpe_id is None, detects if user mentioned a specific CPE in their query.
+    If a CPE is mentioned, loads data for that CPE.
+    Otherwise, loads data from all CPEs in the project.
     """
+    # Detect if user mentioned a specific CPE
+    if cpe_id is None:
+        detected_cpe = _detect_cpe_mention(user_query, project_id, user_id)
+        cpe_id = detected_cpe
+    
     # Project info section
     project_info_parts = [f"Project: {project_name}"]
+    
+    # Determine if we're looking at single or multiple CPEs
     if cpe_id:
         project_info_parts.append(f"CPE: {cpe_id}")
+        working_dir = project_dir / cpe_id if cpe_id else project_dir
+    else:
+        # cpe_id is None: we're at project root, need to discover all CPEs
+        working_dir = project_dir
+        cpe_dirs = _get_all_cpe_dirs(project_dir)
+        if cpe_dirs:
+            cpe_ids = [c[0] for c in cpe_dirs]
+            project_info_parts.append(f"Devices: {', '.join(cpe_ids)}")
+    
     project_info = "\n".join(project_info_parts)
 
     # Gather evidence from all pipeline stages
     evidence_sections = []
 
     # 1. Device info
-    device = _load_device_info(project_dir)
+    if cpe_id:
+        device = _load_device_info(working_dir)
+    else:
+        device = ""
+        cpe_dirs = _get_all_cpe_dirs(project_dir)
+        for cpe_id_i, cpe_dir_i in cpe_dirs:
+            dev_info = _load_device_info(cpe_dir_i)
+            if dev_info and "No device info" not in dev_info:
+                device += f"Device {cpe_id_i}:\n{dev_info}\n\n"
+    
     if device and "No device info" not in device:
         evidence_sections.append(f"-- Device Info --\n{device}")
 
     # 2. Reboot timeline
-    reboots = _load_reboots(project_dir)
-    evidence_sections.append(f"-- Reboot Timeline --\n{reboots}")
+    if cpe_id:
+        reboots = _load_reboots(working_dir)
+    else:
+        reboots = _load_all_cpes_summary(project_dir)
+    
+    evidence_sections.append(f"-- Reboot Timeline / CPE Summary --\n{reboots}")
 
     # 3. Telemetry
-    telemetry = _load_telemetry_summary(project_dir)
+    if cpe_id:
+        telemetry = _load_telemetry_summary(working_dir)
+    else:
+        telemetry = _load_all_cpes_summary(project_dir)
+    
     if telemetry and "No telemetry" not in telemetry:
         evidence_sections.append(f"-- Telemetry Status --\n{telemetry}")
 
