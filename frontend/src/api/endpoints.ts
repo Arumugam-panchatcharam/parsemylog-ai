@@ -387,9 +387,32 @@ export const filesApi = {
       cpes: string[];
       error: string | null;
     }>(`/projects/${projectId}/files/processing-status`),
-  getContent: (projectId: string, filename: string, page = 1, linesPerPage = 1000, cpeId?: string | null) =>
-    api.get(`/projects/${projectId}/files/${filename}/content`, {
-      params: { page, lines_per_page: linesPerPage, ...(cpeId ? { cpe_id: cpeId } : {}) },
+  getContent: (
+    projectId: string,
+    filename: string,
+    page = 1,
+    linesPerPage = 1000,
+    cpeId?: string | null,
+    dedup?: boolean,
+  ) =>
+    api.get<{
+      lines: string[];
+      page: number;
+      total_pages: number;
+      total_lines: number;
+      total_lines_raw?: number;
+      line_numbers?: number[];
+      start_line: number;
+      end_line: number;
+      filename?: string;
+      dedup_applied?: boolean;
+    }>(`/projects/${projectId}/files/${filename}/content`, {
+      params: {
+        page,
+        lines_per_page: linesPerPage,
+        ...(cpeId ? { cpe_id: cpeId } : {}),
+        ...(dedup ? { dedup: 1 } : {}),
+      },
     }),
   download: (projectId: string, filename: string, cpeId?: string | null) =>
     api.get(`/projects/${projectId}/files/${filename}/download`, {
@@ -401,13 +424,53 @@ export const filesApi = {
       responseType: "blob",
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
-  search: (projectId: string, filename: string, pattern: string, cpeId?: string | null) =>
-    api.post(`/projects/${projectId}/files/${filename}/search`, { pattern, cpe_id: cpeId || undefined }),
-  searchAllFiles: (projectId: string, pattern: string, cpeId?: string | null) =>
-    api.post<{ matches: Array<{ filename: string; line_number: number; text: string }>; total: number; pattern: string; truncated?: boolean }>(
-      `/projects/${projectId}/files/search-all`,
-      { pattern, cpe_id: cpeId ?? undefined }
+  search: (
+    projectId: string,
+    filename: string,
+    pattern: string,
+    cpeId?: string | null,
+    dedup?: boolean,
+    linesPerPage?: number,
+  ) =>
+    api.post<{
+      matches: Array<{
+        line_number: number;
+        text: string;
+        content_page?: number;
+      }>;
+      total: number;
+      pattern: string;
+    }>(`/projects/${projectId}/files/${filename}/search`, {
+      pattern,
+      cpe_id: cpeId || undefined,
+      lines_per_page: linesPerPage,
+      ...(dedup ? { dedup: true } : {}),
+    }),
+  searchAllFiles: (projectId: string, pattern: string, cpeId?: string | null, dedup?: boolean, linesPerPage?: number) =>
+    api.post<{
+      matches: Array<{
+        filename: string;
+        line_number: number;
+        text: string;
+        content_page?: number;
+      }>;
+      total: number;
+      pattern: string;
+      truncated?: boolean;
+    }>(`/projects/${projectId}/files/search-all`, {
+      pattern,
+      cpe_id: cpeId ?? undefined,
+      lines_per_page: linesPerPage,
+      ...(dedup ? { dedup: true } : {}),
+    }),
+  getLogViewerDedupPatterns: (projectId: string) =>
+    api.get<{ dedup_active: boolean; patterns: Array<{ id: string; name: string; regex: string; enabled: boolean }> }>(
+      `/projects/${projectId}/log-viewer-dedup-patterns`,
     ),
+  saveLogViewerDedupPatterns: (
+    projectId: string,
+    body: { dedup_active: boolean; patterns: Array<{ id: string; name: string; regex: string; enabled: boolean }> },
+  ) => api.put(`/projects/${projectId}/log-viewer-dedup-patterns`, body),
   getNotes: (projectId: string) => api.get(`/projects/${projectId}/notes`),
   saveNotes: (projectId: string, content: string) =>
     api.put(`/projects/${projectId}/notes`, { content }),

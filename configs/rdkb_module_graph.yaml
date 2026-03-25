@@ -1,0 +1,817 @@
+# RDK-B module / component graph (curated seed).
+# Aligns with RDK Connectivity layered architecture (Application / Middleware / HAL / OSS / Platform).
+# Extend per NATCO or firmware; keep module_id stable for APIs.
+#
+# Primary documentation (human architecture + component index):
+version: 3
+architecture_references:
+- title: RDK Connectivity Architecture (layers, CCSP, Unified, IPC, TR-181 flows)
+  url: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- title: RDK-B Device Management (WebUI, TR-069, SNMP, logging, telemetry upload)
+  url: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- title: "Telemetry \u2014 configurations, working procedure (DCM, XConf, dcmscript)"
+  url: https://wiki.rdkcentral.com/spaces/RDK/pages/371133557/Telemetry+-+configurations+working+procedure
+- title: RDK-B Components (index with per-component briefs)
+  url: https://wiki.rdkcentral.com/spaces/RDK/pages/20807849/RDK-B+Components
+- title: RBus Architecture and APIs
+  url: https://developer.rdkcentral.com/documentation/documentation/rdk_connectivity_documentation/components/r_bus/
+- title: TR-181 Data Model Reference
+  url: https://developer.rdkcentral.com/documentation/documentation/rdk_connectivity_documentation/components/tr-181_data_model/
+- title: D-Bus Specification
+  url: https://dbus.freedesktop.org/doc/dbus-specification.html
+nodes:
+- module_id: ccsp_cr
+  display_name: CcspCr (Component Registry)
+  description: Central registry where CCSP components announce their presence and TR-181 namespaces. Provides
+    discovery and namespace conflict resolution.
+  primary_domains:
+  - platform
+  - core_router
+  - common
+  log_hints:
+  - CcspCr
+  - ccsp_cr
+  - Component Registry
+  - CcspCrSsp
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: ccsp_pandm
+  display_name: CcspPandM (Provisioning & Management)
+  description: Manages device-level operations, provisioning, factory reset. Acts as TR-181 gateway for
+    Device.DeviceInfo, Device.Time, Device.UserInterface.
+  primary_domains:
+  - platform
+  - core_router
+  log_hints:
+  - CcspPandM
+  - PandM
+  - Provisioning
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: ccsp_psm
+  display_name: CcspPsm (Persistent Storage Manager)
+  description: Provides database services (XML/SQLite) for parameter storage, handles persistence, backup,
+    and restore.
+  primary_domains:
+  - platform
+  - core_router
+  log_hints:
+  - '[PSM]'
+  - psm_
+  - CcspPsm
+  - PSM SET
+  - PSM GET
+  - PSMlog
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: ccsp_dbus
+  display_name: CCSP D-Bus
+  description: Legacy IPC message bus used by CCSP components. Supports standard D-Bus specifications.
+  primary_domains:
+  - platform
+  - core_router
+  - common
+  log_hints:
+  - ccsp
+  - '[dbus]'
+  - DBus
+  - dbus-daemon
+  source:
+    type: doc
+    ref: https://dbus.freedesktop.org/doc/dbus-specification.html
+- module_id: rbus
+  display_name: RBUS (Unified IPC)
+  description: Modern IPC solution for Unified Components. Features direct point-to-point binary protocol,
+    event publish/subscribe, and RPC.
+  primary_domains:
+  - platform
+  - core_router
+  - common
+  log_hints:
+  - rbus
+  - RBUS
+  - rtmessage
+  - rtMessage
+  - rbuscli
+  source:
+    type: doc
+    ref: https://developer.rdkcentral.com/documentation/documentation/rdk_connectivity_documentation/components/r_bus/
+- module_id: wifi_agent
+  display_name: CcspWi-FiAgent (Legacy Wi-Fi)
+  description: Controls legacy Wi-Fi operations, radio management, SSIDs, and client connectivity (Device.WiFi.*).
+  primary_domains:
+  - wireless
+  log_hints:
+  - wifiagent
+  - WIFIAGENT
+  - CcspWifiAgent
+  - hostapd
+  - wpa_supplicant
+  - WIFI-CLIENT
+  - wlan
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: one_wifi
+  display_name: OneWi-Fi (Unified Wi-Fi)
+  description: Unified Wi-Fi component replacing CcspWi-FiAgent. Manages radios, Wi-Fi 6/6E features (OFDMA,
+    WPA3), client steering.
+  primary_domains:
+  - wireless
+  log_hints:
+  - OneWi-Fi
+  - onewifi
+  - OneWifi
+  - ONEWIFI
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: mesh_agent
+  display_name: Mesh / EasyMesh Agent
+  description: Mesh networking integration, extending Wi-Fi HAL. Handles EasyMesh and vendor specific
+    mesh functionality.
+  primary_domains:
+  - mesh
+  log_hints:
+  - mesh
+  - easymesh
+  - '1905'
+  - wifi_hal
+  - Airties
+  - airties
+  - Plume
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/20807849/RDK-B+Components
+- module_id: ccsp_eth_agent
+  display_name: CcspEthAgent
+  description: Manages Ethernet wired networking operations, physical ports, link state, and statistics
+    (Device.Ethernet.*).
+  primary_domains:
+  - core_router
+  - platform
+  log_hints:
+  - CcspEthAgent
+  - Device.Ethernet
+  - EthAgent
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: ccsp_cm_agent
+  display_name: CcspCMAgent (DOCSIS)
+  description: Interfaces with cable modem hardware, monitors DOCSIS WAN connectivity and diagnostics
+    (Device.X_CISCO_COM_CableModem.*).
+  primary_domains:
+  - core_router
+  log_hints:
+  - CcspCMAgent
+  - CableModem
+  - DOCSIS
+  - X_CISCO_COM_CableModem
+  - CM agent
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: ccsp_lm_lite
+  display_name: CcspLMLite
+  description: Discovers and tracks devices connected to the LAN via ARP and DHCP lease monitoring (Device.Hosts.*).
+  primary_domains:
+  - core_router
+  - common
+  log_hints:
+  - CcspLMLite
+  - LMLite
+  - Device.Hosts
+  - LM.txt
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: wan_manager
+  display_name: RDK WAN Manager
+  description: Central orchestrator for multi-WAN connectivity (Ethernet, DOCSIS, DSL, GPON, LTE). Implements
+    failover and policy routing.
+  primary_domains:
+  - core_router
+  log_hints:
+  - wan
+  - WAN Manager
+  - X_RDK_WanManager
+  - WANOE
+  - erouter
+  - failover
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: ppp_manager
+  display_name: RDK PPP Manager
+  description: Establishes PPPoE/PPPoA connections with PAP/CHAP authentication and automatic reconnection.
+  primary_domains:
+  - core_router
+  log_hints:
+  - ppp
+  - RdkPppManager
+  - PPPoE
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: gpon_manager
+  display_name: RDK GPON Manager
+  description: Controls GPON/EPON optical interfaces, ONU/ONT operations, and OMCI protocol handling.
+  primary_domains:
+  - core_router
+  log_hints:
+  - RdkGpon
+  - GPON
+  - gpon
+  - X_RDK_PON
+  - PON Manager
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: vlan_bridge_mgr
+  display_name: RDK VLAN Bridge Manager
+  description: Configures VLANs and bridges for service segmentation (IPTV, VoIP, IoT) via 802.1Q/QinQ.
+  primary_domains:
+  - core_router
+  log_hints:
+  - VlanBridge
+  - X_RDK_Vlan
+  - VLAN Bridge
+  - bridge manager
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: cellular
+  display_name: RDK Cellular Manager (LTE/5G)
+  description: Controls LTE/5G modems, SIM operations, and PDP context activation for WAN backup.
+  primary_domains:
+  - cellular
+  log_hints:
+  - cellular
+  - Cellular Manager
+  - lte
+  - modem
+  - qmi
+  - MBB
+  - wwan
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: voice_sip
+  display_name: RDK Telco Voice Manager
+  description: VoIP services, SIP registration, codecs, RTP/SRTP media with QoS.
+  primary_domains:
+  - voice
+  log_hints:
+  - sip
+  - SIP
+  - voice
+  - mta
+  - eMTA
+  - TelcoVoice
+  - VoIP
+  - RdkTelcoVoiceManager
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: tr069_pa
+  display_name: CcspTr069Pa (TR-069 PA)
+  description: TR-069 protocol agent. Registers device to ACS, handles Inform and Get/SetParameterValues.
+  primary_domains:
+  - common
+  - core_router
+  log_hints:
+  - CcspTr069Pa
+  - TR069
+  - TR-069
+  - TR69log
+  - Inform
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: webpa
+  display_name: WebPA
+  description: HTTP/WebSocket-based protocol for fast real-time device management parameter access.
+  primary_domains:
+  - common
+  - core_router
+  log_hints:
+  - WEBPA
+  - WebPa
+  - webpa
+  - WEBPAlog
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: snmp_pa
+  display_name: CcspSnmpPa
+  description: SNMP protocol agent. Handles Get requests from management systems.
+  primary_domains:
+  - common
+  - core_router
+  log_hints:
+  - CcspSnmpPa
+  - SNMP
+  - snmp
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: tr369
+  display_name: TR-369 (USP) Agent
+  description: Next-generation USP management protocol (MQTT, WebSocket).
+  primary_domains:
+  - common
+  - core_router
+  log_hints:
+  - TR-369
+  - USP
+  - mqtt
+  - obuspa
+  - WebConfig
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: webui
+  display_name: WebUI / Captive Portal
+  description: Local web UI, Captive Portal activation, bridge mode toggles.
+  primary_domains:
+  - common
+  - platform
+  log_hints:
+  - webui
+  - WebUI
+  - lighttpd
+  - luci
+  - Captive Portal
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: rdk_logger
+  display_name: RDK Logger
+  description: Component logging framework. Formats data to stdout and local log files.
+  primary_domains:
+  - platform
+  - common
+  log_hints:
+  - RDKLogger
+  - rdklogger
+  - RDK_LOG
+  - COMPONENT
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: dcm_telemetry
+  display_name: DCM / Telemetry 2.0
+  description: Telemetry collection, log upload, XConf formulas via dcmscript and dcm-log service.
+  primary_domains:
+  - platform
+  - telemetry
+  - common
+  log_hints:
+  - dcmscript
+  - dcm-log
+  - DCM
+  - logupload
+  - telemetry.log
+  - Xconf
+  - rdkbLogMonitor
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/371133557/Telemetry+-+configurations+working+procedure
+- module_id: ccsp_xdns
+  display_name: CcspXDNS
+  description: Dynamic DNS support, DNS server extension handling.
+  primary_domains:
+  - core_router
+  log_hints:
+  - CcspXDNS
+  - DynamicDNS
+  - XDNS
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: ccsp_home_security
+  display_name: CcspHomeSecurity
+  description: Port forwarding and routing for home security network.
+  primary_domains:
+  - core_router
+  - common
+  log_hints:
+  - CcspHomeSecurity
+  - HomeSecurity
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: ccsp_adv_security
+  display_name: CcspAdvSecurity
+  description: Advanced security, Safe Browsing, Parental Control, Device Fingerprinting.
+  primary_domains:
+  - core_router
+  - platform
+  log_hints:
+  - CcspAdvSecurity
+  - AdvancedSecurity
+  - SafeBrowsing
+  - ParentalControl
+  source:
+    type: doc
+    ref: https://developer.rdkcentral.com/documentation/documentation/rdk_connectivity_documentation/components/tr-181_data_model/
+- module_id: ccsp_moca
+  display_name: CcspMoCA
+  description: MoCA interface configuration, QAM handling, privacy/security settings.
+  primary_domains:
+  - core_router
+  - platform
+  log_hints:
+  - CcspMoCA
+  - Device.MoCA
+  - MoCA
+  source:
+    type: doc
+    ref: https://developer.rdkcentral.com/documentation/documentation/rdk_connectivity_documentation/components/tr-181_data_model/
+- module_id: ccsp_mta_agent
+  display_name: CcspMtaAgent
+  description: PacketCable MTA component. Handles battery, MTA logs, service flows, and endpoint status.
+  primary_domains:
+  - voice
+  - platform
+  log_hints:
+  - CcspMtaAgent
+  - MTA
+  - Device.X_CISCO_COM_MTA
+  source:
+    type: doc
+    ref: https://developer.rdkcentral.com/documentation/documentation/rdk_connectivity_documentation/components/tr-181_data_model/
+- module_id: platform_kernel
+  display_name: Platform Kernel / HAL
+  description: Hardware foundation, OS, drivers (Wi-Fi, Ethernet, Cellular), HAL implementations.
+  primary_domains:
+  - platform
+  log_hints:
+  - kernel
+  - Kernel panic
+  - OOM
+  - reboot
+  - watchdog
+  - segfault
+  - CRASH
+  - HAL
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: self_heal
+  display_name: Self-heal (SoftwareProcessManager)
+  description: Monitors system and component health, performing restarts (e.g. CPU/mem frag threshold
+    checks).
+  primary_domains:
+  - platform
+  log_hints:
+  - SELFHEAL
+  - selfheal
+  - RDKB_SELFHEAL
+  - health
+  - SoftwareProcessManager
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/20807849/RDK-B+Components
+- module_id: systemd
+  display_name: systemd
+  description: System and service manager for Linux, responsible for bootstrapping the user space and
+    managing processes.
+  primary_domains:
+  - platform
+  - oss_core
+  log_hints:
+  - systemd
+  - systemctl
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: dnsmasq
+  display_name: dnsmasq
+  description: 'Provides network infrastructure for small networks: DNS, DHCP, router advertisement and
+    network boot.'
+  primary_domains:
+  - core_router
+  - oss_core
+  log_hints:
+  - dnsmasq
+  - DHCP
+  - DNS
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: iptables
+  display_name: iptables / netfilter
+  description: Linux kernel firewall handling IPv4/IPv6 packet filtering and NAT.
+  primary_domains:
+  - core_router
+  - oss_core
+  - security
+  log_hints:
+  - iptables
+  - netfilter
+  - NAT
+  - firewall
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: modem_manager
+  display_name: ModemManager
+  description: DBus-activated daemon which controls mobile broadband (2G/3G/4G/5G) devices and connections.
+  primary_domains:
+  - cellular
+  - oss_core
+  log_hints:
+  - ModemManager
+  - mmcli
+  - modem
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: upnp
+  display_name: UPnP / miniupnpd
+  description: Universal Plug and Play daemon for NAT traversal and port forwarding.
+  primary_domains:
+  - core_router
+  - oss_core
+  log_hints:
+  - miniupnpd
+  - upnp
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: wifi_hal
+  display_name: Wi-Fi HAL
+  description: Hardware Abstraction Layer for Wi-Fi, translating standard RDK Wi-Fi APIs to vendor-specific
+    implementations.
+  primary_domains:
+  - wireless
+  - platform
+  log_hints:
+  - wifi_hal
+  - wifi_api
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- module_id: xconf
+  display_name: XConf / swupdate
+  description: Firmware upgrade and configuration delivery system. Supports remote feature control (RFC)
+    and device rules.
+  primary_domains:
+  - common
+  - platform
+  log_hints:
+  - swupdate
+  - xconf
+  - firmware upgrade
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+- module_id: rfc
+  display_name: Remote Feature Control (RFC)
+  description: Dynamic feature enablement and A/B testing framework.
+  primary_domains:
+  - common
+  - platform
+  log_hints:
+  - rfc
+  - feature control
+  source:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/34046234/RDK-B+Device+Management
+edges:
+- source: ccsp_pandm
+  target: ccsp_cr
+  relationship: ipc
+  confidence: 0.9
+  notes: PandM queries CcspCr to resolve TR-181 component ownership.
+  source_ref:
+    type: doc
+    ref: https://wiki.rdkcentral.com/spaces/RDK/pages/175114230/Architecture
+- source: tr069_pa
+  target: ccsp_cr
+  relationship: ipc
+  confidence: 0.9
+  notes: TR-069 protocol agent resolves paths via registry.
+- source: webpa
+  target: ccsp_cr
+  relationship: ipc
+  confidence: 0.9
+  notes: WebPA agent accesses component registry for parameters.
+- source: snmp_pa
+  target: ccsp_cr
+  relationship: ipc
+  confidence: 0.85
+- source: tr369
+  target: ccsp_cr
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_dbus
+  relationship: ipc
+  confidence: 0.85
+  notes: Legacy component registration over D-Bus.
+- source: ccsp_cr
+  target: wifi_agent
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: wan_manager
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_eth_agent
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_cm_agent
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_lm_lite
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_moca
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_adv_security
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_cr
+  target: ccsp_xdns
+  relationship: ipc
+  confidence: 0.85
+- source: ccsp_psm
+  target: ccsp_dbus
+  relationship: ipc
+  confidence: 0.85
+  notes: PSM provides XML/SQLite parameter persistence over D-Bus.
+- source: ccsp_dbus
+  target: wifi_agent
+  relationship: depends_on
+  confidence: 0.8
+- source: ccsp_dbus
+  target: wan_manager
+  relationship: depends_on
+  confidence: 0.8
+- source: rbus
+  target: one_wifi
+  relationship: depends_on
+  confidence: 0.85
+  notes: Unified Wi-Fi registers data elements via RBus.
+- source: rbus
+  target: wan_manager
+  relationship: ipc
+  confidence: 0.85
+  notes: WAN failover orchestrated via RBUS events.
+- source: one_wifi
+  target: wifi_agent
+  relationship: correlates_with
+  confidence: 0.7
+  notes: Unified vs legacy coexistence/migration.
+- source: wifi_agent
+  target: mesh_agent
+  relationship: data_path
+  confidence: 0.75
+- source: one_wifi
+  target: mesh_agent
+  relationship: data_path
+  confidence: 0.75
+- source: wifi_agent
+  target: ccsp_psm
+  relationship: ipc
+  confidence: 0.8
+- source: wan_manager
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.9
+- source: wan_manager
+  target: ppp_manager
+  relationship: ipc
+  confidence: 0.85
+  notes: WAN manager drives PPPoE links.
+- source: wifi_agent
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.85
+- source: one_wifi
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.85
+- source: ccsp_eth_agent
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.9
+- source: ccsp_cm_agent
+  target: wan_manager
+  relationship: data_path
+  confidence: 0.85
+  notes: DOCSIS link state triggers WAN failover.
+- source: gpon_manager
+  target: wan_manager
+  relationship: data_path
+  confidence: 0.85
+- source: vlan_bridge_mgr
+  target: wan_manager
+  relationship: correlates_with
+  confidence: 0.75
+- source: cellular
+  target: wan_manager
+  relationship: data_path
+  confidence: 0.8
+- source: voice_sip
+  target: wan_manager
+  relationship: depends_on
+  confidence: 0.75
+- source: webui
+  target: ccsp_pandm
+  relationship: depends_on
+  confidence: 0.75
+- source: dcm_telemetry
+  target: rdk_logger
+  relationship: correlates_with
+  confidence: 0.8
+  notes: dcmscript collects and uploads RDK_LOG files.
+- source: rdk_logger
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.7
+- source: self_heal
+  target: ccsp_dbus
+  relationship: correlates_with
+  confidence: 0.6
+- source: self_heal
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.8
+- source: ccsp_lm_lite
+  target: ccsp_dbus
+  relationship: depends_on
+  confidence: 0.8
+- source: ccsp_xdns
+  target: ccsp_pandm
+  relationship: depends_on
+  confidence: 0.75
+- source: ccsp_adv_security
+  target: ccsp_dbus
+  relationship: ipc
+  confidence: 0.8
+- source: ccsp_mta_agent
+  target: ccsp_cm_agent
+  relationship: correlates_with
+  confidence: 0.8
+  notes: MTA operation tightly linked to DOCSIS registration.
+- source: ccsp_moca
+  target: ccsp_dbus
+  relationship: ipc
+  confidence: 0.8
+- source: ccsp_home_security
+  target: vlan_bridge_mgr
+  relationship: depends_on
+  confidence: 0.7
+- source: ccsp_eth_agent
+  target: systemd
+  relationship: depends_on
+  confidence: 0.8
+- source: wan_manager
+  target: dnsmasq
+  relationship: depends_on
+  confidence: 0.8
+- source: wan_manager
+  target: iptables
+  relationship: depends_on
+  confidence: 0.85
+- source: cellular
+  target: modem_manager
+  relationship: depends_on
+  confidence: 0.9
+- source: wifi_agent
+  target: wifi_hal
+  relationship: depends_on
+  confidence: 0.95
+- source: one_wifi
+  target: wifi_hal
+  relationship: depends_on
+  confidence: 0.95
+- source: wifi_hal
+  target: platform_kernel
+  relationship: depends_on
+  confidence: 0.9
+- source: xconf
+  target: ccsp_pandm
+  relationship: ipc
+  confidence: 0.8
+- source: rfc
+  target: ccsp_cr
+  relationship: ipc
+  confidence: 0.8
+- source: dcm_telemetry
+  target: xconf
+  relationship: correlates_with
+  confidence: 0.85

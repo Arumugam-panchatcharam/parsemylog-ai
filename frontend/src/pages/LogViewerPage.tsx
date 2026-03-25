@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useDropzone } from "react-dropzone";
 import { authApi, filesApi, patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
@@ -31,13 +31,19 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import AddIcon from "@mui/icons-material/Add";
 import SettingsIcon from "@mui/icons-material/Settings";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-
 const LINES_OPTIONS = [100, 500, 1000, 2000, 5000];
 
 export interface QuickSearchButton {
   id: string;
   name: string;
   pattern: string;
+}
+
+export interface LogViewerDedupPattern {
+  id: string;
+  name: string;
+  regex: string;
+  enabled: boolean;
 }
 
 // UUID polyfill for browsers that don't support crypto.randomUUID (Safari < 15.4)
@@ -114,8 +120,17 @@ export default function LogViewerPage() {
   const [quickSearchEdit, setQuickSearchEdit] = useState<QuickSearchButton | null>(null);
   const [quickSearchName, setQuickSearchName] = useState("");
   const [quickSearchPattern, setQuickSearchPattern] = useState("");
+  const [dedupPanelOpen, setDedupPanelOpen] = useState(false);
+  const [dedupPanelPosition, setDedupPanelPosition] = useState<{ top: number; left: number } | null>(null);
+  const [dedupSaveError, setDedupSaveError] = useState<string | null>(null);
+  const [dedupEdit, setDedupEdit] = useState<LogViewerDedupPattern | null>(null);
+  const [dedupFormName, setDedupFormName] = useState("");
+  const [dedupFormRegex, setDedupFormRegex] = useState("");
+  const [dedupFormEnabled, setDedupFormEnabled] = useState(true);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const quickSearchConfigRef = useRef<HTMLDivElement>(null);
+  const dedupConfigRef = useRef<HTMLDivElement>(null);
+  const dedupPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevCpeId = useRef(cpeId);
   const [searchPanelHeight, setSearchPanelHeight] = useState(220);
   const resizingRef = useRef(false);
@@ -123,9 +138,31 @@ export default function LogViewerPage() {
 
   const { data: filesRaw, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
   const files = Array.isArray(filesRaw) ? filesRaw : [];
-  const { data: fileContent, isLoading: contentLoading } = useQuery({ queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage], queryFn: async () => (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage, cpeId)).data, enabled: !!projectId && !!selectedFile });
-  const searchMutation = useMutation({ mutationFn: (pattern: string) => filesApi.search(projectId!, selectedFile!, pattern, cpeId) });
-  const searchAllMutation = useMutation({ mutationFn: (pattern: string) => filesApi.searchAllFiles(projectId!, pattern, cpeId) });
+  const { data: dedupData } = useQuery({
+    queryKey: ["logViewerDedupPatterns", projectId],
+    queryFn: async () => (await filesApi.getLogViewerDedupPatterns(projectId!)).data,
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+  const dedupPatterns: LogViewerDedupPattern[] = dedupData?.patterns ?? [];
+  const dedupActive = dedupData?.dedup_active ?? false;
+  const dedupApply = dedupActive && dedupPatterns.some((p) => p.enabled);
+
+  const { data: fileContent, isLoading: contentLoading, isPlaceholderData: contentIsPlaceholder } = useQuery({
+    queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage, dedupApply],
+    queryFn: async () =>
+      (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage, cpeId, dedupApply)).data,
+    enabled: !!projectId && !!selectedFile,
+    placeholderData: keepPreviousData,
+  });
+  const searchMutation = useMutation({
+    mutationFn: (args: { pattern: string; dedup: boolean }) =>
+      filesApi.search(projectId!, selectedFile!, args.pattern, cpeId, args.dedup, linesPerPage),
+  });
+  const searchAllMutation = useMutation({
+    mutationFn: (args: { pattern: string; dedup: boolean }) =>
+      filesApi.searchAllFiles(projectId!, args.pattern, cpeId, args.dedup, linesPerPage),
+  });
   const { data: notesData } = useQuery({ queryKey: ["notes", projectId], queryFn: async () => (await filesApi.getNotes(projectId!)).data, enabled: !!projectId });
   const { data: quickSearchData } = useQuery({
     queryKey: ["logViewerQuickSearches"],
@@ -187,25 +224,28 @@ export default function LogViewerPage() {
 
   // After content loads, scroll to the target line
   useEffect(() => {
-    if (scrollToLine !== null && fileContent && logContainerRef.current) {
+    if (scrollToLine === null || !fileContent || !logContainerRef.current) return;
+
+    const nums = fileContent.line_numbers;
+    let onPage = false;
+    if (nums?.length) {
+      onPage = nums.includes(scrollToLine);
+    } else {
       const startLine = fileContent.start_line || 1;
       const endLine = startLine + (fileContent.lines?.length || 0) - 1;
-      
-      // Only scroll if the target line is within the current page's range
-      if (scrollToLine >= startLine && scrollToLine <= endLine) {
-        const lineIdx = scrollToLine - startLine;
-        if (lineIdx >= 0 && lineIdx < fileContent.lines.length) {
-          requestAnimationFrame(() => {
-            const el = logContainerRef.current?.querySelector(`[data-line="${scrollToLine}"]`);
-            if (el) {
-              el.scrollIntoView({ behavior: "auto", block: "center" });
-              el.classList.add("bg-amber-700/40");
-              setTimeout(() => el.classList.remove("bg-amber-700/40"), 2000);
-            }
-            setScrollToLine(null);
-          });
+      onPage = scrollToLine >= startLine && scrollToLine <= endLine;
+    }
+
+    if (onPage) {
+      requestAnimationFrame(() => {
+        const el = logContainerRef.current?.querySelector(`[data-line="${scrollToLine}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "auto", block: "center" });
+          el.classList.add("bg-amber-700/40");
+          setTimeout(() => el.classList.remove("bg-amber-700/40"), 2000);
         }
-      }
+        setScrollToLine(null);
+      });
     }
   }, [scrollToLine, fileContent]);
 
@@ -278,13 +318,14 @@ export default function LogViewerPage() {
     const pat = p || searchPattern;
     if (!pat) return;
     setActiveHighlight(pat);
+    const ded = dedupApply;
     if (searchAllFiles) {
       searchMutation.reset();
-      searchAllMutation.mutate(pat);
+      searchAllMutation.mutate({ pattern: pat, dedup: ded });
     } else {
       if (!selectedFile) return;
       searchAllMutation.reset();
-      searchMutation.mutate(pat);
+      searchMutation.mutate({ pattern: pat, dedup: ded });
     }
   };
   const saveNotes = async () => { if (!projectId) return; await filesApi.saveNotes(projectId, notes); setSaveStatus(`Saved ${new Date().toLocaleTimeString()}`); qc.invalidateQueries({ queryKey: ["notes", projectId] }); };
@@ -337,6 +378,109 @@ export default function LogViewerPage() {
     }
   };
 
+  const saveDedupFull = async (next: { dedup_active: boolean; patterns: LogViewerDedupPattern[] }): Promise<boolean> => {
+    if (!projectId) return false;
+    try {
+      setDedupSaveError(null);
+      const res = await filesApi.saveLogViewerDedupPatterns(projectId, next);
+      const saved = res.data as { dedup_active: boolean; patterns: LogViewerDedupPattern[] };
+      qc.setQueryData(["logViewerDedupPatterns", projectId], saved);
+      await qc.invalidateQueries({ queryKey: ["fileContent", projectId] });
+      return true;
+    } catch (e: unknown) {
+      let msg = "Save failed. Check network and try again.";
+      if (e && typeof e === "object" && "response" in e) {
+        const res = (e as { response?: { data?: unknown } }).response;
+        if (res?.data && typeof res.data === "object" && "error" in res.data) msg = String((res.data as { error?: string }).error);
+        else if (res?.data) msg = String(res.data);
+      }
+      setDedupSaveError(msg);
+      console.warn("Failed to save dedup patterns", e);
+      void qc.invalidateQueries({ queryKey: ["logViewerDedupPatterns", projectId] });
+      return false;
+    }
+  };
+
+  const persistDedupFromCache = useCallback(async () => {
+    if (!projectId) return;
+    const latest = qc.getQueryData<{ dedup_active: boolean; patterns: LogViewerDedupPattern[] }>([
+      "logViewerDedupPatterns",
+      projectId,
+    ]);
+    if (!latest) return;
+    try {
+      setDedupSaveError(null);
+      const res = await filesApi.saveLogViewerDedupPatterns(projectId, latest);
+      const saved = res.data as { dedup_active: boolean; patterns: LogViewerDedupPattern[] };
+      qc.setQueryData(["logViewerDedupPatterns", projectId], saved);
+      await qc.invalidateQueries({ queryKey: ["fileContent", projectId] });
+    } catch (e: unknown) {
+      let msg = "Save failed. Check network and try again.";
+      if (e && typeof e === "object" && "response" in e) {
+        const resErr = (e as { response?: { data?: unknown } }).response;
+        if (resErr?.data && typeof resErr.data === "object" && "error" in resErr.data)
+          msg = String((resErr.data as { error?: string }).error);
+        else if (resErr?.data) msg = String(resErr.data);
+      }
+      setDedupSaveError(msg);
+      console.warn("Failed to save dedup patterns", e);
+      void qc.invalidateQueries({ queryKey: ["logViewerDedupPatterns", projectId] });
+    }
+  }, [projectId, qc]);
+
+  const schedulePersistDedupFromCache = useCallback(() => {
+    if (dedupPersistTimerRef.current) clearTimeout(dedupPersistTimerRef.current);
+    dedupPersistTimerRef.current = setTimeout(() => {
+      dedupPersistTimerRef.current = null;
+      void persistDedupFromCache();
+    }, 400);
+  }, [persistDedupFromCache]);
+
+  const openDedupForm = (edit?: LogViewerDedupPattern) => {
+    setDedupSaveError(null);
+    setDedupEdit(edit ?? null);
+    setDedupFormName(edit?.name ?? "");
+    setDedupFormRegex(edit?.regex ?? "");
+    setDedupFormEnabled(edit?.enabled ?? true);
+    setDedupPanelOpen(true);
+  };
+  const closeDedupForm = () => {
+    setDedupPanelOpen(false);
+    setDedupPanelPosition(null);
+    setDedupSaveError(null);
+    setDedupEdit(null);
+    setDedupFormName("");
+    setDedupFormRegex("");
+    setDedupFormEnabled(true);
+  };
+  const saveDedupPattern = async () => {
+    const name = dedupFormName.trim();
+    const regex = dedupFormRegex.trim();
+    if (!name || !regex) return;
+    if (dedupPersistTimerRef.current) {
+      clearTimeout(dedupPersistTimerRef.current);
+      dedupPersistTimerRef.current = null;
+    }
+    const nextPatterns = dedupEdit
+      ? dedupPatterns.map((p) => (p.id === dedupEdit.id ? { ...p, name, regex, enabled: dedupFormEnabled } : p))
+      : [...dedupPatterns, { id: generateUUID(), name, regex, enabled: dedupFormEnabled }];
+    const ok = await saveDedupFull({ dedup_active: dedupActive, patterns: nextPatterns });
+    if (ok) closeDedupForm();
+  };
+  const removeDedupPattern = async (id: string) => {
+    if (dedupPersistTimerRef.current) {
+      clearTimeout(dedupPersistTimerRef.current);
+      dedupPersistTimerRef.current = null;
+    }
+    await saveDedupFull({ dedup_active: dedupActive, patterns: dedupPatterns.filter((p) => p.id !== id) });
+  };
+  const toggleDedupPatternEnabled = (id: string, enabled: boolean) => {
+    if (!projectId) return;
+    const nextPatterns = dedupPatterns.map((p) => (p.id === id ? { ...p, enabled } : p));
+    qc.setQueryData(["logViewerDedupPatterns", projectId], { dedup_active: dedupActive, patterns: nextPatterns });
+    schedulePersistDedupFromCache();
+  };
+
   useEffect(() => {
     if (!quickSearchConfigOpen) return;
     const el = quickSearchConfigRef.current;
@@ -359,6 +503,34 @@ export default function LogViewerPage() {
     window.addEventListener("mousedown", onMouseDown);
     return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onMouseDown); };
   }, [quickSearchConfigOpen]);
+
+  useEffect(() => {
+    if (!dedupPanelOpen) return;
+    const el = dedupConfigRef.current;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      setDedupPanelPosition({ left: rect.left, top: rect.bottom + 4 });
+    }
+  }, [dedupPanelOpen]);
+
+  useEffect(() => {
+    if (!dedupPanelOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeDedupForm();
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (dedupConfigRef.current?.contains(t)) return;
+      if (t && "closest" in (t as Element) && (t as Element).closest?.("[data-dedup-dropdown]")) return;
+      closeDedupForm();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onMouseDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onMouseDown);
+    };
+  }, [dedupPanelOpen]);
 
   // Sync notes from API when loaded (avoid setState during render)
   useEffect(() => {
@@ -518,6 +690,135 @@ export default function LogViewerPage() {
           </div>
         </div>
         <div className="w-px h-5 bg-border mx-1" />
+        {/* Dedup: simple collapsible dropdown list */}
+        <div className="relative inline-block" ref={dedupConfigRef}>
+          <label
+            className={`flex items-center gap-1.5 text-[10px] cursor-pointer whitespace-nowrap ${dedupData === undefined ? "opacity-50 pointer-events-none" : ""}`}
+            title="View/search a filtered copy: lines matching your patterns are omitted (invert match)."
+          >
+            <input
+              type="checkbox"
+              checked={dedupActive}
+              disabled={!projectId || dedupData === undefined}
+              onChange={(e) => {
+                if (dedupData === undefined || !projectId) return;
+                if (dedupPersistTimerRef.current) {
+                  clearTimeout(dedupPersistTimerRef.current);
+                  dedupPersistTimerRef.current = null;
+                }
+                void saveDedupFull({ dedup_active: e.target.checked, patterns: dedupPatterns });
+              }}
+              className="rounded border-border shrink-0"
+            />
+            <span className={dedupActive ? "font-medium text-teal-800 dark:text-teal-200" : "text-muted-foreground"}>
+              Remove Duplicate
+            </span>
+            <button
+              type="button"
+              onClick={() => setDedupPanelOpen(!dedupPanelOpen)}
+              className="ml-1 px-1.5 py-0.5 text-xs font-semibold text-foreground bg-primary/20 hover:bg-primary/30 rounded transition-colors shrink-0"
+              title="Show/hide dedup pattern list"
+            >
+              {dedupPanelOpen ? "▼" : "▶"} Patterns
+            </button>
+          </label>
+          {dedupPanelOpen &&
+            createPortal(
+              <div
+                data-dedup-dropdown
+                className="min-w-[300px] p-2 bg-card border border-border rounded-lg shadow-lg"
+                style={{
+                  position: "fixed",
+                  left: (dedupPanelPosition?.left || 0),
+                  top: (dedupPanelPosition?.top || 0),
+                  zIndex: 9999,
+                }}
+              >
+                {/* Add new pattern section */}
+                <div className="mb-2 pb-2 border-b border-border">
+                  <div className="text-[10px] font-medium text-muted-foreground mb-1">Add Pattern</div>
+                  <div className="flex flex-col gap-1">
+                    <input
+                      type="text"
+                      value={dedupFormName}
+                      onChange={(e) => setDedupFormName(e.target.value)}
+                      placeholder="Pattern name"
+                      className="px-2 py-1 text-xs border border-input rounded bg-background"
+                    />
+                    <input
+                      type="text"
+                      value={dedupFormRegex}
+                      onChange={(e) => setDedupFormRegex(e.target.value)}
+                      placeholder="Regex (lines matching this are omitted)"
+                      className="px-2 py-1 text-xs border border-input rounded bg-background font-mono"
+                    />
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void saveDedupPattern()}
+                        disabled={!dedupFormName.trim() || !dedupFormRegex.trim()}
+                        className="px-2 py-0.5 text-[10px] bg-primary text-primary-foreground rounded font-medium disabled:opacity-50 flex-1"
+                      >
+                        {dedupEdit ? "Update" : "+ Add"}
+                      </button>
+                      {dedupEdit && (
+                        <button
+                          type="button"
+                          onClick={closeDedupForm}
+                          className="px-2 py-0.5 text-[10px] border border-border rounded hover:bg-muted"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                    {dedupSaveError && (
+                      <p className="text-[10px] text-destructive" role="alert">
+                        {dedupSaveError}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Patterns list */}
+                {dedupPatterns.length > 0 ? (
+                  <div>
+                    <div className="text-[10px] font-medium text-muted-foreground mb-1">Patterns ({dedupPatterns.filter((p) => p.enabled).length}/{dedupPatterns.length})</div>
+                    <ul className="space-y-1 max-h-48 overflow-y-auto">
+                      {dedupPatterns.map((p) => (
+                        <li
+                          key={p.id}
+                          className="flex items-center gap-1 px-1.5 py-1 rounded border border-border bg-background text-[10px] group hover:bg-muted/50"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={p.enabled}
+                            onChange={(e) => toggleDedupPatternEnabled(p.id, e.target.checked)}
+                            className="rounded border-border shrink-0"
+                            aria-label={`Enable pattern ${p.name}`}
+                          />
+                          <span className="truncate flex-1 cursor-pointer" onClick={() => openDedupForm(p)} title={p.regex}>
+                            {p.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void removeDedupPattern(p.id)}
+                            className="p-0 text-destructive hover:text-destructive/80 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Remove pattern"
+                          >
+                            ×
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground text-center py-2">No patterns added</p>
+                )}
+              </div>,
+              document.body,
+            )}
+        </div>
+        <div className="w-px h-5 bg-border mx-1" />
         {/* Syntax highlight toggle */}
         <button onClick={() => setSyntaxHL(!syntaxHL)} title="Syntax highlighting"
           className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded font-medium ${syntaxHL ? "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300" : "text-muted-foreground hover:bg-muted"}`}>
@@ -618,7 +919,14 @@ export default function LogViewerPage() {
             <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-muted/30 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-xs font-medium truncate" title={selectedFile}>{selectedFile}</span>
-                {fileContent && <span className="text-[10px] text-muted-foreground shrink-0">L{fileContent.start_line}–{fileContent.end_line} of {fileContent.total_lines}</span>}
+                {fileContent && (
+                  <span className="text-[10px] text-muted-foreground shrink-0">
+                    L{fileContent.start_line}–{fileContent.end_line} of {fileContent.total_lines}
+                    {fileContent.dedup_applied && fileContent.total_lines_raw != null && (
+                      <span title="Raw line count before deduplication"> ({fileContent.total_lines_raw} raw)</span>
+                    )}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button onClick={() => { if (projectId && selectedFile) downloadFile(projectId, selectedFile, cpeId); }} className="p-0.5 rounded hover:bg-muted" title="Download"><DownloadIcon style={{ fontSize: 16 }} className="text-muted-foreground" /></button>
@@ -634,13 +942,20 @@ export default function LogViewerPage() {
             </div>
           )}
 
-          <div ref={logContainerRef} className="flex-1 overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px` }}>
+          <div
+            ref={logContainerRef}
+            className={cn(
+              "flex-1 overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll transition-opacity",
+              contentIsPlaceholder && "opacity-65",
+            )}
+            style={{ fontSize: `${fontSize}px` }}
+          >
             {!selectedFile && <div className="flex items-center justify-center h-full text-slate-500 text-sm">Select a file from the sidebar to view its contents</div>}
             {contentLoading && <div className="p-4 text-slate-400 text-xs">Loading...</div>}
             {fileContent?.lines?.map((line: string, idx: number) => {
-              const lineNum = (fileContent.start_line || 1) + idx;
+              const lineNum = fileContent.line_numbers?.[idx] ?? (fileContent.start_line || 1) + idx;
               return (
-                <div key={idx} data-line={lineNum} className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed transition-colors duration-500">
+                <div key={`${lineNum}-${idx}`} data-line={lineNum} className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed transition-colors duration-500">
                   <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{lineNum}</span>
                   {renderLine(line)}
                 </div>
@@ -669,12 +984,12 @@ export default function LogViewerPage() {
               {showSearch && (
                 <div className="overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px`, height: `${searchPanelHeight}px` }}>
                   {isAllFilesSearch
-                    ? (searchResults.matches as Array<{ filename: string; line_number: number; text: string }>).map((m, idx) => (
+                    ? (searchResults.matches as Array<{ filename: string; line_number: number; text: string; content_page?: number }>).map((m, idx) => (
                         <div
                           key={idx}
                           onDoubleClick={() => {
                             setSelectedFile(m.filename);
-                            const targetPage = Math.ceil(m.line_number / linesPerPage);
+                            const targetPage = m.content_page ?? Math.ceil(m.line_number / linesPerPage);
                             setCurrentPage(targetPage);
                             setScrollToLine(m.line_number);
                           }}
@@ -686,13 +1001,13 @@ export default function LogViewerPage() {
                           {renderLine(m.text)}
                         </div>
                       ))
-                    : searchResults.matches.map((m: { line_number: number; text: string }, idx: number) => (
+                    : searchResults.matches.map((m: { line_number: number; text: string; content_page?: number }, idx: number) => (
                         <div
                           key={idx}
-                          onDoubleClick={() => { 
-                            const targetPage = Math.ceil(m.line_number / linesPerPage);
-                            setCurrentPage(targetPage); 
-                            setScrollToLine(m.line_number); 
+                          onDoubleClick={() => {
+                            const targetPage = m.content_page ?? Math.ceil(m.line_number / linesPerPage);
+                            setCurrentPage(targetPage);
+                            setScrollToLine(m.line_number);
                           }}
                           title="Double-click to jump to this line"
                           className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none"
