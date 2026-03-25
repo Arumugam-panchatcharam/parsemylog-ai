@@ -101,6 +101,8 @@ export default function LogViewerPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [linesPerPage, setLinesPerPage] = useState(1000);
   const [searchPattern, setSearchPattern] = useState("");
+  const [searchInputValid, setSearchInputValid] = useState(false);
+  const searchInputRef = useRef<string>("");
   const [activeHighlight, setActiveHighlight] = useState("");
   const [syntaxHL, setSyntaxHL] = useState(true);
   const [notes, setNotes] = useState("");
@@ -122,10 +124,12 @@ export default function LogViewerPage() {
   const [quickSearchPattern, setQuickSearchPattern] = useState("");
   const [dedupPanelOpen, setDedupPanelOpen] = useState(false);
   const [dedupPanelPosition, setDedupPanelPosition] = useState<{ top: number; left: number } | null>(null);
+  const dedupDropdownShownRef = useRef(false);
   const [dedupSaveError, setDedupSaveError] = useState<string | null>(null);
   const [dedupEdit, setDedupEdit] = useState<LogViewerDedupPattern | null>(null);
-  const [dedupFormName, setDedupFormName] = useState("");
-  const [dedupFormRegex, setDedupFormRegex] = useState("");
+  const [dedupFormValidation, setDedupFormValidation] = useState(false);
+  const dedupFormNameRef = useRef<string>("");
+  const dedupFormRegexRef = useRef<string>("");
   const [dedupFormEnabled, setDedupFormEnabled] = useState(true);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const quickSearchConfigRef = useRef<HTMLDivElement>(null);
@@ -439,8 +443,11 @@ export default function LogViewerPage() {
   const openDedupForm = (edit?: LogViewerDedupPattern) => {
     setDedupSaveError(null);
     setDedupEdit(edit ?? null);
-    setDedupFormName(edit?.name ?? "");
-    setDedupFormRegex(edit?.regex ?? "");
+    const name = edit?.name ?? "";
+    const regex = edit?.regex ?? "";
+    dedupFormNameRef.current = name;
+    dedupFormRegexRef.current = regex;
+    setDedupFormValidation(!!(name.trim() && regex.trim()));
     setDedupFormEnabled(edit?.enabled ?? true);
     setDedupPanelOpen(true);
   };
@@ -449,13 +456,14 @@ export default function LogViewerPage() {
     setDedupPanelPosition(null);
     setDedupSaveError(null);
     setDedupEdit(null);
-    setDedupFormName("");
-    setDedupFormRegex("");
+    dedupFormNameRef.current = "";
+    dedupFormRegexRef.current = "";
+    setDedupFormValidation(false);
     setDedupFormEnabled(true);
   };
   const saveDedupPattern = async () => {
-    const name = dedupFormName.trim();
-    const regex = dedupFormRegex.trim();
+    const name = dedupFormNameRef.current.trim();
+    const regex = dedupFormRegexRef.current.trim();
     if (!name || !regex) return;
     if (dedupPersistTimerRef.current) {
       clearTimeout(dedupPersistTimerRef.current);
@@ -505,12 +513,20 @@ export default function LogViewerPage() {
   }, [quickSearchConfigOpen]);
 
   useEffect(() => {
-    if (!dedupPanelOpen) return;
-    const el = dedupConfigRef.current;
-    if (el) {
-      const rect = el.getBoundingClientRect();
-      setDedupPanelPosition({ left: rect.left, top: rect.bottom + 4 });
+    if (!dedupPanelOpen) {
+      dedupDropdownShownRef.current = false;
+      return;
     }
+    // Calculate position only after portal is mounted in DOM
+    const timer = requestAnimationFrame(() => {
+      const el = dedupConfigRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        setDedupPanelPosition({ left: rect.left, top: rect.bottom + 4 });
+        dedupDropdownShownRef.current = true;
+      }
+    });
+    return () => cancelAnimationFrame(timer);
   }, [dedupPanelOpen]);
 
   useEffect(() => {
@@ -602,14 +618,25 @@ export default function LogViewerPage() {
           <SearchIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
           <input
             data-command-search
-            value={searchPattern}
-            onChange={(e) => setSearchPattern(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && doSearch()}
+            defaultValue={searchPattern}
+            onChange={(e) => {
+              searchInputRef.current = e.target.value;
+              setSearchInputValid(e.target.value.trim().length > 0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                setSearchPattern(searchInputRef.current);
+                doSearch(searchInputRef.current);
+              }
+            }}
             placeholder="Search (regex)..."
             title="Search logs with regex pattern (press Enter to search)"
             className="min-w-0 flex-1 bg-transparent text-xs outline-none"
           />
-          <button onClick={() => doSearch()} disabled={!searchPattern.trim() || (!searchAllFiles && !selectedFile)} title="Execute search" className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0 disabled:opacity-50">Go</button>
+          <button onClick={() => {
+            setSearchPattern(searchInputRef.current);
+            doSearch(searchInputRef.current);
+          }} disabled={!searchInputValid || (!searchAllFiles && !selectedFile)} title="Execute search" className="text-[10px] bg-primary text-primary-foreground px-2 py-0.5 rounded font-medium shrink-0 disabled:opacity-50">Go</button>
         </div>
         <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer whitespace-nowrap" title="Search across all log files in the current CPE">
           <input type="checkbox" checked={searchAllFiles} onChange={(e) => setSearchAllFiles(e.target.checked)} className="rounded border-border" />
@@ -619,7 +646,11 @@ export default function LogViewerPage() {
           {quickSearchButtons.map((b) => (
             <button
               key={b.id}
-              onClick={() => { setSearchPattern(b.pattern); doSearch(b.pattern); }}
+              onClick={() => {
+                searchInputRef.current = b.pattern;
+                setSearchPattern(b.pattern);
+                doSearch(b.pattern);
+              }}
               className="px-1.5 py-0.5 text-[10px] border border-border rounded hover:bg-muted"
               title={b.pattern}
             >
@@ -723,14 +754,16 @@ export default function LogViewerPage() {
             </button>
           </label>
           {dedupPanelOpen &&
+            dedupDropdownShownRef.current &&
+            dedupPanelPosition &&
             createPortal(
               <div
                 data-dedup-dropdown
                 className="min-w-[300px] p-2 bg-card border border-border rounded-lg shadow-lg"
                 style={{
                   position: "fixed",
-                  left: (dedupPanelPosition?.left || 0),
-                  top: (dedupPanelPosition?.top || 0),
+                  left: dedupPanelPosition.left,
+                  top: dedupPanelPosition.top,
                   zIndex: 9999,
                 }}
               >
@@ -740,15 +773,23 @@ export default function LogViewerPage() {
                   <div className="flex flex-col gap-1">
                     <input
                       type="text"
-                      value={dedupFormName}
-                      onChange={(e) => setDedupFormName(e.target.value)}
+                      key={dedupEdit?.id || "new"}
+                      defaultValue={dedupEdit?.name || ""}
+                      onChange={(e) => {
+                        dedupFormNameRef.current = e.target.value;
+                        setDedupFormValidation(!!(e.target.value.trim() && dedupFormRegexRef.current.trim()));
+                      }}
                       placeholder="Pattern name"
                       className="px-2 py-1 text-xs border border-input rounded bg-background"
                     />
                     <input
                       type="text"
-                      value={dedupFormRegex}
-                      onChange={(e) => setDedupFormRegex(e.target.value)}
+                      key={dedupEdit?.id || "new"}
+                      defaultValue={dedupEdit?.regex || ""}
+                      onChange={(e) => {
+                        dedupFormRegexRef.current = e.target.value;
+                        setDedupFormValidation(!!(dedupFormNameRef.current.trim() && e.target.value.trim()));
+                      }}
                       placeholder="Regex (lines matching this are omitted)"
                       className="px-2 py-1 text-xs border border-input rounded bg-background font-mono"
                     />
@@ -756,7 +797,7 @@ export default function LogViewerPage() {
                       <button
                         type="button"
                         onClick={() => void saveDedupPattern()}
-                        disabled={!dedupFormName.trim() || !dedupFormRegex.trim()}
+                        disabled={!dedupFormValidation}
                         className="px-2 py-0.5 text-[10px] bg-primary text-primary-foreground rounded font-medium disabled:opacity-50 flex-1"
                       >
                         {dedupEdit ? "Update" : "+ Add"}
