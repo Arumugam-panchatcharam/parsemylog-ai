@@ -868,11 +868,11 @@ def search_all_files(project_id):
             by_fn[m["filename"]].append(m)
         for fn, lst in by_fn.items():
             f_info = dbm.get_project_file_info(project_id, fn, cpe_id=cpe_id)
-            if not f_info or not f_info[1] or not os.path.exists(f_info[1]):
+            if not f_info or not f_info.file_path or not os.path.exists(f_info.file_path):
                 for m in lst:
                     m["content_page"] = (m["line_number"] - 1) // lpp + 1
                 continue
-            fp = f_info[1]
+            fp = f_info.file_path
             if search_alias:
                 for m in lst:
                     ln = m["line_number"]

@@ -17,6 +17,11 @@ from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id
+from api.reboot_bucketing import (
+    bucket_reboot_events,
+    aggregate_buckets,
+    extract_reboot_events,
+)
 from logai.utils.constants import UPLOAD_DIRECTORY
 from logai.telemetry_parser import (
     parse_telemetry_file,
@@ -824,6 +829,53 @@ def _build_key_metrics_data(configured_fields, summary):
 # Cross-CPE Overview
 # ---------------------------------------------------------------------------
 
+def _compute_reboot_analytics(cpe_results):
+    """
+    Compute reboot analytics bucketed by time-of-day and uptime categories.
+    
+    Args:
+        cpe_results: List of CPE entries with reboot_timeline_data
+    
+    Returns:
+        Dict with time_of_day_buckets, uptime_buckets, and total_reboot_events
+    """
+    all_time_of_day_buckets = []
+    all_uptime_buckets = []
+    
+    for cpe in cpe_results:
+        reboot_timeline = cpe.get("reboot_timeline_data")
+        if not reboot_timeline:
+            continue
+        
+        # Extract reboot events from timeline
+        reboot_events = extract_reboot_events(reboot_timeline)
+        if not reboot_events:
+            continue
+        
+        # Prepare CPE info for device details
+        cpe_info = {
+            "serial": cpe.get("serial", "unknown"),
+            "model": cpe.get("model", "N/A"),
+        }
+        
+        # Bucket this CPE's reboot events
+        time_buckets, uptime_buckets = bucket_reboot_events(reboot_events, cpe_info)
+        all_time_of_day_buckets.append(time_buckets)
+        all_uptime_buckets.append(uptime_buckets)
+    
+    # Aggregate all CPE buckets into fleet-wide analytics
+    try:
+        analytics = aggregate_buckets(all_time_of_day_buckets, all_uptime_buckets)
+        return analytics
+    except Exception as e:
+        logger.error(f"[RebootAnalytics] Error computing analytics: {e}")
+        return {
+            "time_of_day_buckets": {},
+            "uptime_buckets": {},
+            "total_reboot_events": 0,
+        }
+
+
 def _analyze_reboot_correlation(cpe_results, window_minutes=10, min_cpes=2):
     """
     Analyze reboot events across CPEs to identify potential power outages.
@@ -1020,6 +1072,7 @@ def cross_cpe_overview(project_id):
             "reboot_count": 0, "reboot_events": [],
             "low_memory": False, "memory_usage_pct_peak": None,
             "status": "OK",
+            "reboot_timeline_data": None,  # For bucketing analysis
         }
         # Load from cache unless force re-parse is requested
         cached = None if force else load_telemetry_cache(cpe_dir)
@@ -1117,6 +1170,7 @@ def cross_cpe_overview(project_id):
         rt = cached.get("reboot_timeline") or {}
         entry["reboot_count"] = rt.get("total_reboots", 0)
         entry["reboot_events"] = rt.get("events") or []
+        entry["reboot_timeline_data"] = rt  # Store full timeline for bucketing
         
         # Add reboot type breakdown
         events = entry["reboot_events"]
@@ -1178,14 +1232,8 @@ def cross_cpe_overview(project_id):
         if c.get("reboot_count", 0) > 0 and c.get("low_memory")
     )
 
-    # Reboot correlation analysis
-    correlation_window = int(request.args.get("correlation_window", "10"))
-    min_cpes_for_cluster = int(request.args.get("min_cpes", "2"))
-    reboot_correlation = _analyze_reboot_correlation(
-        cpe_results,
-        window_minutes=correlation_window,
-        min_cpes=min_cpes_for_cluster
-    )
+    # Reboot bucketing analysis (time-of-day and uptime categories)
+    reboot_analytics = _compute_reboot_analytics(cpe_results)
 
     return jsonify({
         "cpes": cpe_results,
@@ -1195,7 +1243,7 @@ def cross_cpe_overview(project_id):
             "with_low_memory": with_low_memory,
             "with_both": with_both,
         },
-        "reboot_correlation": reboot_correlation,
+        "reboot_analytics": reboot_analytics,
     }), 200
 
 

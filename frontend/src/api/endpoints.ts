@@ -562,31 +562,30 @@ export interface CrossCpeTelemetryEntry {
   reboot_types?: { soft: number; hard: number };
 }
 
-export interface RebootClusterEvent {
-  serial: string;
-  timestamp: string;
-  reboot_type?: "soft" | "hard";
-  reason?: string;
-}
-
-export interface RebootCluster {
-  cluster_id: string;
-  window_start: string;
-  window_end: string;
-  affected_cpes: string[];
-  cpe_count: number;
-  events: RebootClusterEvent[];
-  likely_power_outage: boolean;
-  confidence: "high" | "medium" | "low";
-  hard_reboot_percentage: number;
-  time_span_minutes: number;
-}
-
-export interface RebootCorrelation {
-  clusters: RebootCluster[];
-  total_clusters: number;
-  likely_power_outages: number;
-  window_minutes: number;
+export interface RebootAnalytics {
+  time_of_day_buckets: Record<string, {
+    count: number;
+    label: string;
+    percentage: number;
+    devices: Array<{
+      serial: string;
+      model?: string;
+      timestamp?: string;
+      hour?: number;
+    }>;
+  }>;
+  uptime_buckets: Record<string, {
+    count: number;
+    label: string;
+    percentage: number;
+    devices: Array<{
+      serial: string;
+      model?: string;
+      timestamp?: string;
+      uptime_seconds?: number;
+    }>;
+  }>;
+  total_reboot_events: number;
 }
 
 export interface CrossCpeTelemetryOverview {
@@ -597,7 +596,7 @@ export interface CrossCpeTelemetryOverview {
     with_low_memory: number;
     with_both: number;
   };
-  reboot_correlation?: RebootCorrelation;
+  reboot_analytics?: RebootAnalytics;
 }
 
 export const telemetryApi = {

@@ -371,7 +371,7 @@ export default function PatternOverviewTab() {
                   hovertemplate:
                     "<b>%{y}</b> (%{customdata[3]})<br>" +
                     "CPEs affected: %{customdata[0]} / %{customdata[1]}<br>" +
-                    "Spread: %{x}%<br>" +
+                    "Spread: %{x}<br>" +
                     "Total matches: %{customdata[2]}%{customdata[4]}<extra></extra>",
                   text: chartData.x.map((v) => `${v}%`),
                   textposition: "outside",

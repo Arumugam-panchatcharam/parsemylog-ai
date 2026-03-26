@@ -176,6 +176,49 @@ Results:
 
 ---
 
+### 5a. Reboot Analytics (Time-of-Day & Uptime Bucketing)
+
+**Description:** Fleet-level reboot distribution analysis with bucketing by time-of-day and device uptime before reboot.
+
+**Key Capabilities:**
+
+- **Time-of-Day Bucketing:**
+  - 4 x 6-hour buckets: 12 AM–6 AM, 6 AM–12 PM, 12 PM–6 PM, 6 PM–12 AM
+  - Aggregate device count per bucket
+  - Identifies peak reboot hours (e.g., early morning vs. business hours)
+  - Percentage distribution visualization
+  
+- **Uptime Bucketing:**
+  - 6 categories: <1 day, 1–5 days, 5–10 days, 10–15 days, 15–20 days, >20 days
+  - Tracks device uptime before reboot event
+  - Identifies patterns in device stability
+  - Helps correlate uptime with reboot likelihood
+  
+- **Summary Cards:**
+  - Interactive card-based UI for each bucket
+  - Shows count, percentage, and color-coded buckets
+  - Click-to-drill for detailed CPE listing
+  
+- **Detail View Modal:**
+  - Tabular data with CPE serial, model, and reboot timestamp
+  - Sortable and filterable results
+  - Pagination support for large fleets
+  
+- **Data Source:**
+  - Telemetry uptime drop detection (reboot_timeline.all_events)
+  - Real-time aggregation across all CPEs in project
+  - Cached for performance
+
+**Use Cases:**
+- Identify if reboots are clustered around specific times
+- Investigate whether devices with longer uptime experience fewer/more reboots
+- Correlate reboot patterns with maintenance windows or network events
+- Detect anomalies in device reboot behavior
+
+**Detailed Guide:** [Reboot Analytics](./features/REBOOT_ANALYTICS.md)
+
+---
+
 ### 6. Pattern Analyzer (ripgrep)
 
 **Description:** High-speed regex pattern management and scanning with time-series visualization.
