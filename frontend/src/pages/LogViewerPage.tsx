@@ -8,6 +8,7 @@ import { useCPE } from "@/hooks/useCPE";
 import { useAuth } from "@/hooks/useAuth";
 import { cn, convertLogTimestamp, TZ_OPTIONS } from "@/lib/utils";
 import { highlightLogLine } from "@/lib/logHighlighter";
+import { QuickDedupModal } from "@/components/QuickDedupModal";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DescriptionIcon from "@mui/icons-material/Description";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -41,9 +42,9 @@ export interface QuickSearchButton {
 
 export interface LogViewerDedupPattern {
   id: string;
-  name: string;
   regex: string;
   enabled: boolean;
+  filename?: string;
 }
 
 // UUID polyfill for browsers that don't support crypto.randomUUID (Safari < 15.4)
@@ -131,6 +132,8 @@ export default function LogViewerPage() {
   const dedupFormNameRef = useRef<string>("");
   const dedupFormRegexRef = useRef<string>("");
   const [dedupFormEnabled, setDedupFormEnabled] = useState(true);
+  const [quickDedupModalOpen, setQuickDedupModalOpen] = useState(false);
+  const [quickDedupSelectedLine, setQuickDedupSelectedLine] = useState<string>("");
   const logContainerRef = useRef<HTMLDivElement>(null);
   const quickSearchConfigRef = useRef<HTMLDivElement>(null);
   const dedupConfigRef = useRef<HTMLDivElement>(null);
@@ -150,7 +153,13 @@ export default function LogViewerPage() {
   });
   const dedupPatterns: LogViewerDedupPattern[] = dedupData?.patterns ?? [];
   const dedupActive = dedupData?.dedup_active ?? false;
-  const dedupApply = dedupActive && dedupPatterns.some((p) => p.enabled);
+  
+  // Filter patterns for current file: show patterns with no filename (apply to all) or matching filename
+  const dedupPatternsForCurrentFile = dedupPatterns.filter(
+    (p) => !p.filename || p.filename === selectedFile
+  );
+  
+  const dedupApply = dedupActive && dedupPatternsForCurrentFile.some((p) => p.enabled);
 
   const { data: fileContent, isLoading: contentLoading, isPlaceholderData: contentIsPlaceholder } = useQuery({
     queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage, dedupApply],
@@ -443,11 +452,10 @@ export default function LogViewerPage() {
   const openDedupForm = (edit?: LogViewerDedupPattern) => {
     setDedupSaveError(null);
     setDedupEdit(edit ?? null);
-    const name = edit?.name ?? "";
     const regex = edit?.regex ?? "";
-    dedupFormNameRef.current = name;
+    dedupFormNameRef.current = "";
     dedupFormRegexRef.current = regex;
-    setDedupFormValidation(!!(name.trim() && regex.trim()));
+    setDedupFormValidation(!!(regex.trim()));
     setDedupFormEnabled(edit?.enabled ?? true);
     setDedupPanelOpen(true);
   };
@@ -462,16 +470,15 @@ export default function LogViewerPage() {
     setDedupFormEnabled(true);
   };
   const saveDedupPattern = async () => {
-    const name = dedupFormNameRef.current.trim();
     const regex = dedupFormRegexRef.current.trim();
-    if (!name || !regex) return;
+    if (!regex) return;
     if (dedupPersistTimerRef.current) {
       clearTimeout(dedupPersistTimerRef.current);
       dedupPersistTimerRef.current = null;
     }
     const nextPatterns = dedupEdit
-      ? dedupPatterns.map((p) => (p.id === dedupEdit.id ? { ...p, name, regex, enabled: dedupFormEnabled } : p))
-      : [...dedupPatterns, { id: generateUUID(), name, regex, enabled: dedupFormEnabled }];
+      ? dedupPatterns.map((p) => (p.id === dedupEdit.id ? { ...p, regex, enabled: dedupFormEnabled } : p))
+      : [...dedupPatterns, { id: generateUUID(), regex, enabled: dedupFormEnabled }];
     const ok = await saveDedupFull({ dedup_active: dedupActive, patterns: nextPatterns });
     if (ok) closeDedupForm();
   };
@@ -588,6 +595,39 @@ export default function LogViewerPage() {
     if (syntaxHL) return highlightLogLine(converted, activeHighlight || undefined);
     if (activeHighlight) return highlightLogLine(converted, activeHighlight);
     return converted;
+  };
+
+  const handleQuickDedupConfirm = async (pattern: string) => {
+    try {
+      // Get current dedup config
+      const currentConfig = await filesApi.getLogViewerDedupPatterns(projectId!);
+      const patterns = currentConfig.data?.patterns ?? [];
+      
+      // Add new pattern - use regex pattern itself as the name, include filename
+      const newPattern: LogViewerDedupPattern = {
+        id: generateUUID(),
+        regex: pattern,
+        enabled: true,
+        filename: selectedFile || undefined,
+      };
+      
+      const updatedPatterns = [...patterns, newPattern];
+      
+      // Save updated config
+      await filesApi.saveLogViewerDedupPatterns(projectId!, {
+        dedup_active: currentConfig.data?.dedup_active ?? true,
+        patterns: updatedPatterns,
+      });
+      
+      // Invalidate queries to refresh the data
+      // Invalidate dedup patterns to get the updated config
+      qc.invalidateQueries({ queryKey: ["logViewerDedupPatterns", projectId] });
+      // Invalidate file content query to re-fetch with new dedup patterns applied
+      qc.invalidateQueries({ queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage] });
+    } catch (error) {
+      console.error("Failed to save dedup pattern:", error);
+      throw error;
+    }
   };
 
   return (
@@ -774,21 +814,10 @@ export default function LogViewerPage() {
                     <input
                       type="text"
                       key={dedupEdit?.id || "new"}
-                      defaultValue={dedupEdit?.name || ""}
-                      onChange={(e) => {
-                        dedupFormNameRef.current = e.target.value;
-                        setDedupFormValidation(!!(e.target.value.trim() && dedupFormRegexRef.current.trim()));
-                      }}
-                      placeholder="Pattern name"
-                      className="px-2 py-1 text-xs border border-input rounded bg-background"
-                    />
-                    <input
-                      type="text"
-                      key={dedupEdit?.id || "new"}
                       defaultValue={dedupEdit?.regex || ""}
                       onChange={(e) => {
                         dedupFormRegexRef.current = e.target.value;
-                        setDedupFormValidation(!!(dedupFormNameRef.current.trim() && e.target.value.trim()));
+                        setDedupFormValidation(!!e.target.value.trim());
                       }}
                       placeholder="Regex (lines matching this are omitted)"
                       className="px-2 py-1 text-xs border border-input rounded bg-background font-mono"
@@ -821,11 +850,11 @@ export default function LogViewerPage() {
                 </div>
 
                 {/* Patterns list */}
-                {dedupPatterns.length > 0 ? (
+                {dedupPatternsForCurrentFile.length > 0 ? (
                   <div>
-                    <div className="text-[10px] font-medium text-muted-foreground mb-1">Patterns ({dedupPatterns.filter((p) => p.enabled).length}/{dedupPatterns.length})</div>
+                    <div className="text-[10px] font-medium text-muted-foreground mb-1">Patterns ({dedupPatternsForCurrentFile.filter((p) => p.enabled).length}/{dedupPatternsForCurrentFile.length})</div>
                     <ul className="space-y-1 max-h-48 overflow-y-auto">
-                      {dedupPatterns.map((p) => (
+                      {dedupPatternsForCurrentFile.map((p) => (
                         <li
                           key={p.id}
                           className="flex items-center gap-1 px-1.5 py-1 rounded border border-border bg-background text-[10px] group hover:bg-muted/50"
@@ -835,10 +864,10 @@ export default function LogViewerPage() {
                             checked={p.enabled}
                             onChange={(e) => toggleDedupPatternEnabled(p.id, e.target.checked)}
                             className="rounded border-border shrink-0"
-                            aria-label={`Enable pattern ${p.name}`}
+                            aria-label={`Enable pattern`}
                           />
                           <span className="truncate flex-1 cursor-pointer" onClick={() => openDedupForm(p)} title={p.regex}>
-                            {p.name}
+                            {p.regex}
                           </span>
                           <button
                             type="button"
@@ -996,7 +1025,15 @@ export default function LogViewerPage() {
             {fileContent?.lines?.map((line: string, idx: number) => {
               const lineNum = fileContent.line_numbers?.[idx] ?? (fileContent.start_line || 1) + idx;
               return (
-                <div key={`${lineNum}-${idx}`} data-line={lineNum} className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed transition-colors duration-500">
+                <div
+                  key={`${lineNum}-${idx}`}
+                  data-line={lineNum}
+                  onDoubleClick={() => {
+                    setQuickDedupSelectedLine(line);
+                    setQuickDedupModalOpen(true);
+                  }}
+                  className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed transition-colors duration-500"
+                >
                   <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{lineNum}</span>
                   {renderLine(line)}
                 </div>
@@ -1086,6 +1123,14 @@ export default function LogViewerPage() {
           </div>
         )}
       </div>
+
+      {/* Quick Dedup Modal */}
+      <QuickDedupModal
+        isOpen={quickDedupModalOpen}
+        onClose={() => setQuickDedupModalOpen(false)}
+        originalLine={quickDedupSelectedLine}
+        onConfirm={handleQuickDedupConfirm}
+      />
     </div>
   );
 }

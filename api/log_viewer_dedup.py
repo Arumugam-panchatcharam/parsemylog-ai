@@ -62,8 +62,13 @@ def _orig_stat_fields(path: Path) -> tuple[int, int]:
     return mtime_ns, int(st.st_size)
 
 
-def enabled_invert_patterns(cfg: dict[str, Any]) -> list[str]:
-    """Regex strings for rg -v -e … (lines matching any are omitted)."""
+def enabled_invert_patterns(cfg: dict[str, Any], filename: str | None = None) -> list[str]:
+    """Regex strings for rg -v -e … (lines matching any are omitted).
+    
+    If filename is provided, only returns patterns that either:
+    - Have no filename set (applies to all files)
+    - Have a matching filename
+    """
     out: list[str] = []
     plist = cfg.get("patterns") or []
     if not isinstance(plist, list):
@@ -71,6 +76,14 @@ def enabled_invert_patterns(cfg: dict[str, Any]) -> list[str]:
     for p in plist:
         if not isinstance(p, dict) or not p.get("enabled", True):
             continue
+        # Filter by filename if provided
+        if filename:
+            pattern_filename = p.get("filename")
+            # Only include patterns that apply to this file:
+            # 1. Patterns with no filename (apply to all files)
+            # 2. Patterns with matching filename
+            if pattern_filename and pattern_filename != filename:
+                continue
         r = str(p.get("regex", "")).strip()
         if r:
             out.append(r)
@@ -218,6 +231,11 @@ def dedup_patterns_path(project_dir: Path) -> Path:
     return project_dir / LOG_VIEWER_DEDUP_FILENAME
 
 
+def user_dedup_patterns_path(user_dir: Path) -> Path:
+    """Get per-user dedup patterns path (shared across all projects)."""
+    return user_dir / LOG_VIEWER_DEDUP_FILENAME
+
+
 def load_dedup_config(path: Path) -> dict[str, Any]:
     default: dict[str, Any] = {"dedup_active": False, "patterns": []}
     if not path.exists():
@@ -236,16 +254,17 @@ def load_dedup_config(path: Path) -> dict[str, Any]:
     for p in plist:
         if not isinstance(p, dict):
             continue
-        if "id" not in p or "name" not in p or "regex" not in p:
+        if "id" not in p or "regex" not in p:
             continue
-        out_patterns.append(
-            {
-                "id": str(p["id"]),
-                "name": str(p["name"]),
-                "regex": str(p["regex"]),
-                "enabled": bool(p.get("enabled", True)),
-            }
-        )
+        out_dict = {
+            "id": str(p["id"]),
+            "regex": str(p["regex"]),
+            "enabled": bool(p.get("enabled", True)),
+        }
+        # Preserve optional filename field if present
+        if "filename" in p and p.get("filename"):
+            out_dict["filename"] = str(p["filename"])
+        out_patterns.append(out_dict)
     return {
         "dedup_active": bool(data.get("dedup_active", False)),
         "patterns": out_patterns,
@@ -259,22 +278,23 @@ def validate_patterns_json(patterns: Any) -> tuple[str | None, list[dict[str, An
     for p in patterns:
         if not isinstance(p, dict):
             continue
-        pid, name, regex = p.get("id"), p.get("name"), p.get("regex")
-        if pid is None or name is None or regex is None:
+        pid, regex = p.get("id"), p.get("regex")
+        if pid is None or regex is None:
             continue
         rs = str(regex).strip()
         if not rs:
-            return f"Empty regex in pattern: {name}", []
+            return f"Empty regex in pattern: {pid}", []
         try:
             re.compile(rs, re.IGNORECASE)
         except re.error as e:
-            return f"Invalid regex in pattern “{name}”: {e}", []
-        out.append(
-            {
-                "id": str(pid),
-                "name": str(name),
-                "regex": rs,
-                "enabled": bool(p.get("enabled", True)),
-            }
-        )
+            return f"Invalid regex in pattern: {e}", []
+        pattern_dict = {
+            "id": str(pid),
+            "regex": rs,
+            "enabled": bool(p.get("enabled", True)),
+        }
+        # Add optional filename field if present
+        if "filename" in p and p.get("filename"):
+            pattern_dict["filename"] = str(p.get("filename"))
+        out.append(pattern_dict)
     return None, out

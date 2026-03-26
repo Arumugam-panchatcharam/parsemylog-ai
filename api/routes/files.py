@@ -26,6 +26,7 @@ from api.auth import get_user_id
 from api.file_manager import FileManager, register_cpe_files
 from api.log_viewer_dedup import (
     dedup_patterns_path,
+    user_dedup_patterns_path,
     ensure_dedup_materialized,
     enabled_invert_patterns,
     line_to_content_pages,
@@ -33,6 +34,10 @@ from api.log_viewer_dedup import (
     materialized_paths,
     read_alias_view,
     validate_patterns_json,
+)
+from api.log_pattern_extractor import (
+    generate_dedup_pattern,
+    validate_pattern,
 )
 from logai.utils.constants import (
     UPLOAD_DIRECTORY,
@@ -63,6 +68,11 @@ def _get_project_dir(user_id, project_id, cpe_id=None):
     if cpe_id:
         return base / cpe_id
     return base
+
+
+def _get_user_dir(user_id):
+    """Get the user directory path (for storing user-level settings like dedup patterns)."""
+    return Path(f"{UPLOAD_DIRECTORY}/{user_id}")
 
 
 # ---------- In-memory processing status tracker ----------
@@ -544,8 +554,8 @@ def get_file_content(project_id, filename):
         if _dedup_raw is not None
         else False
     )
-    dedup_cfg = load_dedup_config(dedup_patterns_path(_get_project_dir(user_id, project_id)))
-    inv_pats = enabled_invert_patterns(dedup_cfg) if dedup_cfg.get("dedup_active") else []
+    dedup_cfg = load_dedup_config(user_dedup_patterns_path(_get_user_dir(user_id)))
+    inv_pats = enabled_invert_patterns(dedup_cfg, filename) if dedup_cfg.get("dedup_active") else []
     use_dedup = apply_dedup and bool(inv_pats)
 
     if use_dedup:
@@ -802,9 +812,9 @@ def search_all_files(project_id):
     except re.error as e:
         return jsonify({"error": f"Invalid regex: {str(e)}"}), 400
 
-    dedup_cfg = load_dedup_config(dedup_patterns_path(_get_project_dir(user_id, project_id)))
+    dedup_cfg = load_dedup_config(user_dedup_patterns_path(_get_user_dir(user_id)))
     inv_pats = (
-        enabled_invert_patterns(dedup_cfg)
+        enabled_invert_patterns(dedup_cfg, filename)
         if apply_dedup and dedup_cfg.get("dedup_active")
         else []
     )
@@ -929,8 +939,8 @@ def search_file(project_id, filename):
     if lpp < 1:
         lpp = LINES_PER_PAGE
 
-    dedup_cfg = load_dedup_config(dedup_patterns_path(_get_project_dir(user_id, project_id)))
-    inv_pats = enabled_invert_patterns(dedup_cfg) if apply_dedup and dedup_cfg.get("dedup_active") else []
+    dedup_cfg = load_dedup_config(user_dedup_patterns_path(_get_user_dir(user_id)))
+    inv_pats = enabled_invert_patterns(dedup_cfg, filename) if apply_dedup and dedup_cfg.get("dedup_active") else []
     use_dedup = bool(inv_pats)
 
     matches: list[dict] = []
@@ -994,7 +1004,7 @@ def get_log_viewer_dedup_patterns(project_id):
     _, err = _verify_project_access(project_id, user_id)
     if err:
         return err
-    path = dedup_patterns_path(_get_project_dir(user_id, project_id))
+    path = user_dedup_patterns_path(_get_user_dir(user_id))
     cfg = load_dedup_config(path)
     return jsonify(cfg), 200
 
@@ -1014,9 +1024,9 @@ def save_log_viewer_dedup_patterns(project_id):
     if err_msg:
         return jsonify({"error": err_msg}), 400
 
-    project_dir = _get_project_dir(user_id, project_id)
-    project_dir.mkdir(parents=True, exist_ok=True)
-    path = dedup_patterns_path(project_dir)
+    user_dir = _get_user_dir(user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    path = user_dedup_patterns_path(user_dir)
     out = {"dedup_active": dedup_active, "patterns": patterns}
     try:
         path.write_text(json.dumps(out, indent=2), encoding="utf-8")
@@ -1026,7 +1036,112 @@ def save_log_viewer_dedup_patterns(project_id):
     return jsonify(out), 200
 
 
-# ---------- Notes ----------
+@files_bp.route("/<project_id>/dedup-from-line", methods=["POST"])
+@jwt_required()
+def dedup_from_line(project_id):
+    """
+    Generate a deduplication pattern from a raw log line.
+
+    This endpoint:
+    1. Takes a raw log line
+    2. Automatically strips timestamp
+    3. Replaces variable patterns with regex wildcards
+    4. Returns the generated pattern + preview of matching lines
+
+    Body: { "line": str, "file_path": str (optional) }
+    Returns: {
+        "success": bool,
+        "original_line": str,
+        "stripped_line": str,
+        "generated_pattern": str,
+        "pattern_valid": bool,
+        "pattern_error": str or null,
+        "preview_count": int,
+        "preview_lines": [str, ...],
+        "error": str or null
+    }
+    """
+    user_id = get_user_id()
+    _, err = _verify_project_access(project_id, user_id)
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    line = data.get("line", "").strip()
+    file_path = data.get("file_path", "")
+
+    if not line:
+        return jsonify({
+            "success": False,
+            "error": "No log line provided"
+        }), 400
+
+    try:
+        # Generate the pattern
+        generated_pattern = generate_dedup_pattern(line)
+
+        # Validate the pattern
+        is_valid, pattern_error = validate_pattern(generated_pattern)
+
+        # Try to get preview of matching lines if file_path provided
+        preview_lines = []
+        preview_count = 0
+
+        if file_path and is_valid:
+            try:
+                project_dir = _get_project_dir(user_id, project_id)
+                full_path = project_dir / file_path
+                if full_path.exists() and full_path.is_file():
+                    # Read lines from file
+                    try:
+                        with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                            all_lines = f.readlines()
+
+                        # Compile pattern and find matches
+                        compiled_pattern = re.compile(generated_pattern, re.IGNORECASE)
+                        matched_lines = []
+                        for line_content in all_lines:
+                            line_content = line_content.rstrip("\r\n")
+                            if compiled_pattern.search(line_content):
+                                matched_lines.append(line_content)
+                                if len(matched_lines) >= 10:  # Limit to 10 preview lines
+                                    break
+
+                        preview_lines = matched_lines
+                        preview_count = len(matched_lines)
+                    except (OSError, UnicodeDecodeError) as e:
+                        logger.warning(f"[Files] dedup_from_line: could not read file {full_path}: {e}")
+            except Exception as e:
+                logger.warning(f"[Files] dedup_from_line: could not generate preview: {e}")
+
+        # Strip timestamp for display
+        from api.log_pattern_extractor import strip_timestamp
+        stripped_line = strip_timestamp(line)
+
+        return jsonify({
+            "success": True,
+            "original_line": line,
+            "stripped_line": stripped_line,
+            "generated_pattern": generated_pattern,
+            "pattern_valid": is_valid,
+            "pattern_error": pattern_error,
+            "preview_count": preview_count,
+            "preview_lines": preview_lines,
+            "error": None
+        }), 200
+
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "original_line": line
+        }), 400
+    except Exception as e:
+        logger.error(f"[Files] dedup_from_line: unexpected error: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Internal server error"
+        }), 500
 
 @files_bp.route("/<project_id>/notes", methods=["GET"])
 @jwt_required()

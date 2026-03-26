@@ -464,13 +464,25 @@ export const filesApi = {
       ...(dedup ? { dedup: true } : {}),
     }),
   getLogViewerDedupPatterns: (projectId: string) =>
-    api.get<{ dedup_active: boolean; patterns: Array<{ id: string; name: string; regex: string; enabled: boolean }> }>(
+    api.get<{ dedup_active: boolean; patterns: Array<{ id: string; regex: string; enabled: boolean; filename?: string }> }>(
       `/projects/${projectId}/log-viewer-dedup-patterns`,
     ),
   saveLogViewerDedupPatterns: (
     projectId: string,
-    body: { dedup_active: boolean; patterns: Array<{ id: string; name: string; regex: string; enabled: boolean }> },
+    body: { dedup_active: boolean; patterns: Array<{ id: string; regex: string; enabled: boolean; filename?: string }> },
   ) => api.put(`/projects/${projectId}/log-viewer-dedup-patterns`, body),
+  dedupFromLine: (projectId: string, line: string, filePath?: string) =>
+    api.post<{
+      success: boolean;
+      original_line: string;
+      stripped_line: string;
+      generated_pattern: string;
+      pattern_valid: boolean;
+      pattern_error: string | null;
+      preview_count: number;
+      preview_lines: string[];
+      error: string | null;
+    }>(`/projects/${projectId}/dedup-from-line`, { line, file_path: filePath }),
   getNotes: (projectId: string) => api.get(`/projects/${projectId}/notes`),
   saveNotes: (projectId: string, content: string) =>
     api.put(`/projects/${projectId}/notes`, { content }),
