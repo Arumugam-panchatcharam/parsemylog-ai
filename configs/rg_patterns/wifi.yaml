@@ -6,14 +6,15 @@ domain: wireless
 
 # Log files to scan (glob patterns)
 # Leading * handles both clean names and timestamp-prefixed filenames
+# TODO: Need to add separate parser for these files.
+# - "*wificlientdrop.txt*"
+# - "*wifi_snapshot.txt*"
+# - "*wifihealth.txt*"
 files:
   - "*WiFilog.txt*"
-  - "*wificlientdrop.txt*"
-  - "*wifi_snapshot.txt*"
   - "*wifi_vendor_driver.log*"
   - "*wifi_vendor_hal.log*"
   - "*wifi_vendor_hostapd.log*"
-  - "*wifihealth.txt*"
 
 # Number of context lines before/after each match
 context_lines: 3
@@ -21,36 +22,25 @@ context_lines: 3
 # Case-insensitive matching
 case_insensitive: true
 
-# Literal string patterns (fast path, uses rg -F)
-literals:
-  - "FATAL"
-  - "SEGFAULT"
-  - "Segmentation fault"
-  - "core dump"
-  - "ERROR"
-  - "restarted after init"
+ignore_literals:
+  - "CcspCcMbi_GetParameterValues -- Something has screwed up"
+  - "when get parameters: Device.WiFi.AccessPoint."
 
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|timeout|invalid|illegal|incorrect|crash|abort|panic)\\b"
-  # Generic auth/disassociation keywords (position-independent)
-  - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?)\\b"
-  # Station events (client left/removed/kicked)
-  - "\\b(STA|station|client)\\s+(left|removed|kicked|rejected|denied)\\b"
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|info(rmation)?|debug(ging)?)\\b"
+  - "\\b(timeout|invalid|illegal|incorrect|crash|abort|panic|fatal|critical|reset|restart)\\b"
+  - "\\b(core dump|segmentation fault|fatal signal 11|unexpected fatal signal)\\b"
+  # Generic auth/disassociation keywords
+  - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?|left|removed|kicked|rejected|denied)\\b"
+  - "\\b(auth(orized)?|authenticate(d)?|assoc(iate)?|associat(ed|ion)?)\\b"
   # Signal quality issues
-  - "\\bsignal\\s+(lost|weak|degraded|low)\\b"
-  # Radio/HAL issues
-  - "\\b(radio|hal)\\s+(reset|restart|down|fail)\\b"
-  # VAP/SSID issues
-  - "\\b(VAP|vap|SSID|ssid)\\s+(down|fail|destroy|delete)\\b"
-  # DFS events
-  - "\\b(DFS|dfs|radar)\\s+(detect|switch|cac|nop)\\b"
-  # Channel switch
-  - "\\bchannel\\s+(switch|change|dfs)\\b"
-  # Authentication/association failures
-  - "\\b(auth|assoc|wps)\\s+(fail|reject|deny|disassoc|deauth|disconnect(ed)?)\\b"
-  # Driver crash/recovery
-  - "\\bdriver\\s+(crash|recovery|reset|stuck|hang)\\b"
-  # SSP restart
-  - "\\bSSP\\s+(restart|crash|exit)\\b"
+  - "\\b(lost|weak|degraded|low)\\b"
+  # Radio/VAP/SSID/HAL
+  - "\\b(down|destroy|delete)\\b"
+  # ACS/DFS events
+  - "\\b(detect|switch|cac|nop|dfs|acsd|channel)\\b"
+  # vendor specific events
+  - "airties|ecbd"
+

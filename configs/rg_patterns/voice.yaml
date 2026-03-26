@@ -8,11 +8,6 @@ files:
 context_lines: 3
 case_insensitive: true
 
-literals:
-  - "SIP"
-  - "VoIP"
-  - "RTP"
-
 regex:
   - "\\b(err|error|fail(ed|ure)?|timeout|reject|deregister|disconnect(ed)?)\\b"
   - "\\b(sip|voip|voice|rtp|call|ring|codec)\\b"

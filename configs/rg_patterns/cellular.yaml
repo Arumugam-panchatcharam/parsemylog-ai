@@ -17,19 +17,12 @@ context_lines: 3
 # Case-insensitive matching
 case_insensitive: true
 
-# Literal string patterns (fast path, uses rg -F)
-literals:
-  - "FATAL"
-  - "SEGFAULT"
-  - "core dump"
-  - "CCSP_ERR"
-  - "NO SERVICE"
-  - "SIM ERROR"
-
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|info(rmation)?|debug(ging)?)\\b"
+  - "\\b(timeout|invalid|illegal|incorrect|crash|abort|panic|fatal|critical|reset|restart)\\b"
+  - "\\b(core dump|segmentation fault|fatal signal 11|unexpected fatal signal)\\b"
   # Generic cellular issue keywords (position-independent)
   - "\\b(no.?signal|deregister|unregister|attach.?fail|reg.?fail|unresponsive|not.?detect|absent|locked|drop|lost)\\b"
   # Signal issues

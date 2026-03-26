@@ -37,24 +37,20 @@ context_lines: 3
 # Case-insensitive matching
 case_insensitive: true
 
-# Literal string patterns (fast path, uses rg -F)
-literals:
-  - "FATAL"
-  - "CCSP_ERR"
-  - "CCSP_CRASH"
-  - "core dump"
-  - "Segmentation fault"
-  - "CONNECTION_LOST"
-
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|crash|abort|timeout|bad|not successful|not found|not connected|not authorized|not authenticated)\\b"
-  # Generic connectivity/session issue keywords (position-independent)
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|info(rmation)?|debug(ging)?)\\b"
+  - "\\b(timeout|invalid|illegal|incorrect|crash|abort|panic|fatal|critical|reset|restart)\\b"
+  - "\\b(core dump|segmentation fault|fatal signal 11|unexpected fatal signal)\\b"
+  # Memory issues
+  - "\\b(oom|OOM|out.of.memory|memory|leak|exhausted|oops|BUG)\\b"
+  # Process crashes
+  - "\\b(crash|exit|kill|died|terminated)\\b"
+  # SelfHeal actions
+  - "\\bselfheal\\b"
+  # Generic connectivity/session issue keywords
   - "\\b(disconnect(ed)?|connection.?lost|retry|unreachable|flap|sync.?loss|terminated|deregister)\\b"
-  # PSM/data-model issues
-  - "\\b(PSM|ccsp|dbus)\\s*(error|fail|crash|timeout|blocked)\\b"
-  - "\\b(parameter|object|datamodel)\\s+(fail|error|not.?found|invalid)\\b"
   # WAN connectivity
   - "\\b(WAN|wan)\\s+(down|lost|disconnect|fail|flap)\\b"
   - "\\b(IPv4|IPv6|ip)\\s+(fail|error|lost|timeout|unreachable)\\b"

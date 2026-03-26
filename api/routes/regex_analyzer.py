@@ -316,13 +316,6 @@ def _load_domain_presets() -> Dict[str, List[Dict[str, Any]]]:
                 domain = raw["domain"]
                 patterns: List[Dict[str, Any]] = []
 
-                for lit in raw.get("literals", []):
-                    patterns.append({
-                        "name": lit,
-                        "regex": re.escape(lit),
-                        "enabled": True,
-                    })
-
                 for rx in raw.get("regex", []):
                     name = rx[:50].replace("\\b", "").replace("\\s+", " ").strip("()?|")
                     patterns.append({

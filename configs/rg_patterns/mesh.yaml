@@ -16,32 +16,20 @@ context_lines: 3
 # Case-insensitive matching
 case_insensitive: true
 
-# Literal string patterns (fast path, uses rg -F)
-literals:
-  - "FATAL"
-  - "SEGFAULT"
-  - "core dump"
-
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|disconnect(ed)?|timeout|crash|abort)\\b"
-  # Generic mesh issue keywords (position-independent). Do not add bare \\b1905\\b
-  # (WiFi chanspec counter rows use 1905 as a numeric column — see README.md).
-  - "\\b(backhaul|topology|steer(ing)?|agent|controller|satellite|extender|pod|offline|unstable|degrade|conflict|easymesh|ieee1905)\\b"
-  # Backhaul issues
-  - "\\b(backhaul)\\s+(down|fail|lost|disconnect|degrade)\\b"
-  # Topology changes
-  - "\\b(topology)\\s+(change|lost|fail|unstable)\\b"
-  # Steering events
-  - "\\b(steer|steering)\\s+(fail|reject|timeout|abort)\\b"
-  # Agent/controller issues
-  - "\\b(agent|controller)\\s+(disconnect|fail|lost|crash|timeout)\\b"
-  # 1905 protocol issues
-  - "\\b(1905|ieee1905)\\s+(fail|error|timeout)\\b"
-  # Satellite/extender issues
-  - "\\b(satellite|extender|pod)\\s+(disconnect|lost|offline|fail)\\b"
-  # Channel optimization
-  - "\\b(channel|optimization)\\s+(fail|error|conflict)\\b"
-  # EasyMesh events
-  - "\\b(easymesh|R[12])\\s+(fail|error|timeout)\\b"
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|info(rmation)?|debug(ging)?)\\b"
+  - "\\b(timeout|invalid|illegal|incorrect|crash|abort|panic|fatal|critical|reset|restart)\\b"
+  - "\\b(core dump|segmentation fault|fatal signal 11|unexpected fatal signal)\\b"
+  # Generic auth/disassociation keywords
+  - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?|left|removed|kicked|rejected|denied)\\b"
+  - "\\b(auth(orized)?|authenticate(d)?|assoc(iate)?|associat(ed|ion)?)\\b"
+  # Signal quality issues
+  - "\\b(lost|weak|degraded|low)\\b"
+  # Generic mesh keywords
+  - "\\b(backhaul|topology|steer(ing)?|agent|controller|extender|pod|offline|unstable|degrade|conflict|easymesh|ieee1905)\\b"
+  # ACS/DFS events
+  - "\\b(detect|switch|cac|nop|dfs|acsd|channel)\\b"
+  # vendor specific events
+  - "airties|ecbd"

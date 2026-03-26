@@ -97,7 +97,6 @@ class DomainPatternConfig:
         files: Glob patterns for log files to scan.
         context_lines: Number of context lines around matches.
         case_insensitive: Whether to use case-insensitive matching.
-        literals: Literal string patterns (fast path, rg -F).
         regex: Regex patterns (rg -e).
         ignore_literals: Fixed strings; second rg pass (-v -F) drops matching lines.
     """
@@ -105,7 +104,6 @@ class DomainPatternConfig:
     files: List[str]
     context_lines: int = 3
     case_insensitive: bool = True
-    literals: List[str] = field(default_factory=list)
     regex: List[str] = field(default_factory=list)
     ignore_literals: List[str] = field(default_factory=list)
 
@@ -120,7 +118,7 @@ class RgScanner:
 
     The scanner:
     1. Loads domain-specific pattern packs from YAML configuration.
-    2. Builds optimized rg commands (literals via -F, regex via -e).
+    2. Builds optimized rg commands (regex via -e).
     3. Parses --json output into structured RgMatch objects.
     4. Captures context lines around each match (-C N).
 
@@ -221,7 +219,6 @@ class RgScanner:
                     files=raw.get("files", []),
                     context_lines=raw.get("context_lines", 3),
                     case_insensitive=raw.get("case_insensitive", True),
-                    literals=raw.get("literals", []),
                     regex=raw.get("regex", []),
                     ignore_literals=raw.get("ignore_literals", []),
                 )
@@ -229,7 +226,7 @@ class RgScanner:
                 self.domain_configs[config.domain] = config
                 logger.info(
                     f"Loaded pattern config: {config.domain} "
-                    f"({len(config.literals)} literals, {len(config.regex)} regex, "
+                    f"({len(config.regex)} regex, "
                     f"{len(config.files)} file globs, "
                     f"{len(config.ignore_literals)} ignore_literals)"
                 )
@@ -369,7 +366,7 @@ class RgScanner:
         Build ripgrep command for a domain configuration.
 
         Strategy:
-        - Combine all patterns (literals + regex) into a single rg invocation.
+        - Combine all regex patterns into a single rg invocation.
         - Use --json for structured output parsing.
         - Use -C N for context lines.
         - Use --glob to scope to domain-specific files.
@@ -384,11 +381,6 @@ class RgScanner:
         """
         # Collect all regex patterns
         all_patterns = list(config.regex)
-
-        # Convert literals to regex (escaped) for single invocation
-        for literal in config.literals:
-            escaped = _escape_regex(literal)
-            all_patterns.append(escaped)
 
         if not all_patterns:
             return []
@@ -605,7 +597,6 @@ class RgScanner:
         }
         for domain, config in self.domain_configs.items():
             stats["domains"][domain] = {
-                "literals": len(config.literals),
                 "regex": len(config.regex),
                 "file_globs": len(config.files),
                 "context_lines": config.context_lines,
@@ -706,26 +697,6 @@ def _rg_filter_out_literal_matches(
         kept_indices.append(idx)
 
     return [matches[i] for i in kept_indices]
-
-
-def _escape_regex(literal: str) -> str:
-    """
-    Escape special regex characters in a literal string.
-
-    Args:
-        literal: Literal string to escape.
-
-    Returns:
-        Regex-safe escaped string.
-    """
-    special_chars = r"\.^$*+?{}[]|()"
-    escaped = []
-    for char in literal:
-        if char in special_chars:
-            escaped.append(f"\\{char}")
-        else:
-            escaped.append(char)
-    return "".join(escaped)
 
 
 def check_rg_available(rg_binary: str = "rg") -> bool:

@@ -14,16 +14,6 @@ files:
 context_lines: 3
 case_insensitive: true
 
-literals:
-  - "WEBPA_ERR"
-  - "PARODUS_DISCONNECT"
-  - "PARODUS_ERR"
-  - "PARODUS.ERR"
-  - "WEBPA.ERR"
-  - "XCONF.ERR"
-  - "RTMessage_ERR"
-  - "XDNS_ERR"
-
 regex:
   # Match error/warning/failure patterns
   - "\\b(err|error|fail(ed|ure)?|warn(ing)?|timeout|invalid|disconnect(ed)?|reject(ed)?|denied|lost|expired|corrupt)\\b"

@@ -1,6 +1,6 @@
 # Ripgrep pattern packs (rg → Drain3)
 
-Each YAML file defines one **domain**: file name globs, literals, and regexes OR-chained into a single `rg -e` invocation. Only **matching lines** (not `-C` context) are passed to Drain3.
+Each YAML file defines one **domain**: file name globs and regexes OR-chained into a single `rg -e` invocation. Only **matching lines** (not `-C` context) are passed to Drain3.
 
 ## Design rules
 

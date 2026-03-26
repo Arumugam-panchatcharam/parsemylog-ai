@@ -256,17 +256,6 @@ def import_presets(natco_id):
 
             domain = raw["domain"]
 
-            for lit in raw.get("literals", []):
-                rx = re.escape(lit)
-                if (domain, rx) in existing:
-                    continue
-                dbm.db.session.add(dbm.GlobalPattern(
-                    natco_id=natco_id, domain=domain,
-                    name=lit, regex=rx, enabled=True, created_by=user_id,
-                ))
-                existing.add((domain, rx))
-                imported += 1
-
             for rx in raw.get("regex", []):
                 if (domain, rx) in existing:
                     continue

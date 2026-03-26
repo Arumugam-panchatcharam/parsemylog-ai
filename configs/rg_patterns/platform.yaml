@@ -45,33 +45,16 @@ ignore_literals:
   - "/kernel"
   - "lighttpd.error.log"
 
-# Literal string patterns (fast path, uses rg -F)
-literals:
-  - "Segmentation fault"
-  - "Out of memory"
-  - "kernel panic"
-  - "FATAL"
-  - "SEGFAULT"
-  - "core dump"
-  - "Bus error"
-  - "watchdog"
-  - "reboot"
-  - "factory reset"
-  - "hung_task"
-  - "soft lockup"
-
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators
-  - "\\b(err|error|fail(ed|ure)?|crash|abort|panic|timeout)\\b"
-  # Generic platform issue keywords (position-independent)
-  - "\\b(reboot|restart|shutdown|reset|power.?cycle|hung_task|soft.?lockup|oops|watchdog|unsync|time.?sync)\\b"
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|info(rmation)?|debug(ging)?)\\b"
+  - "\\b(timeout|invalid|illegal|incorrect|crash|abort|panic|fatal|critical|reset|restart)\\b"
+  - "\\b(core dump|segmentation fault|fatal signal 11|unexpected fatal signal)\\b"
   # Memory issues
-  - "\\b(oom|OOM|out.of.memory|memory.?(leak|exhausted|low))\\b"
-  # Kernel issues
-  - "\\b(hung_task|soft.?lockup|oops|BUG)\\b"
-  # Process crash/exit
-  - "\\b(process|daemon|service)\\s+(crash|exit|kill|died|terminated)\\b"
+  - "\\b(oom|OOM|out.of.memory|memory|leak|exhausted|oops|BUG)\\b"
+  # Process crashes
+  - "\\b(crash|exit|kill|died|terminated)\\b"
   # SelfHeal actions
   - "\\bselfheal\\b"
   # Boot failures
@@ -80,8 +63,6 @@ regex:
   - "\\b(cpu|load)\\s+(high|spike|100|stuck)\\b"
   # Firmware/update issues
   - "\\b(firmware|upgrade|update)\\s+(fail|error|abort|corrupt)\\b"
-  # SSP restart
-  - "\\bSSP\\s+(restart|crash|exit)\\b"
   # NTP sync issues
   - "\\b(ntp|time.?sync)\\s*(fail|error|timeout|unsync)\\b"
   # Ethernet agent issues
