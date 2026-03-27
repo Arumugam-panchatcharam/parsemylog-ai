@@ -36,6 +36,8 @@ Uptime Categories:
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from logai.timestamp_parser import parse_timestamp as _parse_timestamp_generic
+
 
 # Time-of-day bucket definitions (hour ranges)
 TIME_OF_DAY_BUCKETS = [
@@ -60,6 +62,8 @@ def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
     """
     Parse ISO 8601 timestamp string to datetime object.
     
+    Uses the centralized timestamp parser with fallback for Z-suffix ISO format.
+    
     Args:
         timestamp_str: ISO 8601 formatted timestamp (e.g., "2025-03-15T14:30:00Z")
     
@@ -69,8 +73,13 @@ def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
     if not timestamp_str:
         return None
     
+    # Try generic parser first
+    result = _parse_timestamp_generic(timestamp_str)
+    if result:
+        return result
+    
     try:
-        # Handle ISO 8601 format with or without 'Z'
+        # Fallback: Handle ISO 8601 format with 'Z'
         if timestamp_str.endswith("Z"):
             timestamp_str = timestamp_str[:-1] + "+00:00"
         return datetime.fromisoformat(timestamp_str)
@@ -289,3 +298,77 @@ def aggregate_buckets(
         "uptime_buckets": uptime_result,
         "total_reboot_events": total_time_of_day,
     }
+
+
+def detect_short_reboots(
+    reboot_events: List[Dict[str, Any]],
+    telemetry_timestamps: List[str],
+    threshold_minutes: int = 30,
+) -> List[Dict[str, Any]]:
+    """
+    Detect short reboots by analyzing time gaps between telemetry data points.
+    
+    A reboot is considered "short" if the time gap between the last telemetry report
+    before the reboot and the first telemetry report after the reboot is less than
+    the configured threshold. This indicates the CPE briefly lost power and reconnected
+    quickly—not a system issue.
+    
+    Args:
+        reboot_events: List of reboot event dicts, each with at least:
+            - "timestamp": ISO 8601 timestamp of the reboot
+            - "is_short_reboot": bool (initially False)
+        telemetry_timestamps: List of ISO 8601 telemetry report timestamps, sorted
+        threshold_minutes: Time gap threshold in minutes (default: 30)
+    
+    Returns:
+        Updated reboot_events list with is_short_reboot flags set based on gap analysis
+    """
+    if not telemetry_timestamps or not reboot_events:
+        return reboot_events
+    
+    # Parse all telemetry timestamps for comparison
+    parsed_timestamps: List[Optional[datetime]] = []
+    for ts_str in telemetry_timestamps:
+        parsed = parse_timestamp(ts_str)
+        if parsed:
+            parsed_timestamps.append(parsed)
+    
+    if not parsed_timestamps:
+        return reboot_events
+    
+    threshold = timedelta(minutes=threshold_minutes)
+    
+    for reboot in reboot_events:
+        # Support both "timestamp" (BootTime events) and "time" (telemetry TR events)
+        reboot_timestamp = parse_timestamp(reboot.get("timestamp") or reboot.get("time", ""))
+        if not reboot_timestamp:
+            continue
+        
+        # Find the last telemetry report before the reboot
+        prev_report_idx = None
+        for i, ts in enumerate(parsed_timestamps):
+            if ts and ts < reboot_timestamp:
+                prev_report_idx = i
+            elif ts and ts >= reboot_timestamp:
+                break
+        
+        # Find the first telemetry report after the reboot
+        next_report_idx = None
+        for i in range(len(parsed_timestamps)):
+            if parsed_timestamps[i] and parsed_timestamps[i] > reboot_timestamp:
+                next_report_idx = i
+                break
+        
+        # Calculate the gap between prev and next reports
+        if prev_report_idx is not None and next_report_idx is not None:
+            prev_report_time = parsed_timestamps[prev_report_idx]
+            next_report_time = parsed_timestamps[next_report_idx]
+            
+            if prev_report_time and next_report_time:
+                gap = next_report_time - prev_report_time
+                
+                if gap < threshold:
+                    reboot["is_short_reboot"] = True
+    
+    return reboot_events
+

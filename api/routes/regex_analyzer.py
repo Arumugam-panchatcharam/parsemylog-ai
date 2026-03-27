@@ -38,6 +38,7 @@ from api.app import dbm
 from api.auth import get_user_id
 from logai.utils.constants import UPLOAD_DIRECTORY
 from logai.info_extractor import find_and_extract_reboots
+from logai.timestamp_parser import parse_timestamp, normalize_to_date_only
 
 logger = logging.getLogger(__name__)
 
@@ -105,13 +106,30 @@ def _is_in_maintenance_window(ts: datetime, mw: Dict[str, str]) -> bool:
 
 
 def _is_near_reboot(
-    ts: datetime, reboots: List[Dict[str, str]], proximity_minutes: int
+    ts: datetime, reboots: List[Dict[str, str]], proximity_minutes: int, exclude_short_reboots: bool = False
 ) -> bool:
-    """Check whether *ts* is within ±*proximity_minutes* of any reboot event."""
+    """
+    Check whether *ts* is within ±*proximity_minutes* of any reboot event.
+    
+    Args:
+        ts: Timestamp to check
+        reboots: List of reboot events with 'timestamp' and optional 'is_short_reboot'
+        proximity_minutes: Time window in minutes
+        exclude_short_reboots: If True, skip reboots marked as short (brief outages)
+    
+    Returns:
+        True if within proximity of a matching reboot, False otherwise
+    """
     delta = timedelta(minutes=proximity_minutes)
     for r in reboots:
+        # Skip short reboots if requested
+        if exclude_short_reboots and r.get("is_short_reboot"):
+            continue
+        
         try:
-            rt = datetime.fromisoformat(r["timestamp"])
+            rt = parse_timestamp(r["timestamp"])
+            if not rt:
+                rt = datetime.fromisoformat(r["timestamp"])
         except (ValueError, KeyError):
             continue
         if abs(ts - rt) <= delta:
@@ -394,8 +412,12 @@ def _calculate_adaptive_bucket_minutes(times: List[str], target_points: int = 60
         return 0
     
     # Get time span of matches
-    first_ts = datetime.fromisoformat(times[0])
-    last_ts = datetime.fromisoformat(times[-1])
+    first_ts = parse_timestamp(times[0])
+    if not first_ts:
+        first_ts = datetime.fromisoformat(times[0])
+    last_ts = parse_timestamp(times[-1])
+    if not last_ts:
+        last_ts = datetime.fromisoformat(times[-1])
     duration_minutes = (last_ts - first_ts).total_seconds() / 60
     
     if duration_minutes <= 0:
@@ -419,7 +441,9 @@ def _bucket_matches(times: List[str], texts: List[str], bucket_minutes: int) -> 
     
     buckets = {}  # timestamp -> (sample_text, count)
     for ts, txt in zip(times, texts):
-        dt = datetime.fromisoformat(ts)
+        dt = parse_timestamp(ts)
+        if not dt:
+            dt = datetime.fromisoformat(ts)
         # Round down to bucket boundary
         bucket_dt = dt.replace(second=0, microsecond=0)
         bucket_minutes_offset = (bucket_dt.minute // bucket_minutes) * bucket_minutes
@@ -437,6 +461,79 @@ def _bucket_matches(times: List[str], texts: List[str], bucket_minutes: int) -> 
         [v[0] for _, v in sorted_buckets],
         [v[1] for _, v in sorted_buckets]
     )
+
+
+
+def _get_build_timestamps(project_dir: Path) -> List[datetime]:
+    """
+    Extract ALL firmware build timestamps from version.txt, normalized to date-only.
+    
+    Handles firmware upgrades where multiple versions (v1 → v2) may exist.
+    Each unique build date is normalized to 00:00:00 (date-only, no time component).
+    
+    All logs with dates <= any build_date are considered pre-NTP (unsynchronized clock).
+    
+    Returns:
+        List of build timestamps (as datetime with time=00:00:00), sorted chronologically.
+        Returns empty list if version.txt not found or no build times available.
+    """
+    build_dates: List[datetime] = []
+    
+    version_paths = [
+        project_dir / "version.txt",
+        project_dir / "merged_logs" / "version.txt",
+    ]
+    
+    for version_path in version_paths:
+        if not version_path.exists():
+            continue
+            
+        try:
+            from logai.info_extractor import parse_version_txt
+            content = version_path.read_text(encoding="utf-8", errors="ignore")
+            parsed = parse_version_txt(content)
+            
+            # Extract ALL unique firmware versions' build times
+            if parsed.get("firmware_versions"):
+                seen_dates = set()  # Deduplicate dates
+                
+                for fw in parsed["firmware_versions"]:
+                    build_time_str = fw.get("build_time")
+                    if build_time_str:
+                        try:
+                            # Use generic timestamp parser
+                            build_ts = parse_timestamp(build_time_str)
+                            
+                            if build_ts is None:
+                                logger.debug(f"[PatternAnalyzer] Could not parse build_time '{build_time_str}'")
+                                continue
+                            
+                            # Normalize to date-only
+                            build_date = normalize_to_date_only(build_ts)
+                            date_key = build_date.date()
+                            
+                            if date_key not in seen_dates:
+                                build_dates.append(build_date)
+                                seen_dates.add(date_key)
+                                logger.debug(f"[PatternAnalyzer] Build date from version.txt: {build_date}")
+                                
+                        except (ValueError, AttributeError) as e:
+                            logger.debug(f"[PatternAnalyzer] Error processing build_time '{build_time_str}': {e}")
+                            continue
+                
+                # Sort chronologically
+                build_dates.sort()
+                
+                if build_dates and len(parsed["firmware_versions"]) > 1:
+                    logger.info(f"[PatternAnalyzer] Found {len(build_dates)} unique build dates from {len(parsed['firmware_versions'])} firmware versions")
+                
+                return build_dates
+                        
+        except Exception as e:
+            logger.debug(f"[PatternAnalyzer] Error reading version.txt from {version_path}: {e}")
+            continue
+    
+    return []
 
 
 def _run_ripgrep_scan(
@@ -461,9 +558,11 @@ def _run_ripgrep_scan(
         time_start: Optional ISO start time filter.
         time_end: Optional ISO end time filter.
         filter_pre_ntp: When True, exclude log lines whose timestamps are
-            from before NTP sync (build-time timestamps).  Uses the earliest
-            reboot timestamp minus 24 h as a cutoff.
-        reboots: Reboot data (needed when *filter_pre_ntp* is True).
+            from before NTP sync (i.e., timestamps on any build date from version.txt).
+            Supports firmware upgrades with multiple build dates. Logs are normalized
+            to date-only comparison (year-month-date), so any log on a build date is
+            excluded regardless of time component.
+        reboots: Reboot data (unused when *filter_pre_ntp* is True).
 
     Returns:
         Dict with:
@@ -482,23 +581,27 @@ def _run_ripgrep_scan(
     ts_end = None
     if time_start:
         try:
-            ts_start = datetime.fromisoformat(time_start)
+            ts_start = parse_timestamp(time_start)
+            if not ts_start:
+                ts_start = datetime.fromisoformat(time_start)
         except ValueError:
             pass
     if time_end:
         try:
-            ts_end = datetime.fromisoformat(time_end)
+            ts_end = parse_timestamp(time_end)
+            if not ts_end:
+                ts_end = datetime.fromisoformat(time_end)
         except ValueError:
             pass
 
-    # Pre-NTP cutoff: earliest reboot - 24 h
-    ntp_cutoff: Optional[datetime] = None
-    if filter_pre_ntp and reboots:
-        try:
-            earliest_ts = min(r["timestamp"] for r in reboots if r.get("timestamp"))
-            ntp_cutoff = datetime.fromisoformat(earliest_ts) - timedelta(hours=24)
-        except (ValueError, TypeError):
-            pass
+    # Pre-NTP filter: Get all build dates from version.txt (handles firmware upgrades)
+    # Logs with dates matching any build date are pre-NTP (device clock not yet synced)
+    pre_ntp_dates: List[datetime] = []
+    if filter_pre_ntp:
+        pre_ntp_dates = _get_build_timestamps(project_dir)
+        if pre_ntp_dates:
+            date_list = ", ".join(dt.strftime("%Y-%m-%d") for dt in pre_ntp_dates)
+            logger.info(f"[PatternAnalyzer] Pre-NTP filter active: excluding logs from build date(s): {date_list}")
 
     traces = []
     total_matches = 0
@@ -552,12 +655,18 @@ def _run_ripgrep_scan(
 
             ts_str = ts_match.group(1)
             try:
-                ts = datetime.fromisoformat(ts_str)
+                ts = parse_timestamp(ts_str)
+                if not ts:
+                    ts = datetime.fromisoformat(ts_str)
             except ValueError:
                 continue
 
-            if ntp_cutoff and ts < ntp_cutoff:
-                continue
+            # Skip if on a pre-NTP build date (date-only comparison)
+            if pre_ntp_dates:
+                ts_date = normalize_to_date_only(ts)
+                if ts_date in pre_ntp_dates:
+                    continue
+
             if ts_start and ts < ts_start:
                 continue
             if ts_end and ts > ts_end:
@@ -845,6 +954,7 @@ def run_scan(project_id):
     bucket_minutes = int(data.get("bucket_minutes", 5))
     time_range = data.get("time_range", {})
     filter_pre_ntp = bool(data.get("filter_pre_ntp", False))
+    filter_short_reboots = bool(data.get("filter_short_reboots", False))
     cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
     if bucket_minutes < 1:
@@ -885,6 +995,10 @@ def run_scan(project_id):
 
         # Extract reboot boundaries (needed before scan for pre-NTP filter)
         reboots = find_and_extract_reboots(project_dir)
+        
+        # Filter short reboots if requested (but show all reboots if there's only one)
+        if filter_short_reboots and len(reboots) > 1:
+            reboots = [r for r in reboots if r.get("is_short_reboot", False)]
 
         # Run ripgrep scan
         scan_result = _run_ripgrep_scan(

@@ -6,6 +6,8 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
+from logai.timestamp_parser import parse_timestamp
+
 class LogMerger:
     # Full 6-part timestamp in a tgz filename, e.g. ..._2026-01-27-09-02-03_...
     TGZ_TS_RE = re.compile(r'(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})')
@@ -24,6 +26,11 @@ class LogMerger:
             )
 
     def _parse_timestamp(self, ts):
+        """Parse timestamp using generic parser with dash-separated fallback."""
+        result = parse_timestamp(ts)
+        if result:
+            return result
+        # Fallback to dash-separated format (for backward compatibility)
         return datetime.strptime(ts, "%Y-%m-%d-%H-%M-%S")
     
     def _cleanup(self):

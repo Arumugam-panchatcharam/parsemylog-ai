@@ -21,6 +21,7 @@ from api.reboot_bucketing import (
     bucket_reboot_events,
     aggregate_buckets,
     extract_reboot_events,
+    detect_short_reboots,
 )
 from logai.utils.constants import UPLOAD_DIRECTORY
 from logai.telemetry_parser import (
@@ -33,6 +34,7 @@ from logai.telemetry_parser import (
     load_available_fields_cache,
     extract_mesh_topology_timeline,
 )
+from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -479,7 +481,8 @@ def _build_reboot_timeline(reports, project_dir=None):
                 "prev_uptime": prev_uptime,
                 "new_uptime": uptime,
                 "source": "telemetry",
-                "label": "TR"
+                "label": "TR",
+                "is_short_reboot": False  # Will be set by detect_short_reboots()
             })
 
         times.append(ts)
@@ -496,8 +499,10 @@ def _build_reboot_timeline(reports, project_dir=None):
             for idx, reboot in enumerate(boottime_reboots, start=1):
                 reboot_events_boottime.append({
                     "time": reboot.get("timestamp", ""),
+                    "timestamp": reboot.get("timestamp", ""),  # Add timestamp field for compatibility
                     "reason": reboot.get("reason", "unknown"),
                     "reboot_type": reboot.get("reboot_type", "unknown"),
+                    "is_short_reboot": reboot.get("is_short_reboot", False),  # Propagate flag
                     "source": "boottime",
                     "label": "B"
                 })
@@ -513,12 +518,16 @@ def _build_reboot_timeline(reports, project_dir=None):
         tr_event["reboot_type"] = None  # Default to None (unknown)
         
         try:
-            tr_time = datetime.fromisoformat(tr_event["time"])
+            tr_time = parse_timestamp(tr_event["time"])
+            if not tr_time:
+                tr_time = datetime.fromisoformat(tr_event["time"])
             
             # Find matching BootTime.log reboot
             for bt_reboot in boottime_reboots:
                 try:
-                    bt_time = datetime.fromisoformat(bt_reboot.get("timestamp", ""))
+                    bt_time = parse_timestamp(bt_reboot.get("timestamp", ""))
+                    if not bt_time:
+                        bt_time = datetime.fromisoformat(bt_reboot.get("timestamp", ""))
                     time_diff = abs(tr_time - bt_time)
                     
                     if time_diff <= REBOOT_MATCH_TOLERANCE:
@@ -528,6 +537,21 @@ def _build_reboot_timeline(reports, project_dir=None):
                     continue
         except (ValueError, TypeError):
             pass
+
+    # Detect short reboots by analyzing telemetry data point gaps
+    try:
+        # Use default threshold of 30 minutes (configurable in detect_short_reboots function)
+        threshold_minutes = 30
+        
+        telemetry_timestamps = [ts for ts in times if ts]
+        for event in reboot_events_telemetry:
+            event["is_short_reboot"] = False
+        
+        reboot_events_telemetry = detect_short_reboots(reboot_events_telemetry, telemetry_timestamps, threshold_minutes)
+    except Exception as e:
+        logger.debug(f"[Telemetry] Could not detect short reboots: {e}")
+        for event in reboot_events_telemetry:
+            event["is_short_reboot"] = False
 
     # Combine all reboot events
     all_events = reboot_events_boottime + reboot_events_telemetry
@@ -833,14 +857,18 @@ def _compute_reboot_analytics(cpe_results):
     """
     Compute reboot analytics bucketed by time-of-day and uptime categories.
     
+    Also computes counts of short vs normal reboots.
+    
     Args:
         cpe_results: List of CPE entries with reboot_timeline_data
     
     Returns:
-        Dict with time_of_day_buckets, uptime_buckets, and total_reboot_events
+        Dict with time_of_day_buckets, uptime_buckets, short_reboots_count, normal_reboots_count, and total_reboot_events
     """
     all_time_of_day_buckets = []
     all_uptime_buckets = []
+    short_reboots_count = 0
+    normal_reboots_count = 0
     
     for cpe in cpe_results:
         reboot_timeline = cpe.get("reboot_timeline_data")
@@ -851,6 +879,13 @@ def _compute_reboot_analytics(cpe_results):
         reboot_events = extract_reboot_events(reboot_timeline)
         if not reboot_events:
             continue
+        
+        # Count short vs normal reboots
+        for event in reboot_events:
+            if event.get("is_short_reboot"):
+                short_reboots_count += 1
+            else:
+                normal_reboots_count += 1
         
         # Prepare CPE info for device details
         cpe_info = {
@@ -866,6 +901,8 @@ def _compute_reboot_analytics(cpe_results):
     # Aggregate all CPE buckets into fleet-wide analytics
     try:
         analytics = aggregate_buckets(all_time_of_day_buckets, all_uptime_buckets)
+        analytics["short_reboots_count"] = short_reboots_count
+        analytics["normal_reboots_count"] = normal_reboots_count
         return analytics
     except Exception as e:
         logger.error(f"[RebootAnalytics] Error computing analytics: {e}")
@@ -873,6 +910,8 @@ def _compute_reboot_analytics(cpe_results):
             "time_of_day_buckets": {},
             "uptime_buckets": {},
             "total_reboot_events": 0,
+            "short_reboots_count": 0,
+            "normal_reboots_count": 0,
         }
 
 
@@ -900,8 +939,10 @@ def _analyze_reboot_correlation(cpe_results, window_minutes=10, min_cpes=2):
                 if not timestamp_str:
                     continue
                 
-                # Parse timestamp
-                ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                # Parse timestamp using generic parser
+                ts = parse_timestamp(timestamp_str)
+                if not ts:
+                    ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                 
                 all_events.append({
                     "serial": serial,
@@ -1053,6 +1094,7 @@ def cross_cpe_overview(project_id):
         return err
 
     force = request.args.get("force", "0") in ("1", "true")
+    filter_short_reboots = request.args.get("filter_short_reboots", "false").lower() == "true"
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
     cpes = dbm.list_project_cpes(project_id)
 
@@ -1231,6 +1273,20 @@ def cross_cpe_overview(project_id):
         1 for c in cpe_results
         if c.get("reboot_count", 0) > 0 and c.get("low_memory")
     )
+
+    # Apply short reboot filter if requested (but show all reboots if there's only one)
+    if filter_short_reboots:
+        for cpe in cpe_results:
+            rt = cpe.get("reboot_timeline_data")
+            if rt and rt.get("all_events"):
+                # If there's only one reboot total, show it regardless of short reboot filter
+                if len(rt["all_events"]) <= 1:
+                    rt["events"] = rt["all_events"]
+                else:
+                    # Filter to only short reboots
+                    rt["all_events"] = [e for e in rt["all_events"] if e.get("is_short_reboot")]
+                    # Update event count
+                    rt["events"] = rt["all_events"]
 
     # Reboot bucketing analysis (time-of-day and uptime categories)
     reboot_analytics = _compute_reboot_analytics(cpe_results)

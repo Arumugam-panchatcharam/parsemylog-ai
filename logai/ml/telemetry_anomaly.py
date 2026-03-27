@@ -60,6 +60,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
+from logai.timestamp_parser import parse_timestamp
+
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -694,7 +696,11 @@ class DeviceHealthScorer:
             t = r.get("time")
             if t and isinstance(t, str):
                 try:
-                    times.append(datetime.fromisoformat(t))
+                    parsed_t = parse_timestamp(t)
+                    if parsed_t:
+                        times.append(parsed_t)
+                    else:
+                        times.append(datetime.fromisoformat(t))
                 except (ValueError, TypeError):
                     pass
             elif t and hasattr(t, "isoformat"):
@@ -744,7 +750,11 @@ class DeviceHealthScorer:
             t = r.get("time")
             if t and isinstance(t, str):
                 try:
-                    times.append(datetime.fromisoformat(t))
+                    parsed_t = parse_timestamp(t)
+                    if parsed_t:
+                        times.append(parsed_t)
+                    else:
+                        times.append(datetime.fromisoformat(t))
                 except (ValueError, TypeError):
                     pass
             elif t and hasattr(t, "isoformat"):

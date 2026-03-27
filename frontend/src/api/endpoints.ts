@@ -586,6 +586,8 @@ export interface RebootAnalytics {
     }>;
   }>;
   total_reboot_events: number;
+  short_reboots_count?: number;
+  normal_reboots_count?: number;
 }
 
 export interface CrossCpeTelemetryOverview {
@@ -608,9 +610,12 @@ export const telemetryApi = {
     api.get(`/projects/${projectId}/telemetry/available-fields`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
-  crossCpeOverview: (projectId: string, force = false) =>
+  crossCpeOverview: (projectId: string, force = false, filterShortReboots = false) =>
     api.get<CrossCpeTelemetryOverview>(`/projects/${projectId}/telemetry/cross-cpe-overview`, {
-      params: force ? { force: "1" } : undefined,
+      params: {
+        ...(force ? { force: "1" } : {}),
+        ...(filterShortReboots ? { filter_short_reboots: "true" } : {}),
+      },
     }),
   exportCsv: (
     projectId: string,
@@ -720,6 +725,7 @@ export const patternAnalyzerApi = {
     bucket_minutes: number;
     time_range?: { start: string; end: string };
     filter_pre_ntp?: boolean;
+    filter_short_reboots?: boolean;
     cpe_id?: string | null;
   }) => api.post<{
     scan_id: string;
@@ -805,7 +811,7 @@ export const cpeOverviewApi = {
   },
   getPatternScan: (projectId: string) =>
     api.get<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
-  runPatternScan: (projectId: string, params?: { reboot_window_minutes?: number }) =>
+  runPatternScan: (projectId: string, params?: { reboot_window_minutes?: number; filter_short_reboots?: boolean }) =>
     api.post<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`, params),
 };
 

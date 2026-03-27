@@ -25,7 +25,9 @@ from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id
+from api.reboot_bucketing import detect_short_reboots
 from logai.utils.constants import UPLOAD_DIRECTORY
+from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -258,12 +260,55 @@ def _build_flat_metrics(
 
 def _collect_reboot_summary(project_dir: Path) -> Dict[str, Any]:
     """Collect reboot data for a CPE directory."""
-    result: Dict[str, Any] = {"total": 0, "reasons": {}, "types": {"soft": 0, "hard": 0}}
+    result: Dict[str, Any] = {
+        "total": 0,
+        "short_reboots": 0,
+        "normal_reboots": 0,
+        "reasons": {},
+        "types": {"soft": 0, "hard": 0}
+    }
 
     try:
         from logai.info_extractor import find_and_extract_reboots
         reboots = find_and_extract_reboots(project_dir)
         if reboots:
+            # Try to detect short reboots using telemetry data if available
+            try:
+                from logai.telemetry_parser import load_telemetry_cache
+                
+                # Use default threshold of 30 minutes
+                threshold_minutes = 30
+                
+                # Load telemetry cache to get timestamps
+                cached = load_telemetry_cache(project_dir)
+                if cached and cached.get("reports"):
+                    telemetry_timestamps = []
+                    for report in cached.get("reports", []):
+                        if report.get("time"):
+                            telemetry_timestamps.append(report.get("time"))
+                    
+                    # Convert reboots to event format for detection
+                    events = []
+                    for reboot in reboots:
+                        events.append({
+                            "timestamp": reboot.get("timestamp", ""),
+                            "is_short_reboot": reboot.get("is_short_reboot", False),
+                            "reason": reboot.get("reason", "unknown"),
+                            "reboot_type": reboot.get("reboot_type", "unknown"),
+                        })
+                    
+                    # Detect short reboots
+                    events = detect_short_reboots(events, telemetry_timestamps, threshold_minutes)
+                    
+                    # Update original reboots with is_short_reboot flag
+                    for i, reboot in enumerate(reboots):
+                        if i < len(events):
+                            reboot["is_short_reboot"] = events[i].get("is_short_reboot", False)
+            except Exception as e:
+                logger.debug(f"[CPEOverview] Could not detect short reboots: {e}")
+                for reboot in reboots:
+                    reboot["is_short_reboot"] = False
+            
             result["total"] = len(reboots)
             reasons = [r.get("reason", "unknown") for r in reboots]
             result["reasons"] = dict(Counter(reasons))
@@ -273,6 +318,12 @@ def _collect_reboot_summary(project_dir: Path) -> Dict[str, Any]:
             soft_count = sum(1 for r in reboots if r.get("reboot_type") == "soft")
             hard_count = len(reboots) - soft_count
             result["types"] = {"soft": soft_count, "hard": hard_count}
+            
+            # Count short vs normal reboots
+            short_count = sum(1 for r in reboots if r.get("is_short_reboot", False))
+            normal_count = len(reboots) - short_count
+            result["short_reboots"] = short_count
+            result["normal_reboots"] = normal_count
     except Exception as e:
         logger.warning(f"[CPEOverview] Error collecting reboots from {project_dir}: {e}")
 
@@ -383,6 +434,7 @@ def get_cpe_overview(project_id):
     filter_model = request.args.get("model")
     filter_serial = request.args.get("serial")
     filter_status = request.args.get("status")
+    filter_short_reboots = request.args.get("filter_short_reboots", "false").lower() == "true"
     force = request.args.get("force", "0") in ("1", "true")
 
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
@@ -394,6 +446,20 @@ def get_cpe_overview(project_id):
         # Legacy project (no CPEs) -- treat the base dir as a single CPE
         info = _collect_device_info(base_dir, force=force)
         reboot_summary = _collect_reboot_summary(base_dir)
+        
+        # Filter short reboots if requested (but show all reboots if there's only one)
+        if filter_short_reboots and reboot_summary.get("events"):
+            # If there's only one reboot total, show it regardless of short reboot filter
+            if len(reboot_summary["events"]) <= 1:
+                # Keep the original reboot_summary as is
+                pass
+            else:
+                short_reboots = [e for e in reboot_summary["events"] if e.get("is_short_reboot")]
+                reboot_summary["events"] = short_reboots
+                reboot_summary["total"] = len(short_reboots)
+                reboot_summary["short_reboots"] = len(short_reboots)
+                reboot_summary["normal_reboots"] = 0
+        
         pattern_summary = _collect_pattern_summary(base_dir)
         log_stats = _collect_log_stats(base_dir)
 
@@ -428,6 +494,20 @@ def get_cpe_overview(project_id):
 
         info = _collect_device_info(cpe_dir, force=force)
         reboot_summary = _collect_reboot_summary(cpe_dir)
+        
+        # Filter short reboots if requested (but show all reboots if there's only one)
+        if filter_short_reboots and reboot_summary.get("events"):
+            # If there's only one reboot total, show it regardless of short reboot filter
+            if len(reboot_summary["events"]) <= 1:
+                # Keep the original reboot_summary as is
+                pass
+            else:
+                short_reboots = [e for e in reboot_summary["events"] if e.get("is_short_reboot")]
+                reboot_summary["events"] = short_reboots
+                reboot_summary["total"] = len(short_reboots)
+                reboot_summary["short_reboots"] = len(short_reboots)
+                reboot_summary["normal_reboots"] = 0
+        
         pattern_summary = _collect_pattern_summary(cpe_dir)
         log_stats = _collect_log_stats(cpe_dir)
 
@@ -619,7 +699,9 @@ def _get_reboot_time_windows(
     windows = []
     for rb in reboots:
         try:
-            rb_ts = datetime.fromisoformat(rb["timestamp"])
+            rb_ts = parse_timestamp(rb["timestamp"])
+            if not rb_ts:
+                rb_ts = datetime.fromisoformat(rb["timestamp"])
             window_start = rb_ts - timedelta(minutes=window_minutes_before)
             windows.append((window_start, rb_ts))
         except (ValueError, KeyError):
@@ -727,7 +809,9 @@ def _run_rg_count_all_cpes_filtered(
             continue
 
         try:
-            ts_dt = datetime.fromisoformat(ts_match.group(1))
+            ts_dt = parse_timestamp(ts_match.group(1))
+            if not ts_dt:
+                ts_dt = datetime.fromisoformat(ts_match.group(1))
         except ValueError:
             counts[serial] += 1
             continue
@@ -748,7 +832,9 @@ def _run_rg_count_all_cpes_filtered(
             skip = False
             for r in reboots:
                 try:
-                    rt = datetime.fromisoformat(r["timestamp"])
+                    rt = parse_timestamp(r["timestamp"])
+                    if not rt:
+                        rt = datetime.fromisoformat(r["timestamp"])
                 except (ValueError, KeyError):
                     continue
                 if abs(ts_dt - rt) <= rp_delta:
@@ -837,6 +923,7 @@ def run_pattern_scan(project_id):
     # Get optional reboot window filter parameter
     data = request.get_json() or {}
     reboot_window_minutes = data.get("reboot_window_minutes")
+    filter_short_reboots = bool(data.get("filter_short_reboots", False))
     if reboot_window_minutes is not None:
         try:
             reboot_window_minutes = int(reboot_window_minutes)
@@ -925,7 +1012,11 @@ def run_pattern_scan(project_id):
         from logai.info_extractor import find_and_extract_reboots as _extract_reboots
         for cpe_info in cpe_dirs:
             try:
-                cpe_reboots[cpe_info["serial"]] = _extract_reboots(cpe_info["dir"])
+                reboots = _extract_reboots(cpe_info["dir"])
+                # Filter short reboots if requested (but show all reboots if there's only one)
+                if filter_short_reboots and len(reboots) > 1:
+                    reboots = [r for r in reboots if r.get("is_short_reboot", False)]
+                cpe_reboots[cpe_info["serial"]] = reboots
             except Exception:
                 cpe_reboots[cpe_info["serial"]] = []
 

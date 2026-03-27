@@ -81,6 +81,7 @@ export default function PatternOverviewTab() {
   const [domainFilter, setDomainFilter] = useState<string>("all");
   const [rebootWindowMinutes, setRebootWindowMinutes] = useState<number>(60); // Default 1 hour
   const [enableRebootFilter, setEnableRebootFilter] = useState<boolean>(true);
+  const [filterShortReboots, setFilterShortReboots] = useState(true);
 
   const { data: cpeList } = useQuery<Array<{ serial: string }>>({
     queryKey: ["cpe-list", projectId],
@@ -100,7 +101,8 @@ export default function PatternOverviewTab() {
   const scanMutation = useMutation({
     mutationFn: async () => 
       (await cpeOverviewApi.runPatternScan(projectId!, {
-        reboot_window_minutes: enableRebootFilter ? rebootWindowMinutes : undefined
+        reboot_window_minutes: enableRebootFilter ? rebootWindowMinutes : undefined,
+        filter_short_reboots: filterShortReboots
       })).data,
     onSuccess: (data) => {
       queryClient.setQueryData(["cpe-overview-pattern-scan", projectId], data);
@@ -269,41 +271,55 @@ export default function PatternOverviewTab() {
     <div className="space-y-3">
       {/* Reboot Timeline Filter */}
       <div className="bg-card border border-border rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Reboot Timeline Filter
-          </h3>
-          <label className="flex items-center gap-2 cursor-pointer">
+        <div className="space-y-3">
+          {/* Enable/Disable Reboot Filter */}
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Reboot Timeline Filter
+            </h3>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableRebootFilter}
+                onChange={(e) => setEnableRebootFilter(e.target.checked)}
+                className="h-4 w-4 accent-blue-600"
+              />
+              <span className="text-xs">Enable</span>
+            </label>
+          </div>
+          
+          {/* Short Reboot Filter */}
+          <label className="flex items-center gap-2 cursor-pointer select-none pl-2 py-1">
             <input
               type="checkbox"
-              checked={enableRebootFilter}
-              onChange={(e) => setEnableRebootFilter(e.target.checked)}
-              className="h-4 w-4 accent-blue-600"
+              checked={filterShortReboots}
+              onChange={(e) => setFilterShortReboots(e.target.checked)}
+              className="h-4 w-4 accent-purple-600"
             />
-            <span className="text-xs">Enable</span>
+            <span className="text-xs text-muted-foreground">Short reboots only</span>
           </label>
-        </div>
-        
-        {enableRebootFilter && (
-          <div>
-            <label className="text-xs text-muted-foreground block mb-2">
-              Show matches within {rebootWindowMinutes} minutes before each reboot
-            </label>
-            <input
-              type="range"
-              min="15"
-              max="360"
-              step="15"
-              value={rebootWindowMinutes}
-              onChange={(e) => setRebootWindowMinutes(Number(e.target.value))}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>15 min</span>
-              <span>6 hours</span>
+          
+          {enableRebootFilter && (
+            <div>
+              <label className="text-xs text-muted-foreground block mb-2">
+                Show matches within {rebootWindowMinutes} minutes before each reboot
+              </label>
+              <input
+                type="range"
+                min="15"
+                max="360"
+                step="15"
+                value={rebootWindowMinutes}
+                onChange={(e) => setRebootWindowMinutes(Number(e.target.value))}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <span>15 min</span>
+                <span>6 hours</span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Controls bar */}

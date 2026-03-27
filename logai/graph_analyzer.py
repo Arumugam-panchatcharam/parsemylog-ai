@@ -51,6 +51,7 @@ from logai.info_extractor import (
 )
 from logai.rdkb_knowledge import chain_module_plausibility, resolve_modules
 from logai.telemetry_parser import parse_telemetry_file
+from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +110,8 @@ def _json_serial(obj):
 def _parse_ts(s: str) -> Optional[datetime]:
     if not s:
         return None
-    for fmt in _TS_FMTS:
-        try:
-            return datetime.strptime(s[:26], fmt)
-        except ValueError:
-            continue
-    return None
+    # Use generic timestamp parser
+    return parse_timestamp(s)
 
 
 def _safe_int(v: Any) -> Optional[int]:

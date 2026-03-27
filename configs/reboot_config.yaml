@@ -1,0 +1,3 @@
+reboot_detection:
+  short_reboot_threshold_minutes: 30
+  enable_short_reboot_detection: true

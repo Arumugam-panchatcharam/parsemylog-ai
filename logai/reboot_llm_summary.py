@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from logai.timestamp_parser import parse_timestamp
+
 from logai.info_extractor import (
     find_and_extract_reboots,
     find_and_parse_version_txt,
@@ -332,12 +334,10 @@ def _detect_disconnect_storm(evidence: Dict[str, Dict[str, Any]], cpe_dir: Path)
         if not disassoc_re.search(text):
             continue
         ts_str = str(row.get("timestamp", ""))
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                ts_list.append(datetime.strptime(ts_str[:19], fmt))
-                break
-            except ValueError:
-                continue
+        # Use generic parser (handles multiple formats including ISO and space-separated)
+        parsed_ts = parse_timestamp(ts_str)
+        if parsed_ts:
+            ts_list.append(parsed_ts)
 
     if len(ts_list) < 2:
         return storm_info
@@ -704,14 +704,10 @@ def _compute_rate_per_hour(count: int, first_ts: Optional[str], last_ts: Optiona
     if count == 0 or not first_ts or not last_ts:
         return 0.0
     try:
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                t1 = datetime.strptime(first_ts[:19], fmt)
-                t2 = datetime.strptime(last_ts[:19], fmt)
-                break
-            except ValueError:
-                continue
-        else:
+        # Use generic parser for both timestamps
+        t1 = parse_timestamp(first_ts)
+        t2 = parse_timestamp(last_ts)
+        if not t1 or not t2:
             return 0.0
         delta_hours = max((t2 - t1).total_seconds() / 3600, 0.01)
         return round(count / delta_hours, 2)

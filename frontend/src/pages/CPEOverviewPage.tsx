@@ -26,10 +26,13 @@ interface RebootEvent {
   timestamp: string;
   reason: string;
   reboot_type?: "soft" | "hard";
+  is_short_reboot?: boolean;
 }
 
 interface RebootSummary {
   total: number;
+  short_reboots?: number;
+  normal_reboots?: number;
   reasons: Record<string, number>;
   types?: { soft: number; hard: number };
   events?: RebootEvent[];
@@ -614,7 +617,7 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
                     {hardCounts.reduce((a, b) => a + b, 0)}
                   </td>
                 </tr>
-                <tr>
+                <tr className="border-b border-border/50">
                   <td className="px-3 py-1.5 font-medium text-muted-foreground">Total</td>
                   {cpes.map((c) => (
                     <td key={c.serial} className="px-3 py-1.5 text-center font-bold">
@@ -623,6 +626,54 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
                   ))}
                   <td className="px-3 py-1.5 text-center font-bold">
                     {totals.reduce((a, b) => a + b, 0)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Short Reboot Summary Table (show if any CPE has short reboot data) */}
+        {cpes.some((c) => c.reboot_summary.short_reboots !== undefined && (c.reboot_summary.short_reboots || 0) > 0) && (
+          <div className="overflow-x-auto">
+            <p className="text-xs font-medium text-muted-foreground mb-2">Short Reboot Summary</p>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/20">
+                  <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Type</th>
+                  {cpes.map((c) => (
+                    <th key={c.serial} className="text-center px-3 py-1.5 font-medium">{cpeLabel(c)}</th>
+                  ))}
+                  <th className="text-center px-3 py-1.5 font-medium text-muted-foreground">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-border/50">
+                  <td className="px-3 py-1.5 flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-medium">SHORT</span>
+                    <span className="text-muted-foreground text-xs">Brief power cycle</span>
+                  </td>
+                  {cpes.map((c) => (
+                    <td key={c.serial} className="px-3 py-1.5 text-center font-semibold text-purple-700 dark:text-purple-300">
+                      {c.reboot_summary.short_reboots || 0}
+                    </td>
+                  ))}
+                  <td className="px-3 py-1.5 text-center font-bold text-purple-700 dark:text-purple-300">
+                    {cpes.reduce((sum, c) => sum + (c.reboot_summary.short_reboots || 0), 0)}
+                  </td>
+                </tr>
+                <tr className="border-b border-border/50">
+                  <td className="px-3 py-1.5 flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium">NORMAL</span>
+                    <span className="text-muted-foreground text-xs">Extended power loss</span>
+                  </td>
+                  {cpes.map((c) => (
+                    <td key={c.serial} className="px-3 py-1.5 text-center font-semibold text-red-700 dark:text-red-300">
+                      {c.reboot_summary.normal_reboots || 0}
+                    </td>
+                  ))}
+                  <td className="px-3 py-1.5 text-center font-bold text-red-700 dark:text-red-300">
+                    {cpes.reduce((sum, c) => sum + (c.reboot_summary.normal_reboots || 0), 0)}
                   </td>
                 </tr>
               </tbody>

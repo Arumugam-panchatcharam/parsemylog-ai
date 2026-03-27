@@ -86,10 +86,11 @@ export default function TelemetryOverviewTab() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selectedCpe, setSelectedCpe] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [filterShortReboots, setFilterShortReboots] = useState(true);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["telemetry-cross-cpe-overview", projectId],
-    queryFn: async () => (await telemetryApi.crossCpeOverview(projectId!)).data,
+    queryKey: ["telemetry-cross-cpe-overview", projectId, filterShortReboots],
+    queryFn: async () => (await telemetryApi.crossCpeOverview(projectId!, false, filterShortReboots)).data,
     enabled: !!projectId,
     staleTime: 5 * 60 * 1000,
   });
@@ -98,9 +99,9 @@ export default function TelemetryOverviewTab() {
     if (!projectId || isRefreshing) return;
     setIsRefreshing(true);
     try {
-      const result = await telemetryApi.crossCpeOverview(projectId, true);
+      const result = await telemetryApi.crossCpeOverview(projectId, true, filterShortReboots);
       // Update the query cache directly with the new data instead of invalidating
-      queryClient.setQueryData(["telemetry-cross-cpe-overview", projectId], result.data);
+      queryClient.setQueryData(["telemetry-cross-cpe-overview", projectId, filterShortReboots], result.data);
     } catch (err) {
       console.error("Force refresh failed:", err);
     } finally {
@@ -329,8 +330,20 @@ export default function TelemetryOverviewTab() {
 
   return (
     <div className="space-y-3">
-      {/* Header with Force Refresh Button */}
-      <div className="flex justify-end">
+      {/* Header with Toggle and Force Refresh Buttons */}
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={() => setFilterShortReboots(!filterShortReboots)}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+            filterShortReboots
+              ? "bg-purple-100 dark:bg-purple-900/30 border-purple-300 text-purple-700 dark:text-purple-300"
+              : "border-border bg-card hover:bg-muted"
+          }`}
+          title="Toggle to show only short reboots"
+        >
+          <RestartAltIcon style={{ fontSize: 14 }} />
+          {filterShortReboots ? "Short Reboots Only" : "All Reboots"}
+        </button>
         <button
           onClick={handleForceRefresh}
           disabled={isRefreshing || isLoading}
@@ -343,7 +356,7 @@ export default function TelemetryOverviewTab() {
       </div>
 
       {/* Summary badges */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <SummaryBadge
           icon={<StorageIcon style={{ fontSize: 18, color: "#1a73e8" }} />}
           label="Total CPEs"
@@ -370,6 +383,13 @@ export default function TelemetryOverviewTab() {
           value={fs.with_both}
           sub={fs.total > 0 ? `${Math.round((fs.with_both / fs.total) * 100)}%` : undefined}
           bgClass="bg-red-50 dark:bg-red-900/20"
+        />
+        <SummaryBadge
+          icon={<RestartAltIcon style={{ fontSize: 18, color: "#7b1fa2" }} />}
+          label="Short Reboots"
+          value={data.reboot_analytics?.short_reboots_count ?? 0}
+          sub={data.reboot_analytics?.total_reboot_events ? `${Math.round(((data.reboot_analytics?.short_reboots_count ?? 0) / data.reboot_analytics.total_reboot_events) * 100)}%` : undefined}
+          bgClass="bg-purple-50 dark:bg-purple-900/20"
         />
       </div>
 

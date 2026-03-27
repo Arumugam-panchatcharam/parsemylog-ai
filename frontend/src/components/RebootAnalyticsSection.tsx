@@ -35,6 +35,8 @@ interface RebootAnalytics {
   time_of_day_buckets: Record<string, BucketData>;
   uptime_buckets: Record<string, BucketData>;
   total_reboot_events: number;
+  short_reboots_count?: number;
+  normal_reboots_count?: number;
 }
 
 interface RebootAnalyticsSectionProps {
@@ -192,6 +194,18 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
   
   return (
     <div className="space-y-3">
+      {/* Header with Short/Normal Reboot Counts */}
+      {(analytics.short_reboots_count !== undefined || analytics.normal_reboots_count !== undefined) && (
+        <div className="flex gap-2 text-xs text-muted-foreground">
+          <div className="px-2 py-1 rounded-md bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-medium">
+            Short: {analytics.short_reboots_count ?? 0}
+          </div>
+          <div className="px-2 py-1 rounded-md bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 font-medium">
+            Normal: {analytics.normal_reboots_count ?? 0}
+          </div>
+        </div>
+      )}
+      
       {/* Two Column Layout - Cards */}
       <div className="grid grid-cols-2 gap-3">
         {/* Time-of-Day Section */}

@@ -42,6 +42,7 @@ from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 
 from logai.config import LogAIConfig, default_config
+from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -361,14 +362,12 @@ class Pattern:
             if re.match(r"^\d+\.\d+$", ts):
                 return pd.NaT
 
-            # YYYY-MM-DD-HH-MM-SS fallback
-            if re.match(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$", ts):
-                try:
-                    return datetime.strptime(ts, "%Y-%m-%d-%H-%M-%S")
-                except Exception:
-                    return pd.NaT
+            # Try the generic timestamp parser first
+            parsed = parse_timestamp(ts)
+            if parsed:
+                return parsed
 
-            # short ISO like 230102-12:34:56.123 -> parse manually
+            # short ISO like 230102-12:34:56.123 -> parse manually (not supported by generic parser)
             if re.match(r"^\d{6}-\d{2}:\d{2}:\d{2}\.\d+", ts):
                 try:
                     # take YYMMDD-HH:MM:SS (first 15 chars)

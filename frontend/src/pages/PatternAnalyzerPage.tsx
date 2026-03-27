@@ -253,6 +253,7 @@ export default function PatternAnalyzerPage() {
   // Scan config
   const [bucketMinutes, setBucketMinutes] = useState(0); // 0 = Auto
   const [filterPreNtp, setFilterPreNtp] = useState(true);
+  const [filterShortReboots, setFilterShortReboots] = useState(true);
 
   // Scan results
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -472,6 +473,7 @@ export default function PatternAnalyzerPage() {
         bucket_minutes: effectiveBucket,
         time_range: effectiveRange,
         filter_pre_ntp: filterPreNtp,
+        filter_short_reboots: filterShortReboots,
         cpe_id: cpeId,
       });
 
@@ -1628,6 +1630,16 @@ export default function PatternAnalyzerPage() {
                 className="h-3.5 w-3.5 rounded accent-blue-600"
               />
               <span className="text-xs text-muted-foreground">Filter pre-NTP logs</span>
+            </label>
+
+            <label className="flex items-center gap-1.5 cursor-pointer select-none" title="Show only short reboots (brief power loss)">
+              <input
+                type="checkbox"
+                checked={filterShortReboots}
+                onChange={(e) => setFilterShortReboots(e.target.checked)}
+                className="h-3.5 w-3.5 rounded accent-purple-600"
+              />
+              <span className="text-xs text-muted-foreground">Short reboots only</span>
             </label>
 
             <button

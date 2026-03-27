@@ -23,8 +23,11 @@ import json
 import logging
 import re
 from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -1330,8 +1333,10 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                      (e.g. ``UPLOAD_DIRECTORY/{user_id}/{project_id}``).
 
     Returns:
-        Sorted list of ``{"timestamp": "<ISO-datetime>", "reason": "...", "reboot_type": "soft"|"hard"}``
+        Sorted list of ``{"timestamp": "<ISO-datetime>", "reason": "...", "reboot_type": "soft"|"hard", "is_short_reboot": bool}``
         dicts.  Returns an empty list when no reboot data is found.
+        
+        Note: ``is_short_reboot`` is initialized as False and should be updated by ``detect_short_reboots()``.
     """
     cache_path = project_dir / ".reboots_cache.json"
     bt_path = project_dir / "BootTime.log"
@@ -1459,6 +1464,7 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
             pass
         
         reboot["reboot_type"] = reboot_type
+        reboot["is_short_reboot"] = False  # Initialize as False; will be set by detect_short_reboots()
 
     if reboots:
         reboots.sort(key=lambda r: r["timestamp"])

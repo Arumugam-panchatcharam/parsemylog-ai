@@ -43,6 +43,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from logai.timestamp_parser import parse_timestamp
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -328,7 +330,7 @@ def parse_telemetry_reports(content: str) -> List[Dict[str, Any]]:
             # Parse the embedded Time field
             time_str = fields.get("Time", "")
             try:
-                report_time = datetime.strptime(time_str, _REPORT_TIME_FMT)
+                report_time = parse_timestamp(time_str)
             except (ValueError, TypeError):
                 report_time = None
 
@@ -423,7 +425,7 @@ def parse_telemetry_legacy(content: str) -> List[Dict[str, Any]]:
             fields = _extract_report_fields(parsed_json)
             time_str = fields.get("Time", "")
             try:
-                report_time = datetime.strptime(time_str, _REPORT_TIME_FMT)
+                report_time = parse_timestamp(time_str)
             except (ValueError, TypeError):
                 report_time = None
 
@@ -584,11 +586,11 @@ def parse_dcmscript_curl_reports(content: str) -> List[Dict[str, Any]]:
         # Parse embedded Time field (same format as T2 reports)
         time_str = fields.get("Time", "")
         try:
-            report_time = datetime.strptime(time_str, _REPORT_TIME_FMT)
+            report_time = parse_timestamp(time_str)
         except (ValueError, TypeError):
             # Fall back to the log-line timestamp
             try:
-                report_time = datetime.strptime(log_ts, "%Y-%m-%dT%H:%M:%S")
+                report_time = parse_timestamp(log_ts)
             except (ValueError, TypeError):
                 report_time = None
 

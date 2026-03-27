@@ -28,6 +28,8 @@ from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 import pickle
 
+from logai.timestamp_parser import parse_timestamp
+
 logger = logging.getLogger(__name__)
 
 
@@ -313,7 +315,9 @@ class ModelCache:
         """
         # Check age
         try:
-            cached_at = datetime.fromisoformat(meta["cached_at"])
+            cached_at = parse_timestamp(meta["cached_at"])
+            if not cached_at:
+                cached_at = datetime.fromisoformat(meta["cached_at"])
             age = datetime.now() - cached_at
             if age > timedelta(days=self.max_age_days):
                 logger.debug(f"[ModelCache] Cache expired (age={age.days}d)")
