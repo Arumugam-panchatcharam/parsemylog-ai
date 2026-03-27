@@ -306,6 +306,19 @@ Results:
 
 ---
 
+### 8a. SelfHeal Analysis (single CPE + Cross-CPE)
+
+**Description:** Parses `SelfHeal.txt` snapshots for memory (`/proc/meminfo`, slab, per-process RSS) and CPU samples; Cross-CPE Overview adds fleet histograms, aggregated leaking-process table, slab-vs-RSS scatter, and capped heatmap.
+
+**Key Capabilities:**
+
+- Single-CPE charts: CPU, memory by application, meminfo pressure, RSS trend table (normalized process names)
+- Cross-CPE: MemAvailable % and CPU distributions, SUnreclaim/overcommit histograms, fleet leak aggregation, pressure-oriented heatmap (bounded size for large fleets)
+
+**Detailed Guide:** [SelfHeal Analysis](./features/SELFHEAL_ANALYSIS.md)
+
+---
+
 ## Pattern Management
 
 ### 9. NATCO (Pattern Governance) System

@@ -3,6 +3,7 @@ import AnalyticsIcon from "@mui/icons-material/Analytics";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import TimelineIcon from "@mui/icons-material/Timeline";
+import MemoryIcon from "@mui/icons-material/Memory";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
@@ -27,6 +28,7 @@ export const workspaceNav: readonly WorkspaceNavItem[] = [
   { to: "/workspace/pattern", icon: AnalyticsIcon, label: "Pattern" },
   { to: "/workspace/pattern-analyzer", icon: ManageSearchIcon, label: "Pattern Analyzer" },
   { to: "/workspace/telemetry", icon: TimelineIcon, label: "Telemetry" },
+  { to: "/workspace/selfheal", icon: MemoryIcon, label: "SelfHeal" },
   { to: "/workspace/ai", icon: PsychologyIcon, label: "Semantic Search" },
   { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
   { to: "/workspace/issue-analysis", icon: AccountTreeIcon, label: "Issue Analysis" },

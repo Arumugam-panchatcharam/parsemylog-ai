@@ -636,6 +636,23 @@ export const telemetryApi = {
   },
 };
 
+// ---------- SelfHeal ----------
+export const selfhealApi = {
+  parse: (projectId: string, cpeSerial: string, force = false) =>
+    api.post(`/projects/${projectId}/selfheal/parse`, null, {
+      params: { cpe_serial: cpeSerial, ...(force ? { force: "1" } : {}) },
+    }),
+  crossCpeOverview: (projectId: string, force = false) =>
+    api.get(`/projects/${projectId}/selfheal/cross-cpe-overview`, {
+      params: { ...(force ? { force: "1" } : {}) },
+    }),
+  exportXlsx: (projectId: string, cpeSerial: string, force = false) =>
+    api.get(`/projects/${projectId}/selfheal/export-xlsx`, {
+      params: { cpe_serial: cpeSerial, ...(force ? { force: "1" } : {}) },
+      responseType: 'blob',
+    }),
+};
+
 // ---------- Semantic Search ----------
 export const aiApi = {
   search: (projectId: string, query: string, topK = 10, cpeId?: string | null) =>

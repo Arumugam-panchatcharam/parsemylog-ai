@@ -33,6 +33,7 @@ This directory contains detailed documentation for each feature in ParseMyLog-AI
 
 | Feature | File | Status |
 |---------|------|--------|
+| **SelfHeal (single CPE + Cross-CPE)** | [SELFHEAL_ANALYSIS.md](./SELFHEAL_ANALYSIS.md) | ✅ Complete |
 | **ML Anomaly Detection** | [ML_ANOMALY.md](./ML_ANOMALY.md) | ✅ Complete |
 | **Knowledge Graph** | [KNOWLEDGE_GRAPH.md](./KNOWLEDGE_GRAPH.md) | ✅ Complete |
 | **Batch Processing** | [BATCH_PROCESSING.md](./BATCH_PROCESSING.md) | ✅ Complete |

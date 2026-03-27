@@ -9,11 +9,14 @@ The existing gui/user_db_mngr.py DBManager is reused as-is.
 The embedding model is lazy-loaded on first AI search request.
 """
 
+import gzip
 import os
 import sys
 import hashlib
 import logging
 from datetime import timedelta
+
+from flask import Response, request
 
 # Suppress HuggingFace tokenizers fork warning
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -99,6 +102,48 @@ def create_api_app():
     """
     app = Flask(__name__, static_folder=UPLOAD_DIRECTORY)
 
+    # Compress large JSON so dev server / clients don't hit ENOBUFS (e.g. macOS errno 55)
+    # on huge SelfHeal payloads. Register before CORS so CORS runs first, then gzip.
+    _gzip_min = int(os.environ.get("GZIP_JSON_MIN_BYTES", "1024"))
+
+    @app.after_request
+    def _maybe_gzip_json_response(response: Response) -> Response:
+        if getattr(response, "direct_passthrough", False):
+            return response
+        if not (200 <= response.status_code < 300):
+            return response
+        content_type = response.content_type or ""
+        if "application/json" not in content_type:
+            return response
+        accept = (request.headers.get("Accept-Encoding") or "").lower()
+        if "gzip" not in accept:
+            return response
+        try:
+            data = response.get_data()
+        except RuntimeError:
+            return response
+        if not data or len(data) < _gzip_min:
+            return response
+        try:
+            compressed = gzip.compress(data, compresslevel=6)
+        except OSError as exc:
+            logging.getLogger(__name__).warning("gzip response skipped: %s", exc)
+            return response
+        if len(compressed) >= len(data):
+            return response
+        out = Response(compressed, status=response.status_code)
+        out.headers["Content-Type"] = response.content_type
+        out.headers["Content-Encoding"] = "gzip"
+        out.headers["Content-Length"] = str(len(compressed))
+        vary = response.headers.get("Vary")
+        out.headers["Vary"] = f"{vary}, Accept-Encoding" if vary else "Accept-Encoding"
+        for key, value in response.headers:
+            lk = key.lower()
+            if lk in ("content-type", "content-length", "content-encoding", "vary"):
+                continue
+            out.headers.add(key, value)
+        return out
+
     # Configuration
     db_path = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "logai_users.db"))
     os.makedirs(os.path.dirname(db_path), exist_ok=True) if os.path.dirname(db_path) else None
@@ -145,6 +190,7 @@ def create_api_app():
     from api.routes.files import files_bp
     from api.routes.patterns import patterns_bp
     from api.routes.telemetry import telemetry_bp
+    from api.routes.selfheal import selfheal_bp
     from api.routes.ai_analysis import ai_bp
     from api.routes.embedding import embedding_bp
     from api.routes.admin import admin_bp
@@ -168,6 +214,7 @@ def create_api_app():
     app.register_blueprint(files_bp, url_prefix="/api/projects")
     app.register_blueprint(patterns_bp, url_prefix="/api/projects")
     app.register_blueprint(telemetry_bp, url_prefix="/api/projects")
+    app.register_blueprint(selfheal_bp, url_prefix="/api/projects")
     app.register_blueprint(ai_bp, url_prefix="/api/projects")
     app.register_blueprint(embedding_bp, url_prefix="/api/projects")
     app.register_blueprint(admin_bp, url_prefix="/api/admin")

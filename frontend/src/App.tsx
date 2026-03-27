@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import("@/pages/DashboardPage"));
 const LogViewerPage = lazy(() => import("@/pages/LogViewerPage"));
 const PatternPage = lazy(() => import("@/pages/PatternPage"));
 const TelemetryPage = lazy(() => import("@/pages/TelemetryPage"));
+const SelfHealPage = lazy(() => import("@/pages/SelfHealPage"));
 const AIAnalysisPage = lazy(() => import("@/pages/AIAnalysisPage"));
 const PatternAnalyzerPage = lazy(() => import("@/pages/PatternAnalyzerPage"));
 const CPEOverviewPage = lazy(() => import("@/pages/CPEOverviewPage"));
@@ -116,6 +117,7 @@ function AppRoutes() {
         <Route path="/workspace/viewer" element={<LogViewerPage />} />
         <Route path="/workspace/pattern" element={<PatternPage />} />
         <Route path="/workspace/telemetry" element={<TelemetryPage />} />
+        <Route path="/workspace/selfheal" element={<SelfHealPage />} />
         <Route path="/workspace/ai" element={<AIAnalysisPage />} />
         <Route path="/workspace/pattern-analyzer" element={<PatternAnalyzerPage />} />
         <Route path="/workspace/cpe-overview" element={<CPEOverviewPage />} />

@@ -20,6 +20,7 @@ This guide walks through every feature of the ParseMyLog-AI web application, fro
 12. [Pattern Governance (NATCO)](#12-pattern-governance-natco)
 13. [Admin Features](#13-admin-features)
 14. [Tips & Troubleshooting](#14-tips--troubleshooting)
+15. [SelfHeal Analysis](#15-selfheal-analysis)
 
 ---
 
@@ -568,3 +569,16 @@ Each submitted pattern shows:
 - Check the **README.md** for installation and configuration details.
 - Review the **configs/** directory for customizing patterns and telemetry fields.
 - Contact the administrator for account or system issues.
+
+---
+
+## 15. SelfHeal Analysis
+
+SelfHeal parses `SelfHeal.txt` to show memory (`/proc/meminfo`, slab, RSS by process) and CPU samples for the selected CPE, plus a **Cross-CPE Overview** for fleet-wide histograms, leak aggregation, and heatmaps.
+
+**Full guide (single CPE vs Cross-CPE, charts, tables, summary templates):** [docs/features/SELFHEAL_ANALYSIS.md](./features/SELFHEAL_ANALYSIS.md)
+
+At a glance:
+
+- **Single CPE**: Use RSS **trends**, meminfo **pressure** indicators (SUnreclaim/overcommit), and CPU together; process names are normalized (not PID).
+- **Cross-CPE**: Use **fleet histograms** and the **top leaking processes** table for systemic issues; the heatmap is capped for large fleets (500+ CPEs).

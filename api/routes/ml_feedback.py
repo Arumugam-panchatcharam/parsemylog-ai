@@ -18,19 +18,12 @@ from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id, admin_required
-from logai.ml.feedback import FeedbackManager, GlobalModelManager, create_feedback_tables, AnomalyFeedback, GlobalTrainedModel
+from logai.ml.feedback import FeedbackManager, GlobalModelManager, AnomalyFeedback, GlobalTrainedModel
 from logai.utils.constants import UPLOAD_DIRECTORY, BASE_DIR
 
 logger = logging.getLogger(__name__)
 
 ml_feedback_bp = Blueprint("ml_feedback", __name__)
-
-# Initialize database tables on module import
-try:
-    create_feedback_tables()
-    logger.info("[Feedback] Database tables created/verified")
-except Exception as e:
-    logger.warning(f"[Feedback] Could not create tables: {e}")
 
 
 def _verify_project(project_id, user_id):
