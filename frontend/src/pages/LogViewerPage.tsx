@@ -781,16 +781,13 @@ export default function LogViewerPage() {
               }}
               className="rounded border-border shrink-0"
             />
-            <span className={dedupActive ? "font-medium text-teal-800 dark:text-teal-200" : "text-muted-foreground"}>
-              Remove Duplicate
-            </span>
             <button
               type="button"
               onClick={() => setDedupPanelOpen(!dedupPanelOpen)}
               className="ml-1 px-1.5 py-0.5 text-xs font-semibold text-foreground bg-primary/20 hover:bg-primary/30 rounded transition-colors shrink-0"
               title="Show/hide dedup pattern list"
             >
-              {dedupPanelOpen ? "▼" : "▶"} Patterns
+              {dedupPanelOpen ? "▼" : "▶"} Remove Duplicate Patterns
             </button>
           </label>
           {dedupPanelOpen &&

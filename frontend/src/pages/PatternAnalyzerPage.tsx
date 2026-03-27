@@ -445,6 +445,9 @@ export default function PatternAnalyzerPage() {
   // -- Save patterns mutation --
   const saveMutation = useMutation({
     mutationFn: () => patternAnalyzerApi.savePatterns(projectId!, domains),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["regex-patterns", projectId] });
+    },
   });
 
   // -- Flatten all enabled patterns for scan --
