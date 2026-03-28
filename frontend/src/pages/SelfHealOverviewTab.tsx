@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { selfhealApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import Plot from "react-plotly.js";
@@ -13,6 +13,7 @@ import ErrorIcon from "@mui/icons-material/Error";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import RefreshIcon from "@mui/icons-material/Refresh";
 
 /* ================================================================ Types */
 interface SelfHealCPEEntry {
@@ -302,12 +303,14 @@ function basePlotLayout(title: string, darkMode: boolean): Record<string, unknow
 /* ================================================================ Component */
 export default function SelfHealOverviewTab() {
   const { projectId } = useProject();
+  const queryClient = useQueryClient();
 
   const [sortKey, setSortKey] = useState<SortKey>("min_memory_available_kb");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [memAvailField, setMemAvailField] = useState<"min" | "avg">("min");
   const [fleetExecSummaryOpen, setFleetExecSummaryOpen] = useState(false);
   const [leakRowOpen, setLeakRowOpen] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const prefersDark =
     typeof document !== "undefined" && document.documentElement.classList.contains("dark");
@@ -324,6 +327,19 @@ export default function SelfHealOverviewTab() {
     staleTime: 30 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
   });
+
+  const handleForceRefresh = async () => {
+    if (!projectId || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const res = await selfhealApi.crossCpeOverview(projectId, true);
+      queryClient.setQueryData(["selfheal-cross-cpe-overview", projectId], res.data);
+    } catch (err) {
+      console.error("Force refresh failed:", err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const sortedCpes = useMemo(() => {
     if (!data?.cpes) return [];
@@ -453,6 +469,23 @@ export default function SelfHealOverviewTab() {
 
   return (
     <div className="space-y-3">
+      {/* Header with Force Refresh Button */}
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={handleForceRefresh}
+          disabled={isRefreshing || isLoading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-card hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-foreground"
+          title="Force parse and update fleet-wide analytics"
+        >
+          {isRefreshing ? (
+            <CircularProgress size={14} className="text-muted-foreground" />
+          ) : (
+            <RefreshIcon style={{ fontSize: 14 }} />
+          )}
+          {isRefreshing ? "Refreshing..." : "Force Refresh"}
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         <OverviewStatBadge
           icon={<MemoryIcon style={{ fontSize: 16, color: "#1a73e8" }} />}

@@ -486,9 +486,7 @@ def get_cpe_overview(project_id):
             }
         }), 200
 
-    # Multi-CPE project: collect data for all CPEs
-    result_cpes = []
-    for cpe in cpes:
+    def _process_single_cpe(cpe):
         cpe_dir = base_dir / cpe.serial
         logger.info(f"[CPEOverview] Processing CPE {cpe.serial} at {cpe_dir}")
 
@@ -514,7 +512,7 @@ def get_cpe_overview(project_id):
         # Determine processing status
         status = "parsed" if info.get("summary", {}).get("parsed_reports", 0) > 0 else "not_parsed"
         
-        cpe_data = {
+        return {
             "serial": cpe.serial,
             "mac": cpe.mac or info.get("device_info", {}).get("mac", "N/A"),
             "model": info.get("device_info", {}).get("model", "N/A"),
@@ -530,8 +528,18 @@ def get_cpe_overview(project_id):
             "reboot_count": reboot_summary.get("total", 0),
             "log_size_mb": log_stats.get("total_size_mb", 0),
         }
-        
-        result_cpes.append(cpe_data)
+
+    # Multi-CPE project: collect data for all CPEs
+    result_cpes = []
+    workers = min(16, max(1, len(cpes)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_process_single_cpe, cpe): cpe for cpe in cpes}
+        for future in as_completed(futures):
+            try:
+                result_cpes.append(future.result())
+            except Exception as e:
+                cpe = futures[future]
+                logger.error(f"[CPEOverview] Error processing CPE {cpe.serial}: {e}")
 
     # Apply filters
     filtered_cpes = result_cpes

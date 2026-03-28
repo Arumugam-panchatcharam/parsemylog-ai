@@ -811,9 +811,12 @@ def extract_summary(
     Returns:
         Dict with peak/avg memory, process stats, memory pressure indicators.
     """
-    snapshots = sort_snapshots_chronologically(
-        _coerce_snapshots_for_summary(snapshots)
-    )
+    import time
+
+    snapshots = _coerce_snapshots_for_summary(snapshots)
+    
+    snapshots = sort_snapshots_chronologically(snapshots)
+    
     proc_rows = sum(len(s.processes) for s in snapshots)
     summary: Dict[str, Any] = {
         "snapshot_count": len(snapshots),
@@ -887,12 +890,17 @@ def extract_summary(
 
     # Per-snapshot total RSS by application (one value per snapshot index; 0 if absent
     # that snapshot). Sparse append-only lists skewed slopes and hid real end-to-end growth.
+    # OPTIMIZATION: Cache command → app_key to avoid repeated regex on same commands
+    cmd_to_app_cache: Dict[str, Optional[str]] = {}
     per_snapshot_totals: List[Dict[str, int]] = []
     all_app_keys: set[str] = set()
     for snapshot in snapshots:
         rss_by_app: Dict[str, int] = defaultdict(int)
         for proc in snapshot.processes:
-            app_key = process_application_key(proc.command)
+            cmd = proc.command
+            if cmd not in cmd_to_app_cache:
+                cmd_to_app_cache[cmd] = process_application_key(cmd)
+            app_key = cmd_to_app_cache[cmd]
             if app_key is None:
                 continue
             rss_by_app[app_key] += proc.rss_kb
@@ -935,10 +943,18 @@ def extract_summary(
 
     summary["top_processes_by_rss"] = top_processes
 
+    if len(all_app_keys) > SELFHEAL_RANKED_PROCESS_LIMIT * 5:
+        # Optimization: only compute trends for top processes to save time
+        top_keys = sorted(all_app_keys, key=lambda k: max(process_rss_map[k]), reverse=True)[:SELFHEAL_RANKED_PROCESS_LIMIT * 5]
+        target_keys = set(top_keys)
+    else:
+        target_keys = all_app_keys
+
     trend_rows: List[Dict[str, Any]] = []
     if nsnap >= 2:
         denom = nsnap - 1
-        for cmd, rss_list in process_rss_map.items():
+        for cmd in target_keys:
+            rss_list = process_rss_map[cmd]
             ols = _rss_linear_trend_slope_kb_per_step(rss_list)
             first_v = rss_list[0]
             last_v = rss_list[-1]

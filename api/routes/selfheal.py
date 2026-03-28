@@ -34,6 +34,8 @@ from logai.selfheal_summary import build_cross_cpe_summary, build_single_cpe_sum
 from logai.timestamp_parser import parse_timestamp, normalize_to_date_only
 from logai.info_extractor import parse_version_txt
 
+import time
+
 logger = logging.getLogger(__name__)
 
 selfheal_bp = Blueprint("selfheal", __name__)
@@ -927,14 +929,26 @@ def _build_process_series_by_app(
     Keys are capped by max observed RSS; ``mandatory_app_keys`` are always kept.
     """
     series: Dict[str, List[Dict[str, Any]]] = {}
+    
+    # Pre-compute application keys to avoid redundant regex lookups
+    app_key_cache = {}
+    
     for snapshot in snapshots:
         ts = str(snapshot.get("timestamp", ""))
         wc = str(snapshot.get("wall_clock", ""))
         for proc in snapshot.get("processes") or []:
             cmd = str(proc.get("command", ""))
-            app = process_application_key(cmd)
+            
+            # Fast path cache lookup
+            if cmd in app_key_cache:
+                app = app_key_cache[cmd]
+            else:
+                app = process_application_key(cmd)
+                app_key_cache[cmd] = app
+                
             if app is None:
                 continue
+                
             row = {
                 "timestamp": ts,
                 "wall_clock": wc,
@@ -946,7 +960,9 @@ def _build_process_series_by_app(
                 "stack_kb": int(proc.get("stack_kb", 0)),
                 "command": cmd,
             }
-            series.setdefault(app, []).append(row)
+            if app not in series:
+                series[app] = []
+            series[app].append(row)
 
     if not series:
         return {}
@@ -966,6 +982,8 @@ def _build_increasing_rss_processes(
 ) -> Dict[str, Any]:
     """Apps whose last RSS exceeds first RSS; top traces by delta for Plotly."""
     candidates: List[tuple[str, int, List[Dict[str, Any]]]] = []
+    
+    # Pre-allocate to avoid append overhead inside loop
     for app, rows in process_series_by_app.items():
         if len(rows) < 2:
             continue
@@ -975,17 +993,18 @@ def _build_increasing_rss_processes(
         if delta > 0:
             candidates.append((app, delta, rows))
 
+    # Sort descending by delta
     candidates.sort(key=lambda x: x[1], reverse=True)
-    traces: List[Dict[str, Any]] = []
-    for app, _delta, rows in candidates[:max_traces]:
-        traces.append(
-            {
-                "label": app,
-                "unit": "KB",
-                "times": [r["timestamp"] for r in rows],
-                "values": [r["rss_kb"] for r in rows],
-            }
-        )
+    
+    traces = [
+        {
+            "label": app,
+            "unit": "KB",
+            "times": [r["timestamp"] for r in rows],
+            "values": [r["rss_kb"] for r in rows],
+        }
+        for app, _delta, rows in candidates[:max_traces]
+    ]
 
     return {"group": "Increasing RSS (by application)", "traces": traces}
 
@@ -1049,7 +1068,7 @@ def _ensure_response_top_processes_trend(
     Align ``top_processes`` (RSS trend rows) with the current raw snapshot list.
 
     Always runs :func:`extract_summary` on chronological snapshots instead of reusing
-    ``summary[\"top_processes_by_rss_trend\"]`` from the raw JSON cache, which could drift
+    ``summary["top_processes_by_rss_trend"]`` from the raw JSON cache, which could drift
     from stored snapshots (e.g. after parser changes) while ``process_series_by_app`` was
     rebuilt from snapshots—matching hover first/last ΣRSS to the per-application table.
     """
@@ -1060,6 +1079,7 @@ def _ensure_response_top_processes_trend(
     snapshots = sort_snapshots_chronologically(list(raw_data.get("snapshots") or []))
     if not snapshots:
         return response
+    
     fresh_summary = extract_summary(snapshots, raw_data.get("cpu_samples") or [])
     trend_list = fresh_summary.get("top_processes_by_rss_trend") or []
     km = dict(response.get("key_metrics") or {})
@@ -1206,9 +1226,11 @@ def _parse_and_build(
 
     # Pass project_dir (parent of CPE directory) to enable pre-NTP filtering
     project_dir = cpe_dir.parent
+    
     response = _build_selfheal_response(
         raw_data, cpe_serial, project_dir=project_dir, cpe_dir=cpe_dir
     )
+    
     if persist_api_cache:
         _save_api_response_cache(cpe_dir, response)
 
@@ -1372,6 +1394,7 @@ def _process_cross_cpe_one(
     cpe_path: Path, force: bool
 ) -> Optional[Dict[str, Any]]:
     cpe_serial = cpe_path.name
+    
     try:
         if not force:
             cached = _load_api_response_cache(cpe_path)
@@ -1380,8 +1403,10 @@ def _process_cross_cpe_one(
                 entry = _build_cross_cpe_entry(cpe_serial, response)
                 trends = response.get("top_processes") or []
                 return {"entry": entry, "trends": trends}
+        
         response, _raw_data = _parse_and_build(cpe_path, cpe_serial, force=force)
         entry = _build_cross_cpe_entry(cpe_serial, response)
+        
         trends = response.get("top_processes") or []
         return {"entry": entry, "trends": trends}
     except Exception as e:

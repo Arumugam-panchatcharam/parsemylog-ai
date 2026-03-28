@@ -283,11 +283,19 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             # Step 5b: Build full API response cache so Telemetry page
             # and cross-CPE overview load instantly without re-parsing
             try:
-                from api.routes.telemetry import _parse_and_build
-                _parse_and_build(cpe_dir)
+                from api.routes.telemetry import _parse_and_build as _telemetry_parse_and_build
+                _telemetry_parse_and_build(cpe_dir)
                 logger.info(f"[CPE {serial}] Built telemetry API cache")
             except Exception as e:
                 logger.warning(f"[CPE {serial}] Telemetry cache build error: {e}")
+
+            # Step 5c: Build full API response cache for SelfHeal
+            try:
+                from api.routes.selfheal import _parse_and_build as _selfheal_parse_and_build
+                _selfheal_parse_and_build(cpe_dir, cpe_serial=serial, force=False, persist_api_cache=True)
+                logger.info(f"[CPE {serial}] Built selfheal API cache")
+            except Exception as e:
+                logger.warning(f"[CPE {serial}] Selfheal cache build error: {e}")
 
             # Step 6: Save CPE + register files (shared with normal upload path)
             dbm.save_cpe(project_id, serial, mac, date_from, date_to)
