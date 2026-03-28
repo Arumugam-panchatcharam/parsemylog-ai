@@ -138,7 +138,7 @@ def _collect_device_info(
                 field_config = load_report_field_config()
                 configured_fields = extract_configured_fields(reports, field_config)
 
-                result["key_metrics"] = _build_flat_metrics(configured_fields, summary)
+                result["key_metrics"] = _build_flat_metrics(configured_fields, summary, merged)
                 result["summary"] = {
                     "total_reports": summary.get("total", 0),
                     "parsed_reports": summary.get("parsed", 0),
@@ -170,12 +170,16 @@ def _collect_device_info(
 def _build_flat_metrics(
     configured_fields: Dict[str, Any],
     summary: Dict[str, Any],
+    merged_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build a flat dict of key metrics for comparison.
 
     Reuses the same logic as telemetry.py _build_key_metrics_data
     but returns a flat dict instead of a list of cards.
+    
+    Also extracts system metrics (MemAvailable, SUnreclaim, Overcommit ratio)
+    from merged report if available.
     """
     metrics: Dict[str, Any] = {}
 
@@ -254,6 +258,46 @@ def _build_flat_metrics(
         if conn_vals:
             metrics["connected_devices_avg"] = round(sum(conn_vals) / len(conn_vals), 1)
             metrics["connected_devices_peak"] = int(max(conn_vals))
+
+    # Extract system memory metrics from merged report
+    if merged_report and isinstance(merged_report, dict):
+        logger.info(f"[CPEOverview] Attempting to extract system metrics from merged report with {len(merged_report)} keys")
+        logger.debug(f"[CPEOverview] Merged report keys: {list(merged_report.keys())[:20]}")  # Log first 20 keys
+        try:
+            # Memory metrics: MemAvailable, MemTotal
+            mem_available = merged_report.get("Device.MemStatus.MemAvailable")
+            mem_total_sys = merged_report.get("Device.MemStatus.MemTotal")
+            if mem_available is not None and mem_total_sys is not None:
+                # Calculate MemAvailable percentage
+                mem_avail_pct = (mem_available / mem_total_sys * 100) if mem_total_sys > 0 else 0
+                metrics["mem_available_kb"] = mem_available
+                metrics["mem_available_pct"] = round(mem_avail_pct, 1)
+                metrics["mem_total_kb"] = mem_total_sys
+                logger.info(f"[CPEOverview] MemAvailable extracted: {mem_avail_pct:.1f}%")
+            else:
+                logger.debug(f"[CPEOverview] MemStatus not in merged_report (MemAvailable: {mem_available}, MemTotal: {mem_total_sys})")
+            
+            # SUnreclaim and Slab metrics
+            sunreclaim = merged_report.get("Device.MemStatus.SUnreclaim")
+            slab = merged_report.get("Device.MemStatus.Slab")
+            if sunreclaim is not None and slab is not None and slab > 0:
+                sunreclaim_ratio = (sunreclaim / slab * 100)
+                metrics["sunreclaim_kb"] = sunreclaim
+                metrics["slab_kb"] = slab
+                metrics["sunreclaim_ratio"] = round(sunreclaim_ratio, 1)
+                logger.info(f"[CPEOverview] SUnreclaim ratio extracted: {sunreclaim_ratio:.1f}%")
+            
+            # Overcommit ratio: Committed_AS / CommitLimit
+            committed_as = merged_report.get("Device.MemStatus.Committed_AS")
+            commit_limit = merged_report.get("Device.MemStatus.CommitLimit")
+            if committed_as is not None and commit_limit is not None and commit_limit > 0:
+                overcommit_ratio = committed_as / commit_limit
+                metrics["committed_as_kb"] = committed_as
+                metrics["commit_limit_kb"] = commit_limit
+                metrics["overcommit_ratio"] = round(overcommit_ratio, 2)
+                logger.info(f"[CPEOverview] Overcommit ratio extracted: {overcommit_ratio:.2f}x")
+        except (KeyError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"[CPEOverview] Error extracting system metrics: {e}")
 
     return metrics
 

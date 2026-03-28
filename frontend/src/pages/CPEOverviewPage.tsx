@@ -20,6 +20,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import { CrossCPEGraphs } from "@/components/CrossCPEGraphs";
 
 /* ================================================================ Types */
 interface RebootEvent {
@@ -38,7 +39,7 @@ interface RebootSummary {
   events?: RebootEvent[];
 }
 
-interface CPESummary {
+export interface CPESummary {
   serial: string;
   mac: string;
   model: string;
@@ -1153,6 +1154,9 @@ export default function CPEOverviewPage() {
 
       {/* Section 2: Key Metrics */}
       <MetricsComparison cpes={cpes} />
+
+      {/* Section 2b: Cross-CPE Health Graphs */}
+      <CrossCPEGraphs cpes={cpes} />
 
       {/* Section 3: Reboot Comparison */}
       <RebootComparison cpes={cpes} />

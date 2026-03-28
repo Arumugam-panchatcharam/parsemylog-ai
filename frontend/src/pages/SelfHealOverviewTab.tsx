@@ -15,6 +15,111 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import RefreshIcon from "@mui/icons-material/Refresh";
 
+/* Color Thresholds for Health Status */
+const COLOR_SCHEME = {
+  // MemAvailable %: Green > 30%, Yellow 20-30%, Orange 10-20%, Red < 10%
+  memAvailable: {
+    green: "#16a34a",    // > 30%
+    yellow: "#eab308",   // 20-30%
+    orange: "#ea580c",   // 10-20%
+    red: "#dc2626",      // < 10%
+  },
+  // CPU %: Green 5-15%, Yellow 15-20%, Orange > 20%
+  cpu: {
+    green: "#16a34a",    // 5-15%
+    yellow: "#eab308",   // 15-20%
+    orange: "#ea580c",   // > 20%
+  },
+  // SUnreclaim: Green < 50%, Yellow 50-70%, Orange 70-80%, Red > 80%
+  sunreclaim: {
+    green: "#16a34a",    // < 50%
+    yellow: "#eab308",   // 50-70%
+    orange: "#ea580c",   // 70-80%
+    red: "#dc2626",      // > 80%
+  },
+  // Overcommit: Green < 1x, Yellow 1-2x, Orange 2-4x, Red > 4x
+  overcommit: {
+    green: "#16a34a",    // < 1x
+    yellow: "#eab308",   // 1-2x
+    orange: "#ea580c",   // 2-4x
+    red: "#dc2626",      // > 4x
+  },
+};
+
+/* ================================================================ Color Coding Functions */
+
+/**
+ * Get color for MemAvailable percentage value
+ */
+function getMemAvailableColor(percent: number): string {
+  if (percent > 30) return COLOR_SCHEME.memAvailable.green;
+  if (percent >= 20) return COLOR_SCHEME.memAvailable.yellow;
+  if (percent >= 10) return COLOR_SCHEME.memAvailable.orange;
+  return COLOR_SCHEME.memAvailable.red;
+}
+
+/**
+ * Get color for CPU percentage value
+ */
+function getCpuColor(percent: number): string {
+  if (percent < 15) return COLOR_SCHEME.cpu.green;
+  if (percent < 20) return COLOR_SCHEME.cpu.yellow;
+  return COLOR_SCHEME.cpu.orange;
+}
+
+/**
+ * Get color for SUnreclaim ratio (percentage)
+ */
+function getSUnreclaimColor(percent: number): string {
+  if (percent < 50) return COLOR_SCHEME.sunreclaim.green;
+  if (percent < 70) return COLOR_SCHEME.sunreclaim.yellow;
+  if (percent < 80) return COLOR_SCHEME.sunreclaim.orange;
+  return COLOR_SCHEME.sunreclaim.red;
+}
+
+/**
+ * Get color for Overcommit ratio
+ */
+function getOvercommitColor(ratio: number): string {
+  if (ratio < 1) return COLOR_SCHEME.overcommit.green;
+  if (ratio < 2) return COLOR_SCHEME.overcommit.yellow;
+  if (ratio < 4) return COLOR_SCHEME.overcommit.orange;
+  return COLOR_SCHEME.overcommit.red;
+}
+
+/**
+ * Create multi-colored histogram traces for each color group
+ * This overlays histograms to show color-coding without changing x-axis
+ */
+function createColorCodedHistogramTraces(
+  values: number[],
+  nbins: number,
+  colorFn: (value: number) => string,
+): Data[] {
+  if (values.length === 0) return [];
+
+  // Group values by their assigned color
+  const colorGroups: Record<string, number[]> = {};
+  
+  values.forEach((val) => {
+    const color = colorFn(val);
+    if (!colorGroups[color]) {
+      colorGroups[color] = [];
+    }
+    colorGroups[color].push(val);
+  });
+
+  // Create a trace for each color group
+  return Object.entries(colorGroups).map(([color, vals]) => ({
+    x: vals,
+    type: "histogram" as const,
+    nbinsx: nbins,
+    marker: { color },
+    showlegend: false,
+    hovertemplate: "Value: %{x}<br>Count: %{y}<extra></extra>",
+  })) as unknown as Data[];
+}
+
 /* ================================================================ Types */
 interface SelfHealCPEEntry {
   serial: string;
@@ -582,17 +687,11 @@ export default function SelfHealOverviewTab() {
               </select>
             </div>
             <Plot
-              data={
-                [
-                  {
-                    x: memAvailHistogramX,
-                    type: "histogram",
-                    nbinsx: 24,
-                    marker: { color: "#1a73e8" },
-                    name: memAvailField === "min" ? "Min %" : "Avg %",
-                  },
-                ] as unknown as Data[]
-              }
+              data={createColorCodedHistogramTraces(
+                memAvailHistogramX,
+                24,
+                getMemAvailableColor,
+              )}
               layout={{
                 ...layoutBase,
                 title: plotChartTitle(
@@ -602,6 +701,7 @@ export default function SelfHealOverviewTab() {
                 ),
                 xaxis: plotAxis("MemAvailable / MemTotal (%)"),
                 yaxis: plotAxis("# CPEs"),
+                barmode: "stack" as const,
               }}
               useResizeHandler
               style={{ width: "100%" }}
@@ -610,22 +710,17 @@ export default function SelfHealOverviewTab() {
           </div>
           <div>
             <Plot
-              data={
-                [
-                  {
-                    x: avgCpuHistogramX,
-                    type: "histogram",
-                    nbinsx: 24,
-                    marker: { color: "#188038" },
-                    name: "Avg CPU %",
-                  },
-                ] as unknown as Data[]
-              }
+              data={createColorCodedHistogramTraces(
+                avgCpuHistogramX,
+                24,
+                getCpuColor,
+              )}
               layout={{
                 ...layoutBase,
                 title: plotChartTitle("Average CPU % (per CPE)"),
                 xaxis: plotAxis("Avg CPU usage %"),
                 yaxis: plotAxis("# CPEs"),
+                barmode: "stack" as const,
               }}
               useResizeHandler
               style={{ width: "100%" }}
@@ -636,44 +731,34 @@ export default function SelfHealOverviewTab() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <Plot
-            data={
-              [
-                {
-                  x: sunreclaimHist,
-                  type: "histogram",
-                  nbinsx: 20,
-                  marker: { color: "#e8710a" },
-                  name: "SUnreclaim % of Slab",
-                },
-              ] as unknown as Data[]
-            }
+            data={createColorCodedHistogramTraces(
+              sunreclaimHist,
+              20,
+              getSUnreclaimColor,
+            )}
             layout={{
               ...layoutBase,
               title: plotChartTitle("SUnreclaim (% of Slab)"),
               xaxis: plotAxis("SUnreclaim / Slab (%)"),
               yaxis: plotAxis("# CPEs"),
+              barmode: "stack" as const,
             }}
             useResizeHandler
             style={{ width: "100%" }}
             config={{ displayModeBar: false }}
           />
           <Plot
-            data={
-              [
-                {
-                  x: overcommitHist,
-                  type: "histogram",
-                  nbinsx: 20,
-                  marker: { color: "#9333ea" },
-                  name: "Overcommit",
-                },
-              ] as unknown as Data[]
-            }
+            data={createColorCodedHistogramTraces(
+              overcommitHist,
+              20,
+              getOvercommitColor,
+            )}
             layout={{
               ...layoutBase,
               title: plotChartTitle("Overcommit (Committed_AS / CommitLimit)"),
               xaxis: plotAxis("Ratio"),
               yaxis: plotAxis("# CPEs"),
+              barmode: "stack" as const,
               shapes: [
                 {
                   type: "line",
