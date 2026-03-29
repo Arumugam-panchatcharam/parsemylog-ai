@@ -2,6 +2,7 @@ import os
 import shutil
 import tarfile
 import re
+import fnmatch
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -152,12 +153,22 @@ class LogMerger:
 
         # Merge logs
         for log_name, entries in logs.items():
+            if fnmatch.fnmatch(log_name, "syslog.txt*") or fnmatch.fnmatch(log_name, "local7notice*"):
+                # syslog.txt and local7notice require special overlap detection
+                # We'll rely on the standalone syslog_merger for them
+                continue
+
             # timestamp asc, rollover desc (.1 → .0 → none)
             entries.sort(key=lambda e: (e["timestamp"], -e["index"]))
             out_path = Path(self.merged_logs_path) / log_name
 
             with open(out_path, "wb") as out:
                 for entry in entries:
+                    # Write the timestamp marker for normal logs
+                    ts_str = entry["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
+                    marker = f"******************** LOG_MERGE_MARKER: {ts_str} ********************\n".encode("utf-8")
+                    out.write(marker)
+                    
                     try:
                         with open(entry["path"], "rb") as f:
                             shutil.copyfileobj(f, out)
@@ -182,8 +193,17 @@ class LogMerger:
     def merge_logs(self):
         # Step 1: Extract tarballs to temp directory
         self._extract_logs()
-        # Step 2 & 3: Collect and merge log files
+        
+        # Step 2: Smart merge for syslog specifically
+        try:
+            from api.syslog_merger import merge_syslogs_from_temp
+            merge_syslogs_from_temp(self.temp_dir, self.merged_logs_path)
+        except ImportError as e:
+            print(f"[WARN] Could not import syslog_merger: {e}")
+            
+        # Step 3 & 4: Collect and merge other log files
         self._merge_log_files()
+        
         # Cleanup temp directory
         self._cleanup()
 

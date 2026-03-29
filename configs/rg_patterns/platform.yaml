@@ -38,6 +38,7 @@ case_insensitive: true
 # Second ripgrep pass on first-pass matches: rg -v -F drops these literals
 # (same semantics as ripgrep -F; use domain case_insensitive for -i).
 ignore_literals:
+  - "LOG_MERGE_MARKER:"
   - "CURL_CMD:"
   - "CURL command is :"
   - "CURL_CMD2:"

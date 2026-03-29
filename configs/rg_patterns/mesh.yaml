@@ -16,6 +16,10 @@ context_lines: 3
 # Case-insensitive matching
 case_insensitive: true
 
+# Second ripgrep pass on first-pass matches: rg -v -F drops these literals
+ignore_literals:
+  - "LOG_MERGE_MARKER:"
+
 # Regex patterns (uses rg -e)
 regex:
   # Generic error/failure indicators

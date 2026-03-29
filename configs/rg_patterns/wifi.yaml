@@ -23,6 +23,7 @@ context_lines: 3
 case_insensitive: true
 
 ignore_literals:
+  - "LOG_MERGE_MARKER:"
   - "CcspCcMbi_GetParameterValues -- Something has screwed up"
   - "when get parameters: Device.WiFi.AccessPoint."
 

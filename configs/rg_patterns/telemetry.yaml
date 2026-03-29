@@ -14,6 +14,9 @@ files:
 context_lines: 3
 case_insensitive: true
 
+ignore_literals:
+  - "LOG_MERGE_MARKER:"
+
 regex:
   # Match error/warning/failure patterns
   - "\\b(err|error|fail(ed|ure)?|warn(ing)?|timeout|invalid|disconnect(ed)?|reject(ed)?|denied|lost|expired|corrupt)\\b"
