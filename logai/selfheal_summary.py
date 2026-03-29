@@ -198,67 +198,116 @@ def build_cross_cpe_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
 
-    under_pressure = sum(
-        1
-        for c in cpes
-        if c.get("mem_available_min_pct") is not None
-        and float(c["mem_available_min_pct"]) < MEM_AVAILABLE_PRESSURE_PCT
-    )
-    pct_pressure = round(100.0 * under_pressure / total, 1)
+    # 1. Fleet Distributions
+    dist = {
+        "mem_avail": {"critical": 0, "warning": 0, "caution": 0, "normal": 0},
+        "cpu": {"warning": 0, "caution": 0, "normal": 0},
+        "sunreclaim": {"critical": 0, "warning": 0, "caution": 0, "normal": 0},
+        "overcommit": {"critical": 0, "warning": 0, "caution": 0, "normal": 0},
+    }
 
-    kernel_growth = sum(
-        1
-        for c in cpes
-        if "KERNEL_LEAK" in (c.get("alerts") or [])
-        or (
-            c.get("sunreclaim_pct") is not None
-            and float(c["sunreclaim_pct"]) > KERNEL_SUNRECLAIM_PCT_WARN
-        )
-        or (
-            c.get("slab_ols_slope_kb_per_step") is not None
-            and float(c["slab_ols_slope_kb_per_step"]) > 0
-        )
-    )
-    pct_kernel = round(100.0 * kernel_growth / total, 1)
+    # 2. Quadrants
+    quadrants = {"q1": 0, "q2": 0, "q3": 0, "q4": 0}
 
-    oom_risk = sum(
-        1
-        for c in cpes
-        if c.get("overcommit_ratio") is not None
-        and float(c["overcommit_ratio"]) > OOM_OVERCOMMIT_RATIO
-    )
-    pct_oom = round(100.0 * oom_risk / total, 1)
+    for c in cpes:
+        # MemAvailable
+        mem_pct = c.get("mem_available_avg_pct")
+        if mem_pct is not None:
+            if mem_pct < 10: dist["mem_avail"]["critical"] += 1
+            elif mem_pct < 20: dist["mem_avail"]["warning"] += 1
+            elif mem_pct < 30: dist["mem_avail"]["caution"] += 1
+            else: dist["mem_avail"]["normal"] += 1
 
-    top_name = ""
-    top_pct_devices = 0.0
-    if leaks:
-        row0 = leaks[0]
-        top_name = str(row0.get("process") or "")
-        aff = int(row0.get("cpes_affected") or 0)
-        top_pct_devices = round(100.0 * aff / total, 1)
+        # CPU
+        cpu_pct = c.get("avg_cpu_usage_pct")
+        if cpu_pct is not None:
+            if cpu_pct > 20: dist["cpu"]["warning"] += 1
+            elif cpu_pct > 15: dist["cpu"]["caution"] += 1
+            else: dist["cpu"]["normal"] += 1
 
-    lines = [
-        f"Cross-CPE overview ({total} CPEs with SelfHeal data)",
-        "",
-        f"- {pct_pressure}% devices under memory pressure (min MemAvailable < {MEM_AVAILABLE_PRESSURE_PCT:g}% of MemTotal)",
-        f"- {pct_kernel}% show kernel memory growth signals (KERNEL_LEAK alert, elevated SUnreclaim, or positive slab slope)",
-    ]
-    if top_name:
-        lines.append(
-            f"- Top leaking process (by fleet table): {top_name} (affects ~{top_pct_devices}% of devices)"
-        )
+        # SUnreclaim
+        sun_pct = c.get("sunreclaim_pct")
+        if sun_pct is not None:
+            if sun_pct > 80: dist["sunreclaim"]["critical"] += 1
+            elif sun_pct > 70: dist["sunreclaim"]["warning"] += 1
+            elif sun_pct > 50: dist["sunreclaim"]["caution"] += 1
+            else: dist["sunreclaim"]["normal"] += 1
+
+        # Overcommit
+        oc_ratio = c.get("overcommit_ratio")
+        if oc_ratio is not None:
+            if oc_ratio > 4: dist["overcommit"]["critical"] += 1
+            elif oc_ratio > 2: dist["overcommit"]["warning"] += 1
+            elif oc_ratio > 1: dist["overcommit"]["caution"] += 1
+            else: dist["overcommit"]["normal"] += 1
+
+        # Quadrants
+        slab_slope = c.get("slab_ols_slope_kb_per_step")
+        rss_slope = c.get("total_user_rss_ols_slope_kb_per_step")
+        if slab_slope is not None and rss_slope is not None:
+            if slab_slope > 0 and rss_slope > 0: quadrants["q1"] += 1
+            elif slab_slope <= 0 and rss_slope > 0: quadrants["q2"] += 1
+            elif slab_slope <= 0 and rss_slope <= 0: quadrants["q3"] += 1
+            elif slab_slope > 0 and rss_slope <= 0: quadrants["q4"] += 1
+
+    lines = [f"EXECUTIVE SUMMARY (FLEET) - {total} CPEs Analyzed\n"]
+
+    # Section 1: Distributions
+    lines.append("FLEET HEALTH DISTRIBUTIONS:")
+    lines.append(f"  • MemAvailable: {dist['mem_avail']['critical']} Critical (<10%), {dist['mem_avail']['warning']} Warning (<20%), {dist['mem_avail']['caution']} Caution (<30%), {dist['mem_avail']['normal']} Normal")
+    lines.append(f"  • CPU Usage: {dist['cpu']['warning']} Warning (>20%), {dist['cpu']['caution']} Caution (>15%), {dist['cpu']['normal']} Normal")
+    lines.append(f"  • SUnreclaim: {dist['sunreclaim']['critical']} Critical (>80%), {dist['sunreclaim']['warning']} Warning (>70%), {dist['sunreclaim']['caution']} Caution (>50%), {dist['sunreclaim']['normal']} Normal")
+    lines.append(f"  • Overcommit: {dist['overcommit']['critical']} Critical (>4x), {dist['overcommit']['warning']} Warning (>2x), {dist['overcommit']['caution']} Caution (>1x), {dist['overcommit']['normal']} Normal\n")
+
+    # Section 2: Quadrants
+    lines.append("SYSTEM MEMORY TRENDS (Slab vs RSS):")
+    lines.append(f"  • Q1 (System leak - Slab ↑, RSS ↑): {quadrants['q1']} devices 🚨")
+    lines.append(f"  • Q2 (App leak - Slab ↓, RSS ↑): {quadrants['q2']} devices ⚠️")
+    lines.append(f"  • Q3 (Healthy - Slab ↓, RSS ↓): {quadrants['q3']} devices ✅")
+    lines.append(f"  • Q4 (Kernel growth - Slab ↑, RSS ↓): {quadrants['q4']} devices ⚠️\n")
+
+    # Section 3: Process Leaks
+    lines.append("TOP LEAKING PROCESSES (FLEET):")
+    if not leaks:
+        lines.append("  • ✓ No fleet-wide memory leaks detected.")
     else:
-        lines.append("- Top leaking process: (none above fleet threshold)")
-    lines.append(
-        f"- {pct_oom}% devices at OOM risk (Committed_AS / CommitLimit > {OOM_OVERCOMMIT_RATIO * 100:.0f}%)"
-    )
-    lines.extend(
-        [
-            "",
-            "Recommendation:",
-            _fleet_recommendation(top_name, pct_oom, pct_pressure),
-        ]
-    )
+        for i, leak in enumerate(leaks[:3]):
+            proc = leak.get("process", "Unknown")
+            cpes_affected = int(leak.get("cpes_affected", 0))
+            spread_pct = (cpes_affected / total) * 100 if total > 0 else 0
+            avg_slope = float(leak.get("avg_slope_kb", 0))
+            max_slope = float(leak.get("max_slope_kb", 0))
+
+            # Spread Class
+            if spread_pct < 5: spread_class = "Isolated 🟢"
+            elif spread_pct < 20: spread_class = "Limited 🟡"
+            elif spread_pct < 50: spread_class = "Widespread 🟠"
+            else: spread_class = "Systemic 🔴"
+
+            # Avg Slope Class
+            if avg_slope < 1: avg_class = "Noise 🟢"
+            elif avg_slope < 3: avg_class = "Slow growth 🟡"
+            elif avg_slope < 10: avg_class = "Moderate leak 🟠"
+            else: avg_class = "Strong leak 🔴"
+
+            # Max Slope Class
+            if max_slope < 5: max_class = "Mild 🟢"
+            elif max_slope < 15: max_class = "Noticeable 🟡"
+            elif max_slope < 30: max_class = "Severe 🟠"
+            else: max_class = "Critical 🔴"
+
+            lines.append(f"  {i+1}. {proc} (affects {cpes_affected} devices, {spread_pct:.1f}%)")
+            lines.append(f"     - Spread: {spread_class}")
+            lines.append(f"     - Avg Slope: {avg_slope:.2f} KB/step ({avg_class})")
+            lines.append(f"     - Max Slope: {max_slope:.2f} KB/step ({max_class})")
+
+    lines.append("\nRECOMMENDATION:")
+    
+    pct_oom = (dist["overcommit"]["critical"] + dist["overcommit"]["warning"]) / total * 100 if total > 0 else 0
+    pct_pressure = (dist["mem_avail"]["critical"] + dist["mem_avail"]["warning"]) / total * 100 if total > 0 else 0
+    
+    top_process = leaks[0].get("process", "") if leaks else ""
+    lines.append(_fleet_recommendation(top_process, pct_oom, pct_pressure))
 
     plain = "\n".join(lines)
     return {

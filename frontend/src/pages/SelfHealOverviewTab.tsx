@@ -49,6 +49,36 @@ const COLOR_SCHEME = {
 /* ================================================================ Color Coding Functions */
 
 /**
+ * Get classification for issue spread (fleet impact)
+ */
+function getSpreadClassification(spreadPercent: number): { icon: string; label: string; color: string; bgColor: string; textColor: string } {
+  if (spreadPercent < 5) return { icon: "🟢", label: "Isolated", color: "#16a34a", bgColor: "bg-green-50", textColor: "text-green-700" };
+  if (spreadPercent < 20) return { icon: "🟡", label: "Limited", color: "#eab308", bgColor: "bg-yellow-50", textColor: "text-yellow-700" };
+  if (spreadPercent < 50) return { icon: "🟠", label: "Widespread", color: "#ea580c", bgColor: "bg-orange-50", textColor: "text-orange-700" };
+  return { icon: "🔴", label: "Systemic", color: "#dc2626", bgColor: "bg-red-50", textColor: "text-red-700" };
+}
+
+/**
+ * Get classification for average RSS slope (consistency/leak risk)
+ */
+function getAvgSlopeClassification(avgSlope: number): { icon: string; label: string; color: string; bgColor: string; textColor: string } {
+  if (avgSlope < 1) return { icon: "🟢", label: "Noise", color: "#16a34a", bgColor: "bg-green-50", textColor: "text-green-700" };
+  if (avgSlope < 3) return { icon: "🟡", label: "Slow growth", color: "#eab308", bgColor: "bg-yellow-50", textColor: "text-yellow-700" };
+  if (avgSlope < 10) return { icon: "🟠", label: "Moderate leak", color: "#ea580c", bgColor: "bg-orange-50", textColor: "text-orange-700" };
+  return { icon: "🔴", label: "Strong leak", color: "#dc2626", bgColor: "bg-red-50", textColor: "text-red-700" };
+}
+
+/**
+ * Get classification for maximum RSS slope (severity/peak behavior)
+ */
+function getMaxSlopeClassification(maxSlope: number): { icon: string; label: string; color: string; bgColor: string; textColor: string } {
+  if (maxSlope < 5) return { icon: "🟢", label: "Mild", color: "#16a34a", bgColor: "bg-green-50", textColor: "text-green-700" };
+  if (maxSlope < 15) return { icon: "🟡", label: "Noticeable", color: "#eab308", bgColor: "bg-yellow-50", textColor: "text-yellow-700" };
+  if (maxSlope < 30) return { icon: "🟠", label: "Severe", color: "#ea580c", bgColor: "bg-orange-50", textColor: "text-orange-700" };
+  return { icon: "🔴", label: "Critical", color: "#dc2626", bgColor: "bg-red-50", textColor: "text-red-700" };
+}
+
+/**
  * Get color for MemAvailable percentage value
  */
 function getMemAvailableColor(percent: number): string {
@@ -782,9 +812,16 @@ export default function SelfHealOverviewTab() {
       {/* Slab vs total user RSS trend */}
       {slabUserScatter.x.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-2.5">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-            Slab growth vs total process RSS growth (OLS KB/step)
-          </h3>
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div>
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Slab growth vs total process RSS growth (OLS KB/step)
+              </h3>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Quadrants: Q1=🚨 System leak | Q2=⚠️ App leak | Q3=✅ Healthy | Q4=⚠️ Kernel growth
+              </p>
+            </div>
+          </div>
           <Plot
             data={[
               {
@@ -803,11 +840,119 @@ export default function SelfHealOverviewTab() {
               title: plotChartTitle("Kernel slab vs userspace RSS trend"),
               xaxis: plotAxis("Slab OLS slope (KB per snapshot step)"),
               yaxis: plotAxis("Total process RSS OLS slope (KB/step)"),
+              shapes: [
+                // X-axis (vertical line at x=0)
+                {
+                  type: "line",
+                  x0: 0,
+                  x1: 0,
+                  y0: "paper",
+                  y1: "paper",
+                  xref: "x",
+                  yref: "paper",
+                  line: { color: "#666666", width: 1, dash: "dash" },
+                },
+                // Y-axis (horizontal line at y=0)
+                {
+                  type: "line",
+                  x0: "paper",
+                  x1: "paper",
+                  y0: 0,
+                  y1: 0,
+                  xref: "paper",
+                  yref: "y",
+                  line: { color: "#666666", width: 1, dash: "dash" },
+                },
+              ],
+              annotations: [
+                // Q1 (Top-Right) - System-wide leak
+                {
+                  x: 1,
+                  y: 1,
+                  xref: "paper",
+                  yref: "paper",
+                  text: "Q1: 🚨 System Leak<br>Slab↑ RSS↑",
+                  showarrow: false,
+                  font: { size: 10, color: "#d93025" },
+                  xanchor: "right" as const,
+                  yanchor: "top" as const,
+                  bgcolor: "rgba(217, 48, 37, 0.1)",
+                  bordercolor: "#d93025",
+                  borderwidth: 1,
+                  borderpad: 4,
+                },
+                // Q2 (Top-Left) - User-space leak
+                {
+                  x: 0,
+                  y: 1,
+                  xref: "paper",
+                  yref: "paper",
+                  text: "Q2: ⚠️ App Leak<br>Slab↓ RSS↑",
+                  showarrow: false,
+                  font: { size: 10, color: "#e8710a" },
+                  xanchor: "left" as const,
+                  yanchor: "top" as const,
+                  bgcolor: "rgba(232, 113, 10, 0.1)",
+                  bordercolor: "#e8710a",
+                  borderwidth: 1,
+                  borderpad: 4,
+                },
+                // Q3 (Bottom-Left) - Healthy
+                {
+                  x: 0,
+                  y: 0,
+                  xref: "paper",
+                  yref: "paper",
+                  text: "Q3: ✅ Healthy<br>Slab↓ RSS↓",
+                  showarrow: false,
+                  font: { size: 10, color: "#188038" },
+                  xanchor: "left" as const,
+                  yanchor: "bottom" as const,
+                  bgcolor: "rgba(24, 128, 56, 0.1)",
+                  bordercolor: "#188038",
+                  borderwidth: 1,
+                  borderpad: 4,
+                },
+                // Q4 (Bottom-Right) - Kernel growth
+                {
+                  x: 1,
+                  y: 0,
+                  xref: "paper",
+                  yref: "paper",
+                  text: "Q4: ⚠️ Kernel Growth<br>Slab↑ RSS↓",
+                  showarrow: false,
+                  font: { size: 10, color: "#f9ab00" },
+                  xanchor: "right" as const,
+                  yanchor: "bottom" as const,
+                  bgcolor: "rgba(249, 171, 0, 0.1)",
+                  bordercolor: "#f9ab00",
+                  borderwidth: 1,
+                  borderpad: 4,
+                },
+              ],
             }}
             useResizeHandler
             style={{ width: "100%" }}
             config={{ displayModeBar: false }}
           />
+          <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px]">
+            <div className="p-2 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+              <p className="font-semibold text-red-900 dark:text-red-200">Q1: System Leak</p>
+              <p className="text-red-800 dark:text-red-300">Both kernel & user memory growing</p>
+            </div>
+            <div className="p-2 rounded border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20">
+              <p className="font-semibold text-orange-900 dark:text-orange-200">Q2: App Leak</p>
+              <p className="text-orange-800 dark:text-orange-300">Only user memory growing</p>
+            </div>
+            <div className="p-2 rounded border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20">
+              <p className="font-semibold text-green-900 dark:text-green-200">Q3: Healthy</p>
+              <p className="text-green-800 dark:text-green-300">Both decreasing, system recovering</p>
+            </div>
+            <div className="p-2 rounded border border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20">
+              <p className="font-semibold text-yellow-900 dark:text-yellow-200">Q4: Kernel Growth</p>
+              <p className="text-yellow-800 dark:text-yellow-300">Kernel memory growing</p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -825,61 +970,129 @@ export default function SelfHealOverviewTab() {
               </p>
             )}
           </div>
-          <div className="w-full max-w-full overflow-x-auto overflow-y-auto max-h-64 min-h-0">
-            <table className="text-[11px] border-collapse min-w-[520px] w-full">
+          <div className="w-full max-w-full overflow-x-auto overflow-y-auto max-h-96 min-h-0">
+            <table className="text-[11px] border-collapse min-w-full w-full">
               <thead>
-                <tr className="border-b border-border bg-muted/20">
+                <tr className="border-b border-border bg-muted/20 sticky top-0">
                   <th className="text-left py-1 px-2 font-semibold text-muted-foreground">Process</th>
                   <th className="text-right py-1 px-2 font-semibold text-muted-foreground"># CPEs</th>
+                  <th className="text-right py-1 px-2 font-semibold text-muted-foreground">Spread %</th>
+                  <th className="text-center py-1 px-2 font-semibold text-muted-foreground">Spread Class</th>
                   <th className="text-right py-1 px-2 font-semibold text-muted-foreground">Avg slope</th>
+                  <th className="text-center py-1 px-2 font-semibold text-muted-foreground">Avg Class</th>
                   <th className="text-right py-1 px-2 font-semibold text-muted-foreground">Max slope</th>
+                  <th className="text-center py-1 px-2 font-semibold text-muted-foreground">Max Class</th>
                 </tr>
               </thead>
               <tbody>
-                {fleetLeaks.map((row) => (
-                  <Fragment key={row.process}>
-                    <tr
-                      className="border-b border-border/60 cursor-pointer hover:bg-muted/40"
-                      onClick={() =>
-                        setLeakRowOpen((p) => (p === row.process ? null : row.process))
-                      }
-                      title="Click to show CPE serials"
-                    >
-                      <td className="py-1 px-2 font-mono text-foreground">
-                        <span className="inline-flex items-center gap-1">
-                          {leakRowOpen === row.process ? (
-                            <ExpandLessIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
-                          ) : (
-                            <ExpandMoreIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
-                          )}
-                          {row.process}
-                        </span>
-                      </td>
-                      <td className="py-1 px-2 text-right tabular-nums">{row.cpes_affected}</td>
-                      <td className="py-1 px-2 text-right tabular-nums">{row.avg_slope_kb.toFixed(2)}</td>
-                      <td className="py-1 px-2 text-right tabular-nums">{row.max_slope_kb.toFixed(2)}</td>
-                    </tr>
-                    {leakRowOpen === row.process && (
-                      <tr className="border-b border-border/60 bg-muted/20">
-                        <td colSpan={4} className="py-2 px-2 text-[10px] text-muted-foreground">
-                          <span className="font-semibold text-foreground">CPE serials: </span>
-                          {(row.cpe_serials?.length ?? 0) > 0
-                            ? row.cpe_serials!.map((s) => (
-                                <span
-                                  key={s}
-                                  className="inline-block mr-1.5 mb-0.5 font-mono rounded border border-border bg-card px-1.5 py-0.5 text-foreground"
-                                >
-                                  {s}
-                                </span>
-                              ))
-                            : "—"}
+                {fleetLeaks.map((row) => {
+                  const totalCpes = data?.overview.total_cpes ?? 1;
+                  const spreadPercent = (row.cpes_affected / totalCpes) * 100;
+                  const spreadClass = getSpreadClassification(spreadPercent);
+                  const avgClass = getAvgSlopeClassification(row.avg_slope_kb);
+                  const maxClass = getMaxSlopeClassification(row.max_slope_kb);
+                  
+                  return (
+                    <Fragment key={row.process}>
+                      <tr
+                        className="border-b border-border/60 cursor-pointer hover:bg-muted/40"
+                        onClick={() =>
+                          setLeakRowOpen((p) => (p === row.process ? null : row.process))
+                        }
+                        title="Click to show CPE serials"
+                      >
+                        <td className="py-1 px-2 font-mono text-foreground">
+                          <span className="inline-flex items-center gap-1">
+                            {leakRowOpen === row.process ? (
+                              <ExpandLessIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
+                            ) : (
+                              <ExpandMoreIcon style={{ fontSize: 16 }} className="text-muted-foreground shrink-0" />
+                            )}
+                            {row.process}
+                          </span>
+                        </td>
+                        <td className="py-1 px-2 text-right tabular-nums">{row.cpes_affected}</td>
+                        <td className="py-1 px-2 text-right tabular-nums">{spreadPercent.toFixed(1)}%</td>
+                        <td className="py-1 px-2 text-center">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${spreadClass.bgColor} dark:bg-opacity-20`} style={{ color: spreadClass.color }}>
+                            {spreadClass.icon} {spreadClass.label}
+                          </span>
+                        </td>
+                        <td className="py-1 px-2 text-right tabular-nums">{row.avg_slope_kb.toFixed(2)}</td>
+                        <td className="py-1 px-2 text-center">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${avgClass.bgColor} dark:bg-opacity-20`} style={{ color: avgClass.color }}>
+                            {avgClass.icon} {avgClass.label}
+                          </span>
+                        </td>
+                        <td className="py-1 px-2 text-right tabular-nums">{row.max_slope_kb.toFixed(2)}</td>
+                        <td className="py-1 px-2 text-center">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold ${maxClass.bgColor} dark:bg-opacity-20`} style={{ color: maxClass.color }}>
+                            {maxClass.icon} {maxClass.label}
+                          </span>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
+                      {leakRowOpen === row.process && (
+                        <tr className="border-b border-border/60 bg-muted/20">
+                          <td colSpan={8} className="py-2 px-2 text-[10px] text-muted-foreground">
+                            <span className="font-semibold text-foreground">CPE serials: </span>
+                            {(row.cpe_serials?.length ?? 0) > 0
+                              ? row.cpe_serials!.map((s) => (
+                                  <span
+                                    key={s}
+                                    className="inline-block mr-1.5 mb-0.5 font-mono rounded border border-border bg-card px-1.5 py-0.5 text-foreground"
+                                  >
+                                    {s}
+                                  </span>
+                                ))
+                              : "—"}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+          {/* Classification legend */}
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px]">
+            <div className="p-2 rounded border border-border bg-muted/30">
+              <p className="font-semibold mb-1 text-foreground">Issue Spread (Fleet Impact)</p>
+              <ul className="space-y-1">
+                <li className="text-green-700 dark:text-green-300">🟢 Isolated: &lt; 5%</li>
+                <li className="text-yellow-700 dark:text-yellow-300">🟡 Limited: 5–20%</li>
+                <li className="text-orange-700 dark:text-orange-300">🟠 Widespread: 20–50%</li>
+                <li className="text-red-700 dark:text-red-300">🔴 Systemic: &gt; 50%</li>
+              </ul>
+            </div>
+            <div className="p-2 rounded border border-border bg-muted/30">
+              <p className="font-semibold mb-1 text-foreground">Avg RSS Slope (Consistency)</p>
+              <ul className="space-y-1">
+                <li className="text-green-700 dark:text-green-300">🟢 Noise: &lt; 1 KB/step</li>
+                <li className="text-yellow-700 dark:text-yellow-300">🟡 Slow growth: 1–3</li>
+                <li className="text-orange-700 dark:text-orange-300">🟠 Moderate: 3–10</li>
+                <li className="text-red-700 dark:text-red-300">🔴 Strong: &gt; 10</li>
+              </ul>
+            </div>
+            <div className="p-2 rounded border border-border bg-muted/30">
+              <p className="font-semibold mb-1 text-foreground">Max RSS Slope (Severity)</p>
+              <ul className="space-y-1">
+                <li className="text-green-700 dark:text-green-300">🟢 Mild: &lt; 5 KB/step</li>
+                <li className="text-yellow-700 dark:text-yellow-300">🟡 Noticeable: 5–15</li>
+                <li className="text-orange-700 dark:text-orange-300">🟠 Severe: 15–30</li>
+                <li className="text-red-700 dark:text-red-300">🔴 Critical: &gt; 30</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* No leaks message */}
+      {fleetLeaks.length === 0 && (
+        <div className="bg-card border border-border rounded-lg p-2.5">
+          <div className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
+            <span className="text-green-600 dark:text-green-400">✓</span>
+            <span>No fleet-wide memory leaks detected</span>
           </div>
         </div>
       )}
