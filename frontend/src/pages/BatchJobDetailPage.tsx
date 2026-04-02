@@ -22,7 +22,12 @@ export default function BatchJobDetailPage() {
     queryKey: ["batchJob", projectId, jobId],
     queryFn: () => batchJobsApi.get(projectId!, jobId!),
     enabled: !!projectId && !!jobId,
-    refetchInterval: 3000, // Poll every 3 seconds
+    refetchInterval: (data) => {
+      // Only poll if job is still active (queued or processing)
+      const job = data?.data;
+      const isActive = job?.status === "queued" || job?.status === "processing";
+      return isActive ? 3000 : false; // Poll every 3 seconds if active, stop if complete
+    },
   });
 
   // Fetch CPE records
@@ -30,7 +35,12 @@ export default function BatchJobDetailPage() {
     queryKey: ["batchJobCPEs", projectId, jobId, statusFilter],
     queryFn: () => batchJobsApi.listCPEs(projectId!, jobId!, statusFilter),
     enabled: !!projectId && !!jobId,
-    refetchInterval: 3000,
+    refetchInterval: (data, query) => {
+      // Only poll if parent job is still active
+      const job = jobData?.data;
+      const isActive = job?.status === "queued" || job?.status === "processing";
+      return isActive ? 3000 : false;
+    },
   });
 
   const job = jobData?.data;

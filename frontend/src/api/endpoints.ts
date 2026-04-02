@@ -114,6 +114,16 @@ export interface MemorySummary {
   samples?: number;
 }
 
+export interface ChunkedUploadStatus {
+  status: "uploading" | "processing" | "completed" | "error" | "not_found";
+  progress: number;
+  uploaded_size: number;
+  total_size: number;
+  error?: string;
+  job_id?: string;
+  message?: string;
+}
+
 export const batchJobsApi = {
   create: (projectId: string, cpeFolderPath: string, jobType = "cpe_processing") =>
     api.post<{ job_id: string; status: string; total_cpes: number; message: string; celery_task_id: string }>(
@@ -138,6 +148,37 @@ export const batchJobsApi = {
     ),
   delete: (projectId: string, jobId: string) =>
     api.delete<{ message: string }>(`/projects/${projectId}/batch-jobs/${jobId}`),
+
+  // Script download
+  downloadScript: (projectId: string) =>
+    api.get(`/projects/${projectId}/batch-jobs/download-script`, {
+      responseType: "blob",
+    }),
+
+  // Chunked upload methods
+  initUpload: (projectId: string, filename: string, totalSize: number) =>
+    api.post<{ upload_id: string; chunk_size: number; message: string }>(
+      `/projects/${projectId}/batch-jobs/upload/init`,
+      { filename, total_size: totalSize }
+    ),
+  uploadChunk: (projectId: string, uploadId: string, chunkData: ArrayBuffer, start: number, end: number, total: number) =>
+    api.post<{ message: string; progress: number; uploaded_size: number }>(
+      `/projects/${projectId}/batch-jobs/upload/${uploadId}/chunk`,
+      chunkData,
+      {
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Range": `bytes ${start}-${end}/${total}`,
+        },
+        timeout: 300_000, // 5 minutes per chunk
+      }
+    ),
+  completeUpload: (projectId: string, uploadId: string) =>
+    api.post<{ message: string; upload_id: string }>(
+      `/projects/${projectId}/batch-jobs/upload/${uploadId}/complete`
+    ),
+  getUploadStatus: (projectId: string, uploadId: string) =>
+    api.get<ChunkedUploadStatus>(`/projects/${projectId}/batch-jobs/upload/${uploadId}/status`),
 };
 
 // ---------- Knowledge Graph ----------

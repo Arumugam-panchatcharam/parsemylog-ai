@@ -226,19 +226,58 @@ def process_single_cpe(self, job_id: str, user_id: int, project_id: str,
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(raw_dir)
             
-            # Step 2: Flatten raw_dir to staging_dir
-            # (Move all files recursively to staging, ignoring dirs)
+            # Step 2: Flatten raw_dir to staging_dir with deduplication
+            # (Move all files recursively to staging, avoiding duplicates)
+            import hashlib
+            
+            def _file_hash(file_path):
+                """Generate MD5 hash of file content."""
+                hasher = hashlib.md5()
+                with open(file_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(4096), b""):
+                        hasher.update(chunk)
+                return hasher.hexdigest()
+            
+            file_hashes = {}  # hash -> filename mapping
+            
             for root, dirs, files in os.walk(raw_dir):
                 for file in files:
                     src = Path(root) / file
                     dst = staging_dir / file
                     
-                    # Handle filename collisions by appending timestamp
+                    # Calculate file hash for deduplication
+                    try:
+                        file_hash = _file_hash(src)
+                    except Exception as e:
+                        logger.warning(f"[CPE {serial}] Could not hash {src}: {e}")
+                        # Fallback to original collision handling
+                        if dst.exists():
+                            base, ext = os.path.splitext(file)
+                            dst = staging_dir / f"{base}_{int(time.time()*1000)}{ext}"
+                        shutil.move(str(src), str(dst))
+                        continue
+                    
+                    # Check if we've seen this file content before
+                    if file_hash in file_hashes:
+                        existing_file = file_hashes[file_hash]
+                        logger.info(f"[CPE {serial}] Skipping duplicate file: {file} (same content as {existing_file})")
+                        src.unlink()  # Remove the duplicate
+                        continue
+                    
+                    # Handle filename collisions (but content is different)
                     if dst.exists():
                         base, ext = os.path.splitext(file)
-                        dst = staging_dir / f"{base}_{int(time.time()*1000)}{ext}"
+                        counter = 1
+                        while dst.exists():
+                            dst = staging_dir / f"{base}_{counter}{ext}"
+                            counter += 1
+                        logger.info(f"[CPE {serial}] Renamed file to avoid collision: {file} -> {dst.name}")
                     
+                    # Move the file and record its hash
                     shutil.move(str(src), str(dst))
+                    file_hashes[file_hash] = dst.name
+            
+            logger.info(f"[CPE {serial}] Processed files: {len(file_hashes)} unique files moved to staging")
             
             # Step 3: Merge logs (shared with normal upload path)
             logger.info(f"[CPE {serial}] Merging logs...")

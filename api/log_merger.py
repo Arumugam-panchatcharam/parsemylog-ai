@@ -143,6 +143,11 @@ class LogMerger:
                 match = self.FILE_NAME_REGEX.match(fname)
                 if match:
                     ts_str, log_name, index = match.groups()
+                    
+                    # Handle device double-timestamping (e.g. 2026-03-08-00-14-07_2026-03-08-00-00-00_kernel)
+                    while re.match(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}_", log_name):
+                        log_name = log_name[20:]
+                        
                     logs[log_name].append({
                         "timestamp": self._parse_timestamp(ts_str),
                         "index": int(index) if index else -1,

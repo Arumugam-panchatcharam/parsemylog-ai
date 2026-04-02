@@ -18,6 +18,10 @@ ignore_literals:
   - "LOG_MERGE_MARKER:"
 
 regex:
+  # Generic error/failure indicators
+  - "\\b(err|error|fail(ed|ure)?|warn(ing)?|info(rmation)?|debug(ging)?)\\b"
+  - "\\b(timeout|invalid|illegal|incorrect|crash|abort|panic|fatal|critical|reset|restart)\\b"
+  - "\\b(core dump|segmentation fault|fatal signal 11|unexpected fatal signal)\\b"
   # Match error/warning/failure patterns
   - "\\b(err|error|fail(ed|ure)?|warn(ing)?|timeout|invalid|disconnect(ed)?|reject(ed)?|denied|lost|expired|corrupt)\\b"
   # Match ERROR/WARN log levels

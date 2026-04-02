@@ -791,6 +791,11 @@ class DBManager:
         project = self.db.session.query(self.Project).filter_by(id=project_id).first()
         if not project:
             return False, "Project not found."
+            
+        # Get batch job IDs before we delete the project (and cascade delete the jobs)
+        batch_jobs = self.db.session.query(self.BatchJob).filter_by(project_id=project_id).all()
+        batch_job_ids = [job.id for job in batch_jobs]
+        
         try:
             # Wait for any active indexer to finish before deleting files
             # to prevent write-after-delete races.
@@ -810,6 +815,9 @@ class DBManager:
                         logger.info(f"Removing project directory: {project_dir}")
                         shutil.rmtree(project_dir, ignore_errors=True)
 
+                    # Clean up batch job directories for this project
+                    self._cleanup_batch_job_directories(project_id, batch_job_ids)
+
                     # Clean up Qdrant vector collection for this project
                     self._delete_qdrant_collections(project_id)
                 finally:
@@ -821,6 +829,7 @@ class DBManager:
                 project_dir = Path(f'{UPLOAD_DIRECTORY}/{user_id}/{project_id}')
                 if project_dir.exists():
                     shutil.rmtree(project_dir, ignore_errors=True)
+                self._cleanup_batch_job_directories(project_id, batch_job_ids)
                 self._delete_qdrant_collections(project_id)
 
             logger.info(f"Project {project_id} deleted successfully")
@@ -829,6 +838,82 @@ class DBManager:
             self.db.session.rollback()
             logger.error(f"Failed to delete project {project_id}: {e}")
             return False, str(e)
+
+    def _cleanup_batch_job_directories(self, project_id: str, batch_job_ids: list = None) -> None:
+        """
+        Clean up batch job directories associated with a project.
+        This removes directories in batch_cpe_logs that were created for batch jobs
+        belonging to the deleted project.
+        """
+        try:
+            # Get the batch logs directory (same logic as in batch_jobs.py)
+            from logai.utils.constants import BASE_DIR
+            docker_path = Path("/app/batch_cpe_logs")
+            if docker_path.parent.exists():
+                batch_logs_dir = docker_path
+            else:
+                batch_logs_dir = Path(BASE_DIR) / "batch_cpe_logs"
+            
+            if not batch_logs_dir.exists():
+                return
+                
+            cleanup_count = 0
+            
+            # Explicitly clean up the directories for the deleted batch jobs
+            if batch_job_ids:
+                for job_id in batch_job_ids:
+                    job_dir = batch_logs_dir / job_id
+                    if job_dir.exists() and job_dir.is_dir():
+                        try:
+                            logger.info(f"Cleaning up batch directory for deleted project: {job_dir}")
+                            import shutil
+                            shutil.rmtree(job_dir, ignore_errors=True)
+                            cleanup_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to clean up batch directory {job_dir}: {e}")
+            
+            # We clean up all batch upload directories that are abandoned
+            # and older than 1 hour (to be safe), across all projects.
+            for upload_dir in batch_logs_dir.iterdir():
+                if upload_dir.is_dir() and self._should_cleanup_upload_directory(upload_dir):
+                    try:
+                        logger.info(f"Cleaning up abandoned batch directory: {upload_dir}")
+                        import shutil
+                        shutil.rmtree(upload_dir, ignore_errors=True)
+                        cleanup_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up abandoned directory {upload_dir}: {e}")
+                        
+            logger.info(f"Cleaned up {cleanup_count} old/project batch job directories")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up old batch job directories: {e}")
+    
+    def _should_cleanup_upload_directory(self, upload_dir: Path) -> bool:
+        """
+        Determine if an upload directory should be cleaned up.
+        Clean up directories that are old and don't seem to have active processing.
+        """
+        try:
+            import time
+            
+            # Check if directory is old enough (more than 1 hour old)
+            dir_age = time.time() - upload_dir.stat().st_mtime
+            if dir_age < 3600:  # Less than 1 hour old, keep it
+                return False
+            
+            # Check if this looks like a batch upload directory (UUID format)
+            import re
+            uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+            if not uuid_pattern.match(upload_dir.name):
+                return False
+                
+            # If it's old and looks like a batch upload directory, clean it up
+            return True
+                
+        except Exception as e:
+            logger.warning(f"Error checking upload directory {upload_dir}: {e}")
+            return False
 
     # ---------------- Admin operations ----------------
     def get_user_projects_admin(self, user_id: int):
@@ -1033,9 +1118,10 @@ class DBManager:
 
     # ---------------- Batch Job operations ----------------
     def create_batch_job(self, project_id: str, user_id: int, total_cpes: int, 
-                        job_type: str = "cpe_processing") -> str:
+                        job_type: str = "cpe_processing", job_id: str = None) -> str:
         """Create a new batch processing job and return its ID."""
-        job_id = str(uuid.uuid4())
+        if job_id is None:
+            job_id = str(uuid.uuid4())
         job = self.BatchJob(
             id=job_id,
             project_id=project_id,

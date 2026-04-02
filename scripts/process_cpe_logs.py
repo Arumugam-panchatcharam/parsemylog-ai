@@ -20,8 +20,6 @@ import os
 import shutil
 import zipfile
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def md5sum(filepath: str) -> str:
     """Compute the MD5 hash of a file."""
@@ -67,17 +65,23 @@ def deduplicate_tgz(tgz_files: list[str], folder_name: str, dry_run: bool) -> tu
     return unique, len(duplicates)
 
 
-def process(dry_run: bool = False) -> None:
+def process(target_dir: str, project_name: str = None, dry_run: bool = False) -> None:
     removed_folders = []
     created_zips = []
     total_duplicates = 0
 
+    # Create archive directory for output zip files
+    archive_dir = os.path.join(target_dir, "archive")
+    if not dry_run and not os.path.exists(archive_dir):
+        os.makedirs(archive_dir)
+        print(f"Created archive directory: {archive_dir}")
+
     # Collect all immediate subdirectories (sorted for consistent ordering)
-    entries = sorted(os.listdir(BASE_DIR))
+    entries = sorted(os.listdir(target_dir))
     subdirs = [
-        os.path.join(BASE_DIR, entry)
+        os.path.join(target_dir, entry)
         for entry in entries
-        if os.path.isdir(os.path.join(BASE_DIR, entry))
+        if os.path.isdir(os.path.join(target_dir, entry)) and entry != "archive"
     ]
 
     for folder in subdirs:
@@ -100,7 +104,7 @@ def process(dry_run: bool = False) -> None:
 
             # ---------- Zip unique .tgz files in the folder ----------
             zip_filename = folder_name + ".zip"
-            zip_path = os.path.join(BASE_DIR, zip_filename)
+            zip_path = os.path.join(archive_dir, zip_filename)
 
             if dry_run:
                 print(
@@ -119,16 +123,46 @@ def process(dry_run: bool = False) -> None:
                 )
             created_zips.append(zip_filename)
 
+    # ---------- Create Final Project Archive ----------
+    if created_zips and not dry_run:
+        final_archive_name = project_name or "batch_project"
+        final_archive_path = os.path.join(target_dir, f"{final_archive_name}.zip")
+        
+        print(f"\nCreating final project archive: {final_archive_name}.zip")
+        
+        with zipfile.ZipFile(final_archive_path, "w", zipfile.ZIP_DEFLATED) as final_zip:
+            # Add all files from the archive directory
+            for root, dirs, files in os.walk(archive_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    archive_name = os.path.relpath(file_path, target_dir)
+                    final_zip.write(file_path, arcname=archive_name)
+                    
+        print(f"Final archive created: {final_archive_path}")
+
     # ---------- Summary ----------
     print("\n--- Summary ---")
     print(f"Folders removed   : {len(removed_folders)}")
     print(f"Duplicates removed: {total_duplicates}")
     print(f"Zip files created : {len(created_zips)}")
+    if created_zips and not dry_run:
+        print(f"Archive directory : archive/ ({len(created_zips)} zip files)")
+        print(f"Final archive     : {project_name or 'batch_project'}.zip")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Remove empty CPE log folders and zip .tgz archives."
+    )
+    parser.add_argument(
+        "--target-dir",
+        default=os.path.dirname(os.path.abspath(__file__)),
+        help="Directory containing CPE log folders to process (default: script directory).",
+    )
+    parser.add_argument(
+        "--project-name",
+        default="batch_project",
+        help="Name for the final project archive (default: batch_project).",
     )
     parser.add_argument(
         "--dry-run",
@@ -137,4 +171,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    process(dry_run=args.dry_run)
+    process(target_dir=args.target_dir, project_name=args.project_name, dry_run=args.dry_run)

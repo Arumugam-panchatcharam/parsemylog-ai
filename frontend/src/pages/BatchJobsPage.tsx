@@ -1,11 +1,17 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate } from "react-router-dom";
-import { batchJobsApi, type BatchJob } from "@/api/endpoints";
+import { batchJobsApi, projectsApi, type BatchJob } from "@/api/endpoints";
+import { useChunkedUpload } from "@/hooks/useChunkedUpload";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
+import CancelIcon from "@mui/icons-material/Cancel";
+import DownloadIcon from "@mui/icons-material/Download";
+import InfoIcon from "@mui/icons-material/Info";
 import CircularProgress from "@mui/material/CircularProgress";
+import LinearProgress from "@mui/material/LinearProgress";
 
 export default function BatchJobsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -13,18 +19,50 @@ export default function BatchJobsPage() {
   const queryClient = useQueryClient();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [cpeFolderPath, setCpeFolderPath] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadMode, setUploadMode] = useState<"folder" | "file">("folder");
 
   // Fetch batch jobs
   const { data: jobsData, isLoading } = useQuery({
     queryKey: ["batchJobs", projectId],
     queryFn: () => batchJobsApi.list(projectId!),
     enabled: !!projectId,
-    refetchInterval: 5000, // Poll every 5 seconds
+    refetchInterval: (data) => {
+      // Only poll if there are active jobs (queued or processing)
+      const jobs = data?.data?.jobs || [];
+      const hasActiveJobs = jobs.some((job: BatchJob) => 
+        job.status === "queued" || job.status === "processing"
+      );
+      return hasActiveJobs ? 5000 : false; // Poll every 5 seconds if active, stop if all complete
+    },
+  });
+
+  // Fetch project details for displaying name in instructions
+  const { data: projectData } = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => projectsApi.get(projectId!),
+    enabled: !!projectId,
   });
 
   const jobs = jobsData?.data?.jobs || [];
+  const project = projectData?.data;
 
-  // Create batch job mutation
+  // Chunked upload hook
+  const { progress, uploadFile, cancel, reset, isUploading } = useChunkedUpload(
+    projectId!,
+    {
+      onProgress: (progress) => {
+        if (progress.status === "completed" && progress.jobId) {
+          // Refresh the jobs list when upload completes
+          queryClient.invalidateQueries({ queryKey: ["batchJobs", projectId] });
+          // Navigate to the job detail page
+          navigate(`/projects/${projectId}/batch-jobs/${progress.jobId}`);
+        }
+      },
+    }
+  );
+
+  // Create batch job mutation (for folder mode)
   const createJobMutation = useMutation({
     mutationFn: (folderPath: string) =>
       batchJobsApi.create(projectId!, folderPath),
@@ -43,12 +81,63 @@ export default function BatchJobsPage() {
     },
   });
 
-  const handleCreateJob = () => {
-    if (!cpeFolderPath.trim()) {
-      alert("Please enter a valid folder path");
-      return;
+  const handleCreateJob = async () => {
+    if (uploadMode === "folder") {
+      if (!cpeFolderPath.trim()) {
+        alert("Please enter a valid folder path");
+        return;
+      }
+      createJobMutation.mutate(cpeFolderPath);
+    } else {
+      if (!selectedFile) {
+        alert("Please select a file to upload");
+        return;
+      }
+      try {
+        await uploadFile(selectedFile);
+        setShowCreateDialog(false);
+        setSelectedFile(null);
+        reset();
+      } catch (error) {
+        console.error("Upload failed:", error);
+        // Error is already shown in progress
+      }
     }
-    createJobMutation.mutate(cpeFolderPath);
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    setSelectedFile(file || null);
+  };
+
+  const handleCancel = () => {
+    if (isUploading) {
+      cancel();
+    }
+    setShowCreateDialog(false);
+    setCpeFolderPath("");
+    setSelectedFile(null);
+    reset();
+  };
+
+  const handleDownloadScript = async () => {
+    try {
+      const response = await batchJobsApi.downloadScript(projectId!);
+      
+      // Create blob and download
+      const blob = new Blob([response.data], { type: "text/x-python" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "process_cpe_logs.py";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to download script:", error);
+      alert("Failed to download script. Please try again.");
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -82,6 +171,11 @@ export default function BatchJobsPage() {
     return `${Math.floor(seconds)}s`;
   };
 
+  // Check if there are any active jobs
+  const hasActiveJobs = jobs.some(job => 
+    job.status === "queued" || job.status === "processing"
+  );
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -102,7 +196,15 @@ export default function BatchJobsPage() {
         </div>
         <button
           onClick={() => setShowCreateDialog(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+          disabled={hasActiveJobs || isUploading}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title={
+            hasActiveJobs 
+              ? "Cannot start new job while another job is running"
+              : isUploading 
+              ? "Upload in progress"
+              : "Create a new batch job"
+          }
         >
           <AddIcon style={{ fontSize: 20 }} />
           New Batch Job
@@ -112,48 +214,180 @@ export default function BatchJobsPage() {
       {/* Create Dialog */}
       {showCreateDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-card border border-border rounded-xl p-6 max-w-md w-full mx-4">
+          <div className="bg-card border border-border rounded-xl p-6 max-w-lg w-full mx-4">
             <h2 className="text-xl font-semibold mb-4">Create Batch Job</h2>
+
+            {/* Upload Mode Selection */}
             <div className="mb-4">
-              <label className="block text-sm font-medium mb-2">
-                CPE Folder Name
-              </label>
-              <input
-                type="text"
-                value={cpeFolderPath}
-                onChange={(e) => setCpeFolderPath(e.target.value)}
-                placeholder="cpe_logs_batch_01-100"
-                title="Folder name under /app/batch_cpe_logs/ containing CPE .zip files"
-                className="w-full px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Folder name inside /app/batch_cpe_logs/ containing .zip files
-              </p>
+              <label className="block text-sm font-medium mb-2">Upload Method</label>
+              <div className="flex gap-4">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="uploadMode"
+                    value="folder"
+                    checked={uploadMode === "folder"}
+                    onChange={(e) => setUploadMode(e.target.value as "folder" | "file")}
+                    className="mr-2"
+                    disabled={isUploading}
+                  />
+                  Server Folder
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="uploadMode"
+                    value="file"
+                    checked={uploadMode === "file"}
+                    onChange={(e) => setUploadMode(e.target.value as "folder" | "file")}
+                    className="mr-2"
+                    disabled={isUploading}
+                  />
+                  File Upload
+                </label>
+              </div>
             </div>
+
+            {uploadMode === "folder" ? (
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-2">
+                  CPE Folder Name
+                </label>
+                <input
+                  type="text"
+                  value={cpeFolderPath}
+                  onChange={(e) => setCpeFolderPath(e.target.value)}
+                  placeholder="cpe_logs_batch_01-100"
+                  title="Folder name under /app/batch_cpe_logs/ containing CPE .zip files"
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                  disabled={isUploading}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Folder name inside /app/batch_cpe_logs/ containing .zip files
+                </p>
+              </div>
+            ) : (
+              <div className="mb-4">
+                {/* Instructions Panel */}
+                <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <InfoIcon className="text-blue-600 mt-0.5" style={{ fontSize: 16 }} />
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-blue-900 mb-2">
+                        Prepare Your CPE Logs Locally
+                      </h4>
+                      <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
+                        <li>Download the processing script using the button below</li>
+                        <li>Place the script in your folder containing CPE log subdirectories</li>
+                        <li>Run: <code className="bg-blue-100 px-1 rounded">python process_cpe_logs.py --target-dir . --project-name {project?.name || "my_project"}</code></li>
+                        <li>The script will:
+                          <ul className="ml-4 mt-1 space-y-0.5 list-disc list-inside">
+                            <li>Remove duplicates and create individual CPE .zip files in archive/</li>
+                            <li>Create a final project archive: <strong>{project?.name || "my_project"}.zip</strong></li>
+                          </ul>
+                        </li>
+                        <li>Upload the final <strong>{project?.name || "my_project"}.zip</strong> file using the input below</li>
+                      </ol>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleDownloadScript}
+                    disabled={isUploading}
+                    className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    <DownloadIcon style={{ fontSize: 14 }} />
+                    Download process_cpe_logs.py
+                  </button>
+                </div>
+
+                <label className="block text-sm font-medium mb-2">
+                  Archive File
+                </label>
+                <input
+                  type="file"
+                  accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2"
+                  onChange={handleFileSelect}
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                  disabled={isUploading}
+                />
+                {selectedFile && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Selected: {selectedFile.name} ({(selectedFile.size / (1024 * 1024)).toFixed(1)} MB)
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground mt-1">
+                  Upload a .zip archive containing processed CPE files. Supports files up to 10GB with resume capability.
+                </p>
+              </div>
+            )}
+
+            {/* Upload Progress */}
+            {isUploading && (
+              <div className="mb-4 p-4 bg-muted rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">
+                    {progress.status === "uploading" ? "Uploading..." : "Processing..."}
+                  </span>
+                  <span className="text-sm text-muted-foreground">
+                    {progress.progress}%
+                  </span>
+                </div>
+                <LinearProgress 
+                  variant="determinate" 
+                  value={progress.progress} 
+                  className="mb-2"
+                />
+                <div className="text-xs text-muted-foreground">
+                  {progress.message && <p>{progress.message}</p>}
+                  {progress.status === "uploading" && (
+                    <p>
+                      {(progress.uploadedBytes / (1024 * 1024)).toFixed(1)} MB / {(progress.totalBytes / (1024 * 1024)).toFixed(1)} MB
+                    </p>
+                  )}
+                </div>
+                {progress.error && (
+                  <p className="text-sm text-red-600 mt-2">{progress.error}</p>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => {
-                  setShowCreateDialog(false);
-                  setCpeFolderPath("");
-                }}
+                onClick={handleCancel}
                 className="px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
+                disabled={progress.status === "processing"}
               >
-                Cancel
+                {isUploading ? (
+                  <>
+                    <CancelIcon style={{ fontSize: 16 }} className="mr-2" />
+                    Cancel Upload
+                  </>
+                ) : (
+                  "Cancel"
+                )}
               </button>
               <button
                 onClick={handleCreateJob}
-                disabled={createJobMutation.isPending}
+                disabled={
+                  isUploading ||
+                  createJobMutation.isPending ||
+                  (uploadMode === "folder" ? !cpeFolderPath.trim() : !selectedFile)
+                }
                 className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
                 {createJobMutation.isPending ? (
                   <CircularProgress size={16} className="mr-2" />
-                ) : null}
-                Create Job
+                ) : isUploading ? null : (
+                  uploadMode === "file" ? (
+                    <CloudUploadIcon style={{ fontSize: 16 }} className="mr-2" />
+                  ) : null
+                )}
+                {uploadMode === "file" && !isUploading ? "Upload & Process" : "Create Job"}
               </button>
             </div>
             {createJobMutation.isError && (
               <p className="text-sm text-red-600 mt-2">
-                Error: {(createJobMutation.error as any)?.response?.data?.error || "Failed to create job"}
+                Error: {createJobMutation.error?.message || "Failed to create job"}
               </p>
             )}
           </div>
@@ -166,7 +400,8 @@ export default function BatchJobsPage() {
           <p className="text-muted-foreground mb-4">No batch jobs yet</p>
           <button
             onClick={() => setShowCreateDialog(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            disabled={isUploading}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
             <AddIcon style={{ fontSize: 20 }} />
             Create Your First Batch Job
