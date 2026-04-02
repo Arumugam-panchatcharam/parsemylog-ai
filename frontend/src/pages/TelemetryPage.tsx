@@ -293,9 +293,9 @@ export default function TelemetryPage() {
                 className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border hover:bg-muted transition-colors"
               >
                 <ExploreIcon style={{ fontSize: 15 }} />
-                Available Fields
+                All Fields
                 {data.available_fields?.stats && (
-                  <span className="text-[10px] bg-primary/10 text-primary rounded px-1">{data.available_fields.stats.unconfigured}</span>
+                  <span className="text-[10px] bg-primary/10 text-primary rounded px-1">{data.available_fields.stats.total_fields}</span>
                 )}
               </button>
             </>
@@ -1122,10 +1122,11 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
   );
 }
 
-/* ================================================================ Available Fields Discovery */
+/* ================================================================ All Extracted Fields Discovery */
 function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; onClose: () => void }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
+  const [showMode, setShowMode] = useState<"all" | "configured" | "unconfigured">("all");
 
   const toggle = (g: string) => setExpandedGroups((prev) => {
     const next = new Set(prev);
@@ -1136,23 +1137,43 @@ function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; on
   const typeBadge = (t: string) => {
     if (t === "numeric") return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
     if (t === "status") return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400";
+    if (t === "configured") return "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400";
     return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
   };
 
+  // Create configured fields in same format as unconfigured
+  const configuredAsGroups = { "Configured Fields": fields.configured_keys.map(key => ({
+    key,
+    type: "configured",
+    plottable: false,
+    count: 1,
+    samples: ["(configured)"]
+  })) };
+
+  // Combine all groups based on show mode
+  const allGroups = showMode === "configured" ? configuredAsGroups :
+                   showMode === "unconfigured" ? fields.unconfigured :
+                   { ...configuredAsGroups, ...fields.unconfigured };
+
   const filterLower = filter.toLowerCase();
-  const filteredGroups = Object.entries(fields.unconfigured)
+  const filteredGroups = Object.entries(allGroups)
     .map(([group, items]) => ({
       group,
       items: filterLower ? items.filter((f) => f.key.toLowerCase().includes(filterLower)) : items,
     }))
     .filter((g) => g.items.length > 0)
-    .sort((a, b) => b.items.length - a.items.length);
+    .sort((a, b) => {
+      // Sort "Configured Fields" first if present
+      if (a.group === "Configured Fields") return -1;
+      if (b.group === "Configured Fields") return 1;
+      return b.items.length - a.items.length;
+    });
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
       <div className="px-4 py-2.5 border-b border-border bg-muted/30 flex items-center gap-2">
         <ExploreIcon style={{ fontSize: 16, color: "#1a73e8" }} />
-        <h3 className="text-sm font-semibold flex-1">Available TR-181 Fields</h3>
+        <h3 className="text-sm font-semibold flex-1">All Extracted Telemetry Fields</h3>
         <span className="text-[10px] text-muted-foreground">
           {fields.stats.configured} configured / {fields.stats.unconfigured} available / {fields.stats.total_fields} total
         </span>
@@ -1161,12 +1182,35 @@ function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; on
         </button>
       </div>
 
-      <div className="px-4 py-2 border-b border-border">
+      <div className="px-4 py-2 border-b border-border space-y-2">
+        {/* View Mode Toggle */}
+        <div className="flex items-center gap-1">
+          <span className="text-xs font-medium text-muted-foreground mr-2">View:</span>
+          {[
+            { key: "all", label: "All Fields" },
+            { key: "configured", label: "Configured" },
+            { key: "unconfigured", label: "Available" }
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setShowMode(key as any)}
+              className={`px-2 py-1 text-xs rounded transition-colors ${
+                showMode === key
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        
+        {/* Search Filter */}
         <input
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter fields... (e.g. WiFi, Ethernet, DSL, Temperature)"
+          placeholder="Filter fields... (e.g. WiFi, Ethernet, DSL, Temperature, meminfoavailable)"
           className="w-full px-3 py-1.5 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
       </div>
@@ -1181,6 +1225,7 @@ function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; on
           const isOpen = expandedGroups.has(group);
           const numericCount = items.filter((f) => f.type === "numeric").length;
           const statusCount = items.filter((f) => f.type === "status").length;
+          const configuredCount = items.filter((f) => f.type === "configured").length;
           return (
             <div key={group}>
               <button
@@ -1192,6 +1237,11 @@ function AvailableFieldsPanel({ fields, onClose }: { fields: AvailableFields; on
                   : <ExpandMoreIcon style={{ fontSize: 16 }} />}
                 <span className="text-sm font-medium flex-1">{group}</span>
                 <span className="text-[10px] text-muted-foreground">{items.length} fields</span>
+                {configuredCount > 0 && (
+                  <span className="text-[10px] bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 rounded px-1.5 py-0.5">
+                    {configuredCount} configured
+                  </span>
+                )}
                 {numericCount > 0 && (
                   <span className="text-[10px] bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded px-1.5 py-0.5">
                     {numericCount} plottable

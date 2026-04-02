@@ -215,19 +215,38 @@ field_groups:
   # -------------------------------------------------------------------------
   - label: "Memory"
     fields:
-      - key: "Device.DeviceInfo.MemoryStatus.Free"
+      # Standard NATCO field names (commonly available across all projects)
+      - key: "MemInfoFree"
         label: "Memory Free"
         type: numeric
         unit: "KB"
         plot: true
 
-      - key: "Device.DeviceInfo.MemoryStatus.Total"
+      - key: "MemInfoTotal"
         label: "Memory Total"
         type: numeric
         unit: "KB"
 
-      - key: "Device.DeviceInfo.MemoryStatus.Available"
+      - key: "meminfoavailable_split"
         label: "Memory Available"
+        type: numeric
+        unit: "KB"
+        plot: true
+
+      # Fallback TR-181 paths for compatibility
+      - key: "Device.DeviceInfo.MemoryStatus.Free"
+        label: "Memory Free (TR-181)"
+        type: numeric
+        unit: "KB"
+        plot: true
+
+      - key: "Device.DeviceInfo.MemoryStatus.Total"
+        label: "Memory Total (TR-181)"
+        type: numeric
+        unit: "KB"
+
+      - key: "Device.DeviceInfo.MemoryStatus.Available"
+        label: "Memory Available (TR-181)"
         type: numeric
         unit: "KB"
         plot: true
