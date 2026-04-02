@@ -22,9 +22,9 @@ export default function BatchJobDetailPage() {
     queryKey: ["batchJob", projectId, jobId],
     queryFn: () => batchJobsApi.get(projectId!, jobId!),
     enabled: !!projectId && !!jobId,
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Only poll if job is still active (queued or processing)
-      const job = data?.data;
+      const job = query.state.data?.data;
       const isActive = job?.status === "queued" || job?.status === "processing";
       return isActive ? 3000 : false; // Poll every 3 seconds if active, stop if complete
     },
@@ -35,7 +35,7 @@ export default function BatchJobDetailPage() {
     queryKey: ["batchJobCPEs", projectId, jobId, statusFilter],
     queryFn: () => batchJobsApi.listCPEs(projectId!, jobId!, statusFilter),
     enabled: !!projectId && !!jobId,
-    refetchInterval: (data, query) => {
+    refetchInterval: () => {
       // Only poll if parent job is still active
       const job = jobData?.data;
       const isActive = job?.status === "queued" || job?.status === "processing";

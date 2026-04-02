@@ -27,6 +27,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import CloseIcon from "@mui/icons-material/Close";
+import FilterListIcon from "@mui/icons-material/FilterList";
 import PatternOverviewTab from "@/pages/PatternOverviewTab";
 
 // Memoized Plot component to prevent unnecessary re-renders
@@ -326,6 +327,7 @@ export default function PatternAnalyzerPage() {
               name: p.name, regex: p.regex, enabled: p.enabled, change_type: "new",
               ...(p.maintenance_window ? { maintenance_window: p.maintenance_window } : {}),
               ...(p.reboot_proximity_minutes != null ? { reboot_proximity_minutes: p.reboot_proximity_minutes } : {}),
+              ...(p.min_frequency_threshold != null ? { min_frequency_threshold: p.min_frequency_threshold } : {}),
             });
           }
         }
@@ -335,6 +337,7 @@ export default function PatternAnalyzerPage() {
               name: p.name, regex: p.regex, enabled: p.enabled, change_type: "modified",
               ...(p.maintenance_window ? { maintenance_window: p.maintenance_window } : {}),
               ...(p.reboot_proximity_minutes != null ? { reboot_proximity_minutes: p.reboot_proximity_minutes } : {}),
+              ...(p.min_frequency_threshold != null ? { min_frequency_threshold: p.min_frequency_threshold } : {}),
             });
           }
         }
@@ -621,6 +624,15 @@ export default function PatternAnalyzerPage() {
     }));
   };
 
+  const updatePatternFT = (domain: string, idx: number, threshold: number | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) =>
+        i === idx ? { ...p, min_frequency_threshold: threshold } : p
+      ),
+    }));
+  };
+
   const [mwEditTarget, setMwEditTarget] = useState<string | null>(null);
   const mwKey = (domain: string, idx: number) => `${domain}::${idx}`;
 
@@ -643,11 +655,35 @@ export default function PatternAnalyzerPage() {
           const imported: DomainPatterns = {};
           for (const [domain, pats] of Object.entries(json.domains)) {
             if (Array.isArray(pats)) {
-              imported[domain] = (pats as UserPattern[]).map((p) => ({
-                name: String(p.name || "").slice(0, 100),
-                regex: String(p.regex || ""),
-                enabled: p.enabled !== false,
-              })).filter((p) => p.regex);
+              imported[domain] = (pats as UserPattern[]).map((p) => {
+                const pattern: UserPattern = {
+                  name: String(p.name || "").slice(0, 100),
+                  regex: String(p.regex || ""),
+                  enabled: p.enabled !== false,
+                };
+                // Preserve maintenance_window if present
+                if (p.maintenance_window && typeof p.maintenance_window === "object") {
+                  const mw = p.maintenance_window as { start?: string; end?: string };
+                  if (mw.start && mw.end) {
+                    pattern.maintenance_window = { start: mw.start, end: mw.end };
+                  }
+                }
+                // Preserve reboot_proximity_minutes if present
+                if (p.reboot_proximity_minutes != null) {
+                  const rp = Number(p.reboot_proximity_minutes);
+                  if (!isNaN(rp) && rp >= 1 && rp <= 60) {
+                    pattern.reboot_proximity_minutes = rp;
+                  }
+                }
+                // Preserve min_frequency_threshold if present
+                if (p.min_frequency_threshold != null) {
+                  const ft = Number(p.min_frequency_threshold);
+                  if (!isNaN(ft) && ft >= 1 && ft <= 1000) {
+                    pattern.min_frequency_threshold = ft;
+                  }
+                }
+                return pattern;
+              }).filter((p) => p.regex);
             }
           }
           // Merge into existing
@@ -667,11 +703,35 @@ export default function PatternAnalyzerPage() {
         if (Array.isArray(json)) {
           // Flat array → "Imported" domain
           const imported: UserPattern[] = json
-            .map((item: Record<string, unknown>) => ({
-              name: String(item.name || item.template || item.regex || "").slice(0, 100),
-              regex: String(item.regex || item.pattern || item.template || ""),
-              enabled: item.enabled !== false,
-            }))
+            .map((item: Record<string, unknown>) => {
+              const pattern: UserPattern = {
+                name: String(item.name || item.template || item.regex || "").slice(0, 100),
+                regex: String(item.regex || item.pattern || item.template || ""),
+                enabled: item.enabled !== false,
+              };
+              // Preserve maintenance_window if present
+              if (item.maintenance_window && typeof item.maintenance_window === "object") {
+                const mw = item.maintenance_window as { start?: string; end?: string };
+                if (mw.start && mw.end) {
+                  pattern.maintenance_window = { start: mw.start, end: mw.end };
+                }
+              }
+              // Preserve reboot_proximity_minutes if present
+              if (item.reboot_proximity_minutes != null) {
+                const rp = Number(item.reboot_proximity_minutes);
+                if (!isNaN(rp) && rp >= 1 && rp <= 60) {
+                  pattern.reboot_proximity_minutes = rp;
+                }
+              }
+              // Preserve min_frequency_threshold if present
+              if (item.min_frequency_threshold != null) {
+                const ft = Number(item.min_frequency_threshold);
+                if (!isNaN(ft) && ft >= 1 && ft <= 1000) {
+                  pattern.min_frequency_threshold = ft;
+                }
+              }
+              return pattern;
+            })
             .filter((p: UserPattern) => p.regex);
           if (imported.length > 0) {
             setDomains((prev) => {
@@ -1201,7 +1261,8 @@ export default function PatternAnalyzerPage() {
                             const mwOpen = mwEditTarget === key;
                             const hasMW = !!(p.maintenance_window?.start && p.maintenance_window?.end);
                             const hasRP = !!(p.reboot_proximity_minutes && p.reboot_proximity_minutes > 0);
-                            const hasFilters = hasMW || hasRP;
+                            const hasFT = !!(p.min_frequency_threshold && p.min_frequency_threshold > 0);
+                            const hasFilters = hasMW || hasRP || hasFT;
                             return (
                               <div key={idx} ref={scrollTarget?.domain === domain && scrollTarget?.idx === idx ? newPatternRef : undefined}>
                                 <div className="grid grid-cols-[32px_1fr_2fr_auto_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
@@ -1237,16 +1298,23 @@ export default function PatternAnalyzerPage() {
                                         ? [
                                             hasMW ? `MW: ${p.maintenance_window!.start}–${p.maintenance_window!.end} UTC` : "",
                                             hasRP ? `Reboot: ±${p.reboot_proximity_minutes}min` : "",
+                                            hasFT ? `Frequency: >${p.min_frequency_threshold}` : "",
                                           ].filter(Boolean).join(" | ")
                                         : "Set exclusion filters"
                                     }
                                   >
-                                    <ScheduleIcon style={{ fontSize: 13 }} />
+                                    <FilterListIcon style={{ fontSize: 13 }} />
                                     {hasMW && <span>{p.maintenance_window!.start}–{p.maintenance_window!.end}</span>}
                                     {hasRP && (
                                       <span className="flex items-center gap-0.5">
                                         <RestartAltIcon style={{ fontSize: 11 }} />
                                         ±{p.reboot_proximity_minutes}m
+                                      </span>
+                                    )}
+                                    {hasFT && (
+                                      <span className="flex items-center gap-0.5">
+                                        <span className="text-[9px]">&gt;</span>
+                                        {p.min_frequency_threshold}
                                       </span>
                                     )}
                                   </button>
@@ -1317,6 +1385,33 @@ export default function PatternAnalyzerPage() {
                                           onClick={() => updatePatternRP(domain, idx, null)}
                                           className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
                                           title="Remove reboot proximity filter"
+                                        >
+                                          <CloseIcon style={{ fontSize: 13 }} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800/40 text-[11px]">
+                                      <FilterListIcon style={{ fontSize: 13 }} className="text-green-600 dark:text-green-400 shrink-0" />
+                                      <span className="text-muted-foreground whitespace-nowrap">Min frequency threshold:</span>
+                                      <span className="text-muted-foreground">&gt;</span>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={1000}
+                                        value={p.min_frequency_threshold ?? ""}
+                                        onChange={(e) => {
+                                          const v = e.target.value;
+                                          updatePatternFT(domain, idx, v === "" ? null : Math.max(1, Math.min(1000, parseInt(v, 10) || 1)));
+                                        }}
+                                        placeholder="count"
+                                        className="text-xs px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-green-500 w-[60px] text-center"
+                                      />
+                                      <span className="text-muted-foreground">occurrences to include CPE</span>
+                                      {hasFT && (
+                                        <button
+                                          onClick={() => updatePatternFT(domain, idx, null)}
+                                          className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
+                                          title="Remove frequency threshold filter"
                                         >
                                           <CloseIcon style={{ fontSize: 13 }} />
                                         </button>
@@ -1493,6 +1588,9 @@ export default function PatternAnalyzerPage() {
                                       {p.reboot_proximity_minutes != null && (
                                         <span className="text-[10px] text-orange-600 dark:text-orange-400" title="Reboot proximity">±{p.reboot_proximity_minutes}m</span>
                                       )}
+                                      {p.min_frequency_threshold != null && (
+                                        <span className="text-[10px] text-green-600 dark:text-green-400" title="Frequency threshold">&gt;{p.min_frequency_threshold}</span>
+                                      )}
                                     </div>
                                     <code className="text-[11px] font-mono text-muted-foreground block truncate mt-0.5">{p.regex}</code>
                                   </div>
@@ -1507,6 +1605,7 @@ export default function PatternAnalyzerPage() {
                               const gMwStr = p.global_maintenance_window ? `${p.global_maintenance_window.start}–${p.global_maintenance_window.end}` : "none";
                               const mwChanged = mwStr !== gMwStr;
                               const rpChanged = (p.reboot_proximity_minutes ?? null) !== (p.global_reboot_proximity_minutes ?? null);
+                              const ftChanged = (p.min_frequency_threshold ?? null) !== (p.global_min_frequency_threshold ?? null);
                               return (
                                 <label key={key} className="flex items-start gap-3 px-4 py-2 hover:bg-muted/20 cursor-pointer">
                                   <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-blue-600 shrink-0" />
@@ -1528,6 +1627,9 @@ export default function PatternAnalyzerPage() {
                                       )}
                                       {rpChanged && (
                                         <span className="text-[10px] text-orange-600 dark:text-orange-400">Reboot: ±{p.global_reboot_proximity_minutes ?? "none"}m → ±{p.reboot_proximity_minutes ?? "none"}m</span>
+                                      )}
+                                      {ftChanged && (
+                                        <span className="text-[10px] text-green-600 dark:text-green-400">Freq: &gt;{p.global_min_frequency_threshold ?? "none"} → &gt;{p.min_frequency_threshold ?? "none"}</span>
                                       )}
                                     </div>
                                   </div>

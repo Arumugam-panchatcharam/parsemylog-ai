@@ -2,6 +2,7 @@
 user_uploads/
 data/
 Locals/
+batch_cpe_logs/
 qdrant_storage/
 all-MiniLM-L6-v2-local/
 bge-small-en-v1.5-local/

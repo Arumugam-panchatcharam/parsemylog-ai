@@ -27,9 +27,9 @@ export default function BatchJobsPage() {
     queryKey: ["batchJobs", projectId],
     queryFn: () => batchJobsApi.list(projectId!),
     enabled: !!projectId,
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Only poll if there are active jobs (queued or processing)
-      const jobs = data?.data?.jobs || [];
+      const jobs = query.state.data?.data?.jobs || [];
       const hasActiveJobs = jobs.some((job: BatchJob) => 
         job.status === "queued" || job.status === "processing"
       );

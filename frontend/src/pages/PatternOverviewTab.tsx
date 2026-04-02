@@ -10,6 +10,8 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import FilterListIcon from "@mui/icons-material/FilterList";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 
 /* ---------------------------------------------------------------- Types */
 
@@ -82,6 +84,9 @@ export default function PatternOverviewTab() {
   const [rebootWindowMinutes, setRebootWindowMinutes] = useState<number>(60); // Default 1 hour
   const [enableRebootFilter, setEnableRebootFilter] = useState<boolean>(true);
   const [filterShortReboots, setFilterShortReboots] = useState(true);
+  const [minFrequencyThreshold, setMinFrequencyThreshold] = useState<number>(1);
+  const [enableFrequencyFilter, setEnableFrequencyFilter] = useState<boolean>(false);
+  const [isChartCollapsed, setIsChartCollapsed] = useState<boolean>(false);
 
   const { data: cpeList } = useQuery<Array<{ serial: string }>>({
     queryKey: ["cpe-list", projectId],
@@ -99,11 +104,13 @@ export default function PatternOverviewTab() {
   });
 
   const scanMutation = useMutation({
-    mutationFn: async () => 
-      (await cpeOverviewApi.runPatternScan(projectId!, {
+    mutationFn: async () => {
+      return (await cpeOverviewApi.runPatternScan(projectId!, {
         reboot_window_minutes: enableRebootFilter ? rebootWindowMinutes : undefined,
-        filter_short_reboots: filterShortReboots
-      })).data,
+        filter_short_reboots: filterShortReboots,
+        min_frequency_threshold: enableFrequencyFilter ? minFrequencyThreshold : undefined
+      })).data;
+    },
     onSuccess: (data) => {
       queryClient.setQueryData(["cpe-overview-pattern-scan", projectId], data);
     },
@@ -269,92 +276,146 @@ export default function PatternOverviewTab() {
 
   return (
     <div className="space-y-3">
-      {/* Reboot Timeline Filter */}
-      <div className="bg-card border border-border rounded-xl p-4">
-        <div className="space-y-3">
-          {/* Enable/Disable Reboot Filter */}
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Reboot Timeline Filter
-            </h3>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={enableRebootFilter}
-                onChange={(e) => setEnableRebootFilter(e.target.checked)}
-                className="h-4 w-4 accent-blue-600"
-              />
-              <span className="text-xs">Enable</span>
-            </label>
+      {/* Enhanced Controls bar with integrated filters */}
+      <div className="bg-card border border-border rounded-xl p-3 space-y-3">
+        {/* Stats and main controls row */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span>
+              <strong className="text-foreground">{totalCpes}</strong> CPEs
+            </span>
+            <span className="text-border">|</span>
+            <span>
+              <strong className="text-foreground">{rows.length}</strong> patterns across{" "}
+              <strong className="text-foreground">{domainNames.length}</strong> domains
+            </span>
+            {scanData?.scanned_at && (
+              <>
+                <span className="text-border">|</span>
+                <span>
+                  Scanned {new Date(scanData.scanned_at).toLocaleString()}
+                  {scanData.elapsed_ms ? ` (${(scanData.elapsed_ms / 1000).toFixed(1)}s)` : ""}
+                </span>
+              </>
+            )}
           </div>
-          
-          {/* Short Reboot Filter */}
-          <label className="flex items-center gap-2 cursor-pointer select-none pl-2 py-1">
-            <input
-              type="checkbox"
-              checked={filterShortReboots}
-              onChange={(e) => setFilterShortReboots(e.target.checked)}
-              className="h-4 w-4 accent-purple-600"
-            />
-            <span className="text-xs text-muted-foreground">Short reboots only</span>
-          </label>
-          
-          {enableRebootFilter && (
-            <div>
-              <label className="text-xs text-muted-foreground block mb-2">
-                Show matches within {rebootWindowMinutes} minutes before each reboot
-              </label>
-              <input
-                type="range"
-                min="15"
-                max="360"
-                step="15"
-                value={rebootWindowMinutes}
-                onChange={(e) => setRebootWindowMinutes(Number(e.target.value))}
-                className="w-full"
-              />
-              <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                <span>15 min</span>
-                <span>6 hours</span>
+          <div className="flex items-center gap-2">
+            <select
+              value={domainFilter}
+              onChange={(e) => setDomainFilter(e.target.value)}
+              className="text-xs px-2 py-1.5 border border-border rounded-lg bg-background focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="all">All Domains</option>
+              {domainNames.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+            {scanButton}
+          </div>
+        </div>
+
+        {/* Filter status indicator */}
+        {(enableRebootFilter || enableFrequencyFilter) && (
+          <div className="text-xs text-primary bg-primary/10 px-3 py-1.5 rounded-lg border border-primary/20">
+            <span className="font-medium">Filters Active:</span>
+            {enableRebootFilter && (
+              <span className="ml-2">Reboot Timeline (±{rebootWindowMinutes}min)</span>
+            )}
+            {enableFrequencyFilter && (
+              <span className="ml-2">Frequency Filter (&gt;{minFrequencyThreshold})</span>
+            )}
+          </div>
+        )}
+
+        {/* Compact filters row */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Reboot Timeline Filter - Compact */}
+          <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <RestartAltIcon style={{ fontSize: 14 }} className="text-orange-600" />
+                <span className="text-xs font-medium">Reboot Timeline</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filterShortReboots}
+                    onChange={(e) => setFilterShortReboots(e.target.checked)}
+                    className="h-3 w-3 accent-purple-600"
+                  />
+                  <span className="text-xs text-muted-foreground">Short only</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enableRebootFilter}
+                    onChange={(e) => {
+                      setEnableRebootFilter(e.target.checked);
+                    }}
+                    className="h-3 w-3 accent-orange-600"
+                  />
+                  <span className="text-xs font-medium">Enable</span>
+                </label>
               </div>
             </div>
-          )}
-        </div>
-      </div>
+            {enableRebootFilter && (
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground whitespace-nowrap">±{rebootWindowMinutes}min</span>
+                <input
+                  type="range"
+                  min="15"
+                  max="360"
+                  step="15"
+                  value={rebootWindowMinutes}
+                  onChange={(e) => setRebootWindowMinutes(Number(e.target.value))}
+                  className="flex-1 h-2"
+                />
+                <span className="text-xs text-muted-foreground">6h</span>
+              </div>
+            )}
+          </div>
 
-      {/* Controls bar */}
-      <div className="bg-card border border-border rounded-xl px-3 py-2 flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span>
-            <strong className="text-foreground">{totalCpes}</strong> CPEs
-          </span>
-          <span className="text-border">|</span>
-          <span>
-            <strong className="text-foreground">{rows.length}</strong> patterns across{" "}
-            <strong className="text-foreground">{domainNames.length}</strong> domains
-          </span>
-          {scanData?.scanned_at && (
-            <>
-              <span className="text-border">|</span>
-              <span>
-                Scanned {new Date(scanData.scanned_at).toLocaleString()}
-                {scanData.elapsed_ms ? ` (${(scanData.elapsed_ms / 1000).toFixed(1)}s)` : ""}
-              </span>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={domainFilter}
-            onChange={(e) => setDomainFilter(e.target.value)}
-            className="text-xs px-2 py-1.5 border border-border rounded-lg bg-background focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
-            <option value="all">All Domains</option>
-            {domainNames.map((d) => (
-              <option key={d} value={d}>{d}</option>
-            ))}
-          </select>
-          {scanButton}
+          {/* CPE Frequency Filter - Compact */}
+          <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FilterListIcon style={{ fontSize: 14 }} className="text-blue-600" />
+                <span className="text-xs font-medium">Frequency Filter</span>
+              </div>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableFrequencyFilter}
+                  onChange={(e) => {
+                    setEnableFrequencyFilter(e.target.checked);
+                  }}
+                  className="h-3 w-3 accent-blue-600"
+                />
+                <span className="text-xs font-medium">Enable</span>
+              </label>
+            </div>
+            {enableFrequencyFilter && (
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground whitespace-nowrap">&gt;{minFrequencyThreshold}</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="500"
+                  step="10"
+                  value={minFrequencyThreshold}
+                  onChange={(e) => setMinFrequencyThreshold(Number(e.target.value))}
+                  className="flex-1 h-2"
+                />
+                <span className="text-xs text-muted-foreground">500</span>
+              </div>
+            )}
+            {enableFrequencyFilter && (
+              <p className="text-xs text-muted-foreground">
+                Excludes CPEs with low occurrence counts
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -370,12 +431,25 @@ export default function PatternOverviewTab() {
       {chartData && chartData.y.length > 0 && (
         <div className="bg-card border border-border rounded-xl">
           <div className="px-3 py-1.5 border-b border-border bg-muted/30">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Pattern Spread Across CPEs
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Pattern Spread Across CPEs
+              </h3>
+              <button
+                onClick={() => setIsChartCollapsed(!isChartCollapsed)}
+                className="p-1 rounded hover:bg-muted transition-colors"
+                title={isChartCollapsed ? "Expand chart" : "Collapse chart"}
+              >
+                {isChartCollapsed 
+                  ? <ExpandMoreIcon style={{ fontSize: 16 }} className="text-muted-foreground" />
+                  : <ExpandLessIcon style={{ fontSize: 16 }} className="text-muted-foreground" />
+                }
+              </button>
+            </div>
           </div>
-          <div className="px-2 py-1">
-            <Plot
+          {!isChartCollapsed && (
+            <div className="px-2 py-1">
+              <Plot
               data={[
                 {
                   type: "bar",
@@ -418,7 +492,8 @@ export default function PatternOverviewTab() {
               useResizeHandler
               style={{ width: "100%" }}
             />
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -465,6 +540,12 @@ export default function PatternOverviewTab() {
                 <th
                   className="text-right px-2 py-1 font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap"
                   onClick={() => handleSort("totalMatches")}
+                  title={
+                    enableFrequencyFilter && enableRebootFilter ? "Total matches after applying frequency and reboot filters" :
+                    enableFrequencyFilter ? "Total matches after applying frequency filter" :
+                    enableRebootFilter ? "Total matches after applying reboot timeline filter" :
+                    "Total matches across all CPEs"
+                  }
                 >
                   Matches <SortIcon col="totalMatches" />
                 </th>
@@ -514,7 +595,18 @@ export default function PatternOverviewTab() {
                         </span>
                       </td>
                       <td className="px-2 py-1 text-right tabular-nums font-medium align-top">
-                        {row.totalMatches.toLocaleString()}
+                        <div className="flex flex-col items-end">
+                          <span className="font-semibold">{row.totalMatches.toLocaleString()}</span>
+                          {/* Show specific filter indicators */}
+                          <div className="flex gap-1 flex-wrap justify-end">
+                            {enableFrequencyFilter && (
+                              <span className="text-[9px] text-muted-foreground bg-blue-50 px-1 rounded">freq</span>
+                            )}
+                            {enableRebootFilter && (
+                              <span className="text-[9px] text-muted-foreground bg-orange-50 px-1 rounded">reboot</span>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-0 py-1 text-muted-foreground align-top">
                         {isExpanded
@@ -527,9 +619,14 @@ export default function PatternOverviewTab() {
                       <tr className="border-b bg-muted/10" onClick={(e) => e.stopPropagation()}>
                         <td colSpan={6} className="px-3 py-2">
                           <div className="bg-muted/30 rounded-lg p-2 max-h-[240px] overflow-y-auto">
-                            <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5 tracking-wide">
-                              Per-CPE Breakdown ({row.perCpeCounts.filter((c) => c.count > 0).length} affected)
-                            </p>
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide">
+                                Per-CPE Breakdown
+                              </p>
+                              <div className="text-[9px] text-muted-foreground bg-background px-2 py-0.5 rounded border">
+                                {row.perCpeCounts.filter((c) => c.count > 0).length} CPEs • {row.totalMatches.toLocaleString()} total matches
+                              </div>
+                            </div>
                             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1">
                               {row.perCpeCounts
                                 .filter((c) => c.count > 0)

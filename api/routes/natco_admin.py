@@ -160,6 +160,8 @@ def get_global_patterns(natco_id):
                 pass
         if p.reboot_proximity_minutes is not None:
             entry["reboot_proximity_minutes"] = p.reboot_proximity_minutes
+        if p.min_frequency_threshold is not None:
+            entry["min_frequency_threshold"] = p.min_frequency_threshold
         domains[p.domain].append(entry)
 
     return jsonify({"domains": domains, "natco": {"id": natco.id, "code": natco.code, "name": natco.name}}), 200
@@ -206,6 +208,13 @@ def set_global_patterns(natco_id):
             mw_json = json.dumps(mw) if isinstance(mw, dict) and mw.get("start") and mw.get("end") else None
             rp = p.get("reboot_proximity_minutes")
             rp_val = int(rp) if rp is not None and str(rp).strip().lstrip("-").isdigit() and 1 <= int(rp) <= 60 else None
+            threshold = p.get("min_frequency_threshold")
+            threshold_val = (
+                int(threshold) if threshold is not None
+                and str(threshold).strip().lstrip("-").isdigit()
+                and 1 <= int(threshold) <= 1000
+                else None
+            )
 
             gp = dbm.GlobalPattern(
                 natco_id=natco_id,
@@ -215,6 +224,7 @@ def set_global_patterns(natco_id):
                 enabled=enabled,
                 maintenance_window_json=mw_json,
                 reboot_proximity_minutes=rp_val,
+                min_frequency_threshold=threshold_val,
                 created_by=user_id,
             )
             dbm.db.session.add(gp)
@@ -262,7 +272,9 @@ def import_presets(natco_id):
                 name = rx[:50].replace("\\b", "").replace("\\s+", " ").strip("()?|")
                 dbm.db.session.add(dbm.GlobalPattern(
                     natco_id=natco_id, domain=domain,
-                    name=name, regex=rx, enabled=True, created_by=user_id,
+                    name=name, regex=rx, enabled=True, 
+                    maintenance_window_json=None, reboot_proximity_minutes=None,
+                    min_frequency_threshold=None, created_by=user_id,
                 ))
                 existing.add((domain, rx))
                 imported += 1
@@ -343,6 +355,8 @@ def get_submission(submission_id):
                 pass
         if gp.reboot_proximity_minutes is not None:
             entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+        if gp.min_frequency_threshold is not None:
+            entry["min_frequency_threshold"] = gp.min_frequency_threshold
         current_dict[gp.regex] = entry
 
     submitted_patterns = json.loads(sub.patterns_json) if sub.patterns_json else []
@@ -359,6 +373,7 @@ def get_submission(submission_id):
                 or cur["enabled"] != p.get("enabled", True)
                 or cur.get("maintenance_window") != p.get("maintenance_window")
                 or cur.get("reboot_proximity_minutes") != p.get("reboot_proximity_minutes")
+                or cur.get("min_frequency_threshold") != p.get("min_frequency_threshold")
             )
             if changed:
                 modified_patterns.append({"submitted": p, "current": cur})
@@ -415,6 +430,14 @@ def approve_submission(submission_id):
         mw_json = json.dumps(mw) if isinstance(mw, dict) and mw.get("start") and mw.get("end") else None
         rp = p.get("reboot_proximity_minutes")
         rp_val = int(rp) if rp is not None and str(rp).strip().lstrip("-").isdigit() and 1 <= int(rp) <= 60 else None
+        
+        threshold = p.get("min_frequency_threshold")
+        threshold_val = (
+            int(threshold) if threshold is not None
+            and str(threshold).strip().lstrip("-").isdigit()
+            and 1 <= int(threshold) <= 1000
+            else None
+        )
 
         existing = (
             dbm.db.session.query(dbm.GlobalPattern)
@@ -426,6 +449,7 @@ def approve_submission(submission_id):
             existing.enabled = enabled
             existing.maintenance_window_json = mw_json
             existing.reboot_proximity_minutes = rp_val
+            existing.min_frequency_threshold = threshold_val
             existing.updated_at = datetime.utcnow()
         else:
             dbm.db.session.add(dbm.GlobalPattern(
@@ -436,6 +460,7 @@ def approve_submission(submission_id):
                 enabled=enabled,
                 maintenance_window_json=mw_json,
                 reboot_proximity_minutes=rp_val,
+                min_frequency_threshold=threshold_val,
                 created_by=sub.user_id,
             ))
         merged += 1

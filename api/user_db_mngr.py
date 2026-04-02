@@ -76,6 +76,7 @@ class GlobalPattern(db.Model):
     enabled = db.Column(db.Boolean, default=True)
     maintenance_window_json = db.Column(db.Text, nullable=True)
     reboot_proximity_minutes = db.Column(db.Integer, nullable=True)
+    min_frequency_threshold = db.Column(db.Integer, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
@@ -449,7 +450,7 @@ class DBManager:
             logger.warning(f"[Migration] Could not add columns (may already exist): {e}")
 
     def _migrate_add_global_pattern_filter_columns(self, app):
-        """Add maintenance_window_json and reboot_proximity_minutes to global_patterns if missing."""
+        """Add maintenance_window_json, reboot_proximity_minutes, and min_frequency_threshold to global_patterns if missing."""
         try:
             with app.app_context():
                 from sqlalchemy import text, inspect as sa_inspect
@@ -463,6 +464,10 @@ class DBManager:
                     self.db.session.execute(text("ALTER TABLE global_patterns ADD COLUMN reboot_proximity_minutes INTEGER"))
                     self.db.session.commit()
                     logger.info("[Migration] Added reboot_proximity_minutes column to global_patterns")
+                if "min_frequency_threshold" not in cols:
+                    self.db.session.execute(text("ALTER TABLE global_patterns ADD COLUMN min_frequency_threshold INTEGER"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added min_frequency_threshold column to global_patterns")
         except Exception as e:
             logger.warning(f"[Migration] Could not add filter columns (may already exist): {e}")
 

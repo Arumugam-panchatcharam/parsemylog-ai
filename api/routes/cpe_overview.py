@@ -936,6 +936,47 @@ def get_pattern_scan_cache(project_id):
     )
 
 
+def _apply_frequency_filter(
+    domain_counts: Dict[str, Any],
+    patterns: List[Dict[str, Any]],
+    global_threshold: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Filter out CPEs where pattern count is below threshold.
+    
+    Args:
+        domain_counts: Dict with 'patterns', 'pattern_regexes', 'cpes'
+        patterns: List of pattern dicts with optional 'min_frequency_threshold'
+        global_threshold: Global minimum frequency (overridden by per-pattern)
+    
+    Returns:
+        Filtered domain_counts structure
+    """
+    if not global_threshold and not any(p.get("min_frequency_threshold") for p in patterns):
+        return domain_counts  # No filtering needed
+    
+    filtered_cpes = []
+    for cpe_entry in domain_counts["cpes"]:
+        filtered_counts = []
+        for idx, count in enumerate(cpe_entry["counts"]):
+            if idx < len(patterns):
+                threshold = patterns[idx].get("min_frequency_threshold") or global_threshold or 0
+                # Keep CPE for this pattern only if count > threshold
+                filtered_counts.append(count if count > threshold else 0)
+            else:
+                filtered_counts.append(count)
+        filtered_cpes.append({
+            "serial": cpe_entry["serial"],
+            "counts": filtered_counts
+        })
+    
+    return {
+        "patterns": domain_counts["patterns"],
+        "pattern_regexes": domain_counts.get("pattern_regexes"),
+        "cpes": filtered_cpes
+    }
+
+
 @cpe_overview_bp.route("/<project_id>/cpe-overview/pattern-scan", methods=["POST"])
 @jwt_required()
 def run_pattern_scan(project_id):
@@ -949,8 +990,10 @@ def run_pattern_scan(project_id):
     
     Request body (optional):
         {
-            "reboot_window_minutes": int  # Only count matches within this many
-                                          # minutes before each reboot (15-360)
+            "reboot_window_minutes": int,         # Only count matches within this many
+                                                  # minutes before each reboot (15-360)
+            "filter_short_reboots": bool,         # Only consider short reboots
+            "min_frequency_threshold": int        # Filter CPEs with count <= this value (1-1000)
         }
 
     Returns:
@@ -983,6 +1026,16 @@ def run_pattern_scan(project_id):
                 return jsonify({"error": "reboot_window_minutes must be between 15 and 360"}), 400
         except (ValueError, TypeError):
             return jsonify({"error": "reboot_window_minutes must be an integer"}), 400
+
+    # Get optional frequency threshold filter parameter
+    min_frequency_threshold = data.get("min_frequency_threshold")
+    if min_frequency_threshold is not None:
+        try:
+            min_frequency_threshold = int(min_frequency_threshold)
+            if not (1 <= min_frequency_threshold <= 1000):
+                return jsonify({"error": "min_frequency_threshold must be between 1 and 1000"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "min_frequency_threshold must be an integer"}), 400
 
     rg_binary = shutil.which("rg")
     if not rg_binary:
@@ -1112,6 +1165,16 @@ def run_pattern_scan(project_id):
                     counts.append(per_pattern_counts.get(key, {}).get(serial, 0))
                 cpe_results.append({"serial": serial, "counts": counts})
             dom_data["cpes"] = cpe_results
+            
+            # Apply frequency filtering if needed
+            domain_patterns = all_domains[domain_name]
+            if min_frequency_threshold is not None or any(p.get("min_frequency_threshold") for p in domain_patterns):
+                filtered_domain_data = _apply_frequency_filter(
+                    dom_data,
+                    domain_patterns,
+                    global_threshold=min_frequency_threshold
+                )
+                result_domains[domain_name] = filtered_domain_data
     else:
         # Legacy single-CPE fallback
         for domain_name, dom_data in result_domains.items():
@@ -1122,6 +1185,16 @@ def run_pattern_scan(project_id):
                     count = _run_rg_count(rg_binary, task["regex"], cpe_info["dir"])
                     counts.append(count)
             dom_data["cpes"] = [{"serial": cpe_info["serial"], "counts": counts}]
+            
+            # Apply frequency filtering if needed for single-CPE case
+            domain_patterns = all_domains[domain_name]
+            if min_frequency_threshold is not None or any(p.get("min_frequency_threshold") for p in domain_patterns):
+                filtered_domain_data = _apply_frequency_filter(
+                    dom_data,
+                    domain_patterns,
+                    global_threshold=min_frequency_threshold
+                )
+                result_domains[domain_name] = filtered_domain_data
 
     elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 

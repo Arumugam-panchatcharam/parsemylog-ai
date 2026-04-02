@@ -759,6 +759,7 @@ export interface UserPattern {
   enabled: boolean;
   maintenance_window?: MaintenanceWindow | null;
   reboot_proximity_minutes?: number | null;
+  min_frequency_threshold?: number | null;
 }
 
 /** Domain-grouped patterns: { domain_name: UserPattern[] } */
@@ -869,7 +870,7 @@ export const cpeOverviewApi = {
   },
   getPatternScan: (projectId: string) =>
     api.get<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`),
-  runPatternScan: (projectId: string, params?: { reboot_window_minutes?: number; filter_short_reboots?: boolean }) =>
+  runPatternScan: (projectId: string, params?: { reboot_window_minutes?: number; filter_short_reboots?: boolean; min_frequency_threshold?: number }) =>
     api.post<PatternScanResult>(`/projects/${projectId}/cpe-overview/pattern-scan`, params),
 };
 
@@ -892,6 +893,7 @@ export interface DiffPattern extends UserPattern {
   global_enabled?: boolean;
   global_maintenance_window?: MaintenanceWindow | null;
   global_reboot_proximity_minutes?: number | null;
+  global_min_frequency_threshold?: number | null;
 }
 
 export interface DomainDiff {

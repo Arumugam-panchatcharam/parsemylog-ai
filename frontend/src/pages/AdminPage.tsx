@@ -27,6 +27,7 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import CloseIcon from "@mui/icons-material/Close";
 import CircularProgress from "@mui/material/CircularProgress";
+import FilterListIcon from "@mui/icons-material/FilterList";
 import { formatDate } from "@/lib/utils";
 
 /* ================================================================ Types */
@@ -448,6 +449,13 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
     }));
   };
 
+  const updatePatternFT = (d: string, idx: number, ft: number | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [d]: (prev[d] || []).map((p, i) => (i === idx ? { ...p, min_frequency_threshold: ft } : p)),
+    }));
+  };
+
   const handleExportJSON = () => {
     const content = JSON.stringify({ domains }, null, 2);
     const blob = new Blob([content], { type: "application/json" });
@@ -483,7 +491,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
             // Basic YAML: extract patterns using regex-based heuristics
             // This handles the standard domain-grouped format the app exports
             const lines = text.split("\n");
-            const result: Record<string, Array<{ name: string; regex: string; enabled: boolean; maintenance_window?: { start: string; end: string }; reboot_proximity_minutes?: number }>> = {};
+            const result: Record<string, Array<{ name: string; regex: string; enabled: boolean; maintenance_window?: { start: string; end: string }; reboot_proximity_minutes?: number; min_frequency_threshold?: number }>> = {};
             let currentDomain = "";
 
             for (const line of lines) {
@@ -534,10 +542,18 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                   result[currentDomain][result[currentDomain].length - 1].reboot_proximity_minutes = rp;
                 }
               }
+              // Parse min_frequency_threshold
+              const ftMatch = line.match(/^\s+min_frequency_threshold:\s*(\d+)$/);
+              if (ftMatch && currentDomain && result[currentDomain].length > 0) {
+                const ft = Number(ftMatch[1]);
+                if (!isNaN(ft) && ft >= 1 && ft <= 1000) {
+                  result[currentDomain][result[currentDomain].length - 1].min_frequency_threshold = ft;
+                }
+              }
             }
 
             // Filter out patterns with empty regex
-            const cleaned: Record<string, Array<{ name: string; regex: string; enabled: boolean; maintenance_window?: { start: string; end: string }; reboot_proximity_minutes?: number }>> = {};
+            const cleaned: Record<string, Array<{ name: string; regex: string; enabled: boolean; maintenance_window?: { start: string; end: string }; reboot_proximity_minutes?: number; min_frequency_threshold?: number }>> = {};
             for (const [d, pats] of Object.entries(result)) {
               const valid = pats.filter((p) => p.regex);
               if (valid.length > 0) cleaned[d] = valid;
@@ -586,6 +602,13 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                       pattern.reboot_proximity_minutes = rp;
                     }
                   }
+                  // Preserve min_frequency_threshold if present
+                  if (p.min_frequency_threshold != null) {
+                    const ft = Number(p.min_frequency_threshold);
+                    if (!isNaN(ft) && ft >= 1 && ft <= 1000) {
+                      pattern.min_frequency_threshold = ft;
+                    }
+                  }
                   return pattern;
                 })
                 .filter((p) => p.regex && !existingRegexes.has(p.regex));
@@ -619,6 +642,13 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                 const rp = Number(p.reboot_proximity_minutes);
                 if (!isNaN(rp) && rp >= 1 && rp <= 60) {
                   pattern.reboot_proximity_minutes = rp;
+                }
+              }
+              // Preserve min_frequency_threshold if present
+              if (p.min_frequency_threshold != null) {
+                const ft = Number(p.min_frequency_threshold);
+                if (!isNaN(ft) && ft >= 1 && ft <= 1000) {
+                  pattern.min_frequency_threshold = ft;
                 }
               }
               return pattern;
@@ -671,6 +701,13 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                       const rp = Number(rx.reboot_proximity_minutes);
                       if (!isNaN(rp) && rp >= 1 && rp <= 60) {
                         pattern.reboot_proximity_minutes = rp;
+                      }
+                    }
+                    // Preserve min_frequency_threshold if present
+                    if (rx.min_frequency_threshold != null) {
+                      const ft = Number(rx.min_frequency_threshold);
+                      if (!isNaN(ft) && ft >= 1 && ft <= 1000) {
+                        pattern.min_frequency_threshold = ft;
                       }
                     }
                     patterns.push(pattern);
@@ -790,7 +827,8 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                 const fk = filterKey(domain, idx);
                                 const hasMW = !!p.maintenance_window;
                                 const hasRP = p.reboot_proximity_minutes != null && p.reboot_proximity_minutes > 0;
-                                const hasFilter = hasMW || hasRP;
+                                const hasFT = p.min_frequency_threshold != null && p.min_frequency_threshold > 0;
+                                const hasFilter = hasMW || hasRP || hasFT;
                                 return (
                                   <div key={idx}>
                                     <div className="grid grid-cols-[32px_1fr_2fr_36px_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
@@ -799,10 +837,10 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                       <input type="text" value={p.regex} onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)} placeholder="Regex" className="text-xs px-2 py-1 rounded border border-border bg-background font-mono min-w-0" />
                                       <button
                                         onClick={() => setFilterEditTarget(filterEditTarget === fk ? null : fk)}
-                                        title={hasFilter ? `MW: ${p.maintenance_window?.start ?? "–"}–${p.maintenance_window?.end ?? "–"} | RP: ±${p.reboot_proximity_minutes ?? "–"}m` : "Add maintenance window / reboot proximity filter"}
+                                        title={hasFilter ? `MW: ${p.maintenance_window?.start ?? "–"}–${p.maintenance_window?.end ?? "–"} | RP: ±${p.reboot_proximity_minutes ?? "–"}m | FT: >${p.min_frequency_threshold ?? "–"}` : "Add maintenance window / reboot proximity / frequency threshold filter"}
                                         className={`p-0.5 rounded text-xs flex items-center justify-center gap-0.5 ${hasFilter ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400" : "hover:bg-muted text-muted-foreground"}`}
                                       >
-                                        <ScheduleIcon style={{ fontSize: 14 }} />
+                                        <FilterListIcon style={{ fontSize: 14 }} />
                                       </button>
                                       <button onClick={() => removePattern(domain, idx)} title="Remove this pattern" className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 14 }} /></button>
                                     </div>
@@ -848,6 +886,25 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                           <span className="text-[10px] text-muted-foreground">minutes around reboot</span>
                                           {hasRP && (
                                             <button onClick={() => updatePatternRP(domain, idx, null)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20" title="Clear reboot proximity">
+                                              <CloseIcon style={{ fontSize: 12 }} />
+                                            </button>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <FilterListIcon style={{ fontSize: 14 }} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                                          <span className="text-muted-foreground w-8 shrink-0">&gt;</span>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={1000}
+                                            value={p.min_frequency_threshold ?? ""}
+                                            onChange={(e) => updatePatternFT(domain, idx, e.target.value ? Number(e.target.value) : null)}
+                                            placeholder="count"
+                                            className="px-1.5 py-0.5 rounded border border-border bg-background text-xs w-20"
+                                          />
+                                          <span className="text-[10px] text-muted-foreground">min frequency threshold</span>
+                                          {hasFT && (
+                                            <button onClick={() => updatePatternFT(domain, idx, null)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20" title="Clear frequency threshold">
                                               <CloseIcon style={{ fontSize: 12 }} />
                                             </button>
                                           )}
@@ -906,7 +963,7 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
   return (
     <div className="space-y-1">
       <p className="text-xs font-semibold text-muted-foreground uppercase">Submitted Patterns</p>
-      {submission.patterns.map((p: { name: string; regex: string; enabled: boolean; change_type?: string; maintenance_window?: { start: string; end: string } | null; reboot_proximity_minutes?: number | null }, idx: number) => {
+      {submission.patterns.map((p: { name: string; regex: string; enabled: boolean; change_type?: string; maintenance_window?: { start: string; end: string } | null; reboot_proximity_minutes?: number | null; min_frequency_threshold?: number | null }, idx: number) => {
         const current = modifiedMap.get(p.regex);
         const changes: Array<{ label: string; from: string; to: string }> = [];
         
@@ -919,6 +976,9 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
           const curRp = current.reboot_proximity_minutes as number | null | undefined;
           const subRp = p.reboot_proximity_minutes;
           if ((curRp ?? null) !== (subRp ?? null)) changes.push({ label: "reboot", from: curRp != null ? `±${curRp}m` : "none", to: subRp != null ? `±${subRp}m` : "none" });
+          const curFt = current.min_frequency_threshold as number | null | undefined;
+          const subFt = (p as any).min_frequency_threshold;
+          if ((curFt ?? null) !== (subFt ?? null)) changes.push({ label: "frequency", from: curFt != null ? `>${curFt}` : "none", to: subFt != null ? `>${subFt}` : "none" });
         }
 
         return (
@@ -942,6 +1002,11 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
               {p.reboot_proximity_minutes != null && p.reboot_proximity_minutes > 0 && (
                 <span className="shrink-0 px-1.5 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 rounded text-[10px]" title="Reboot proximity">
                   <RestartAltIcon style={{ fontSize: 10, marginRight: 2 }} />±{p.reboot_proximity_minutes}m
+                </span>
+              )}
+              {p.min_frequency_threshold != null && p.min_frequency_threshold > 0 && (
+                <span className="shrink-0 px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px]" title="Minimum frequency threshold">
+                  <FilterListIcon style={{ fontSize: 10, marginRight: 2 }} />&gt;{p.min_frequency_threshold}
                 </span>
               )}
             </div>

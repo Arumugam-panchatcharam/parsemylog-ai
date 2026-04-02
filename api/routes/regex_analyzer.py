@@ -256,6 +256,8 @@ def load_project_patterns(user_id: int, project_id: str) -> Dict[str, List[Dict[
                         pass
                 if gp.reboot_proximity_minutes is not None:
                     entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+                if gp.min_frequency_threshold is not None:
+                    entry["min_frequency_threshold"] = gp.min_frequency_threshold
                 global_domains[gp.domain].append(entry)
             
             logger.info(
@@ -812,6 +814,22 @@ def save_patterns(project_id):
             else:
                 raw_rp = None
 
+            # Optional frequency threshold
+            raw_ft = p.get("min_frequency_threshold")
+            if raw_ft is not None and raw_ft != "" and raw_ft is not False:
+                try:
+                    raw_ft = int(raw_ft)
+                    if not (1 <= raw_ft <= 1000):
+                        return jsonify({
+                            "error": f"Pattern '{name}' in domain '{domain_name}': min_frequency_threshold must be between 1 and 1000"
+                        }), 400
+                except (ValueError, TypeError):
+                    return jsonify({
+                        "error": f"Pattern '{name}' in domain '{domain_name}': min_frequency_threshold must be a valid integer"
+                    }), 400
+            else:
+                raw_ft = None
+
             entry: Dict[str, Any] = {
                 "name": name,
                 "regex": regex,
@@ -824,6 +842,8 @@ def save_patterns(project_id):
                 }
             if raw_rp:
                 entry["reboot_proximity_minutes"] = raw_rp
+            if raw_ft:
+                entry["min_frequency_threshold"] = raw_ft
 
             validated.append(entry)
 
@@ -1134,6 +1154,8 @@ def get_global_patterns(project_id):
                 pass
         if p.reboot_proximity_minutes is not None:
             entry["reboot_proximity_minutes"] = p.reboot_proximity_minutes
+        if p.min_frequency_threshold is not None:
+            entry["min_frequency_threshold"] = p.min_frequency_threshold
         domains[p.domain].append(entry)
 
     return jsonify({
@@ -1193,6 +1215,8 @@ def sync_from_global(project_id):
                 pass
         if gp.reboot_proximity_minutes is not None:
             entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+        if gp.min_frequency_threshold is not None:
+            entry["min_frequency_threshold"] = gp.min_frequency_threshold
         global_by_domain[gp.domain].append(entry)
 
     # Use caller-supplied patterns or fall back to saved YAML
@@ -1224,6 +1248,8 @@ def sync_from_global(project_id):
                 entry["maintenance_window"] = gp["maintenance_window"]
             if gp.get("reboot_proximity_minutes") is not None:
                 entry["reboot_proximity_minutes"] = gp["reboot_proximity_minutes"]
+            if gp.get("min_frequency_threshold") is not None:
+                entry["min_frequency_threshold"] = gp["min_frequency_threshold"]
             domain_result.append(entry)
             synced += 1
 
@@ -1293,6 +1319,8 @@ def diff_patterns(project_id):
                 pass
         if gp.reboot_proximity_minutes is not None:
             entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+        if gp.min_frequency_threshold is not None:
+            entry["min_frequency_threshold"] = gp.min_frequency_threshold
         global_by_domain.setdefault(gp.domain, {})[gp.regex] = entry
 
     # Use caller-supplied patterns (POST) or fall back to saved YAML (GET)
@@ -1319,12 +1347,15 @@ def diff_patterns(project_id):
             enabled = p.get("enabled", True)
             mw = p.get("maintenance_window")
             rp = p.get("reboot_proximity_minutes")
+            ft = p.get("min_frequency_threshold")
 
             base: Dict[str, Any] = {"name": name, "regex": rx, "enabled": enabled}
             if mw:
                 base["maintenance_window"] = mw
             if rp is not None:
                 base["reboot_proximity_minutes"] = rp
+            if ft is not None:
+                base["min_frequency_threshold"] = ft
 
             if rx not in gmap:
                 new_pats.append(base)
@@ -1332,11 +1363,13 @@ def diff_patterns(project_id):
                 gp_entry = gmap[rx]
                 g_mw = gp_entry.get("maintenance_window")
                 g_rp = gp_entry.get("reboot_proximity_minutes")
+                g_ft = gp_entry.get("min_frequency_threshold")
                 changed = (
                     gp_entry["name"] != name
                     or gp_entry["enabled"] != enabled
                     or mw != g_mw
                     or rp != g_rp
+                    or ft != g_ft
                 )
                 if changed:
                     base["global_name"] = gp_entry["name"]
@@ -1345,6 +1378,8 @@ def diff_patterns(project_id):
                         base["global_maintenance_window"] = g_mw
                     if g_rp is not None:
                         base["global_reboot_proximity_minutes"] = g_rp
+                    if g_ft is not None:
+                        base["global_min_frequency_threshold"] = g_ft
                     modified_pats.append(base)
                 else:
                     unchanged_pats.append(base)
@@ -1421,6 +1456,14 @@ def submit_patterns(project_id):
                 rp_int = int(rp)
                 if 1 <= rp_int <= 60:
                     entry["reboot_proximity_minutes"] = rp_int
+            except (TypeError, ValueError):
+                pass
+        ft = p.get("min_frequency_threshold")
+        if ft is not None:
+            try:
+                ft_int = int(ft)
+                if 1 <= ft_int <= 1000:
+                    entry["min_frequency_threshold"] = ft_int
             except (TypeError, ValueError):
                 pass
         validated.append(entry)
