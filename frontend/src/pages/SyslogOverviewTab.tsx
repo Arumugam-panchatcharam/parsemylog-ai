@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { syslogApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import Plot from "react-plotly.js";
@@ -7,6 +7,7 @@ import ArticleIcon from "@mui/icons-material/Article";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ErrorIcon from "@mui/icons-material/Error";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import CircularProgress from "@mui/material/CircularProgress";
 
 /* ================================================================ Types */
@@ -52,20 +53,36 @@ const NO_TOOLBAR = { displayModeBar: false } as const;
 /* ================================================================ Component */
 export default function SyslogOverviewTab() {
   const { projectId } = useProject();
+  const queryClient = useQueryClient();
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [expandedCpe, setExpandedCpe] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery<CrossCpeSyslogData>({
     queryKey: ["syslog-overview", projectId],
     queryFn: async () => {
-      const response = await syslogApi.crossCpeOverview(projectId!);
-      // API returns { data: payload }; axios puts that in response.data
+      const response = await syslogApi.crossCpeOverview(projectId!, false);
       const payload = response.data?.data ?? response.data;
       return payload as CrossCpeSyslogData;
     },
     enabled: !!projectId,
     staleTime: 2 * 60 * 1000,
   });
+
+  const handleForceRefresh = async () => {
+    if (!projectId || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const response = await syslogApi.crossCpeOverview(projectId, true);
+      const payload = response.data?.data ?? response.data;
+      queryClient.setQueryData(["syslog-overview", projectId], payload as CrossCpeSyslogData);
+      await queryClient.invalidateQueries({ queryKey: ["syslog", projectId] });
+    } catch (err) {
+      console.error("Force refresh failed:", err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   if (!projectId) {
     return (
@@ -139,6 +156,23 @@ export default function SyslogOverviewTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={handleForceRefresh}
+          disabled={isRefreshing || isLoading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-card hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-foreground"
+          title="Force re-parse syslog for all CPEs"
+        >
+          {isRefreshing ? (
+            <CircularProgress size={14} className="text-muted-foreground" />
+          ) : (
+            <RefreshIcon style={{ fontSize: 14 }} className={isRefreshing ? "animate-spin" : ""} />
+          )}
+          {isRefreshing ? "Re-parsing..." : "Force Refresh All"}
+        </button>
+      </div>
+
       {/* ========== Summary Cards ========== */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-card border border-border rounded-xl p-3">

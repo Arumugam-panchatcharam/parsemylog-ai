@@ -12,9 +12,10 @@ import io
 import json
 import logging
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required
@@ -56,6 +57,73 @@ def _find_syslog_file(project_dir: Path) -> Optional[Path]:
     """Find merged syslog.txt in project directory."""
     syslog_path = project_dir / "syslog.txt"
     return syslog_path if syslog_path.exists() else None
+
+
+def _syslog_event_mapping_path() -> Path:
+    return Path(__file__).parent.parent.parent / "configs" / "syslog_event_mapping.yaml"
+
+
+def _build_and_cache_syslog_response(
+    project_dir: Path, cpe_identifier: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse syslog.txt for one CPE directory, correlate reboots, persist cache.
+
+    Returns:
+        Full parse payload (same shape as ``/syslog/parse``), or None if no syslog.txt.
+    """
+    syslog_path = _find_syslog_file(project_dir)
+    if not syslog_path:
+        return None
+    event_mapping = load_event_mapping(_syslog_event_mapping_path())
+    logger.info("Parsing syslog for dir %s (CPE %s)", project_dir, cpe_identifier)
+    parsed_data = parse_syslog_file(syslog_path, event_mapping)
+    reboot_correlation = _correlate_with_reboots(parsed_data["events"], project_dir)
+    response: Dict[str, Any] = {
+        "device_info": {
+            "serial": cpe_identifier,
+            "cpe_id": cpe_identifier,
+        },
+        "summary": parsed_data["summary"],
+        "events": parsed_data["events"],
+        "reboot_correlation": reboot_correlation,
+        "cached": False,
+    }
+    save_syslog_cache(project_dir, response)
+    return response
+
+
+def _load_syslog_payload_for_cross_cpe(
+    user_id: str,
+    project_id: str,
+    cpe_serial: str,
+    force: bool,
+) -> Tuple[str, Optional[Dict[str, Any]], List[str]]:
+    """
+    Load or build syslog cache for one CPE for fleet overview.
+
+    Returns:
+        (cpe_serial, payload or None, error strings)
+    """
+    project_dir = _project_dir(
+        user_id, project_id, None if cpe_serial == "default" else cpe_serial
+    )
+    errors: List[str] = []
+    try:
+        cached: Optional[Dict[str, Any]] = None if force else load_syslog_cache(project_dir)
+        if cached is None:
+            built = _build_and_cache_syslog_response(project_dir, cpe_serial)
+            cached = built
+        if not cached:
+            if _find_syslog_file(project_dir):
+                errors.append(f"CPE {cpe_serial}: syslog.txt found but not parsed")
+            return cpe_serial, None, errors
+        return cpe_serial, cached, errors
+    except Exception as e:
+        logger.error(
+            "Error processing CPE %s for syslog overview: %s", cpe_serial, e, exc_info=True
+        )
+        return cpe_serial, None, [f"CPE {cpe_serial}: {str(e)}"]
 
 
 def _correlate_with_reboots(events: List[Dict], project_dir: Path) -> Dict:
@@ -144,7 +212,7 @@ def parse_syslog(project_id):
     reparse = request.args.get("reparse", "false").lower() == "true"
     
     # Verify project access
-    project, error_response = _verify_project(project_id, user_id)
+    _, error_response = _verify_project(project_id, user_id)
     if error_response:
         return error_response
     
@@ -158,40 +226,9 @@ def parse_syslog(project_id):
                 cached['cached'] = True
                 return jsonify({"data": cached}), 200
         
-        # Find syslog file
-        syslog_path = _find_syslog_file(project_dir)
-        if not syslog_path:
+        response = _build_and_cache_syslog_response(project_dir, cpe_id or "unknown")
+        if not response:
             return jsonify({"error": "syslog.txt not found"}), 404
-        
-        # Load event mapping  
-        config_path = Path(__file__).parent.parent.parent / "configs" / "syslog_event_mapping.yaml"
-        event_mapping = load_event_mapping(config_path)
-        
-        # Parse syslog
-        logger.info(f"Parsing syslog for project {project_id}, CPE {cpe_id}")
-        parsed_data = parse_syslog_file(syslog_path, event_mapping)
-        
-        # Correlate with reboots
-        reboot_correlation = _correlate_with_reboots(
-            parsed_data['events'],
-            project_dir
-        )
-        
-        # Build response
-        response = {
-            "device_info": {
-                "serial": cpe_id or "unknown",
-                "cpe_id": cpe_id
-            },
-            "summary": parsed_data['summary'],
-            "events": parsed_data['events'],
-            "reboot_correlation": reboot_correlation,
-            "cached": False
-        }
-        
-        # Cache response
-        save_syslog_cache(project_dir, response)
-        
         return jsonify({"data": response}), 200
         
     except FileNotFoundError as e:
@@ -207,7 +244,14 @@ def parse_syslog(project_id):
 def cross_cpe_overview(project_id):
     """
     Aggregate syslog statistics across all CPEs in project.
-    
+
+    Query params:
+        force (optional): ``1`` or ``true`` to re-parse syslog for every CPE (same idea as
+        telemetry / self-heal cross-CPE overview).
+
+    When ``force`` is false, CPEs without cache are parsed on demand if ``syslog.txt`` exists
+    (matches telemetry cross-CPE behavior for existing projects).
+
     Returns:
         - Event counts by category across all CPEs
         - Top event IDs
@@ -215,68 +259,77 @@ def cross_cpe_overview(project_id):
         - Timeline distribution
     """
     user_id = get_user_id()
-    
+    force = request.args.get("force", "0") in ("1", "true")
+
     # Verify project access
-    project, error_response = _verify_project(project_id, user_id)
+    _, error_response = _verify_project(project_id, user_id)
     if error_response:
         return error_response
-    
+
     try:
-        # Get all CPEs for this project
         cpes = dbm.list_project_cpes(project_id)
-        
+        cpe_serials = [c.serial for c in cpes] if cpes else ["default"]
+
         aggregated = {
-            "total_cpes": len(cpes),
+            "total_cpes": len(cpe_serials),
             "cpes_with_syslog": 0,
             "total_events": 0,
             "event_category_totals": defaultdict(int),
             "top_event_ids": defaultdict(int),
             "cpe_comparison": [],
-            "parsing_errors": []
+            "parsing_errors": [],
         }
-        
-        for cpe in cpes:
-            try:
-                cpe_identifier = cpe.serial
-                project_dir = _project_dir(user_id, project_id, cpe_identifier)
-                cached = load_syslog_cache(project_dir)
-                
-                if not cached:
-                    # Check if syslog.txt exists but hasn't been parsed
-                    syslog_path = _find_syslog_file(project_dir)
-                    if syslog_path:
-                        aggregated["parsing_errors"].append(f"CPE {cpe_identifier}: syslog.txt found but not parsed")
-                    continue
-                
-                aggregated["cpes_with_syslog"] += 1
-                aggregated["total_events"] += cached["summary"]["parsed_events"]
-                
-                # Aggregate by category
-                for cat, count in cached["summary"]["event_type_counts"].items():
-                    aggregated["event_category_totals"][cat] += count
-                
-                # Count top event IDs
-                for event in cached["events"]:
-                    aggregated["top_event_ids"][event["event_id"]] += 1
-                
-                # Add CPE comparison row
-                cpe_data = {
-                    "cpe_id": cpe.serial,
-                    "total_events": cached["summary"]["parsed_events"],
-                    "event_counts": cached["summary"]["event_type_counts"],
-                    "time_range": cached["summary"]["time_range"]
-                }
-                
-                # Add reboot correlation info if available
-                if "reboot_correlation" in cached:
-                    cpe_data["events_near_reboots"] = len(cached["reboot_correlation"]["events_near_reboots"])
-                    cpe_data["total_reboots"] = len(cached["reboot_correlation"]["reboot_timestamps"])
-                
-                aggregated["cpe_comparison"].append(cpe_data)
-                
-            except Exception as e:
-                logger.error(f"Error processing CPE {cpe.serial} for overview: {e}")
-                aggregated["parsing_errors"].append(f"CPE {cpe.serial}: {str(e)}")
+
+        workers = min(16, max(1, len(cpe_serials)))
+        results: List[Tuple[str, Optional[Dict[str, Any]], List[str]]] = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    _load_syslog_payload_for_cross_cpe, user_id, project_id, serial, force
+                ): serial
+                for serial in cpe_serials
+            }
+            for fut in as_completed(futures):
+                try:
+                    results.append(fut.result())
+                except Exception as exc:
+                    serial = futures[fut]
+                    logger.warning("Cross-CPE syslog worker failed for %s: %s", serial, exc)
+                    results.append(
+                        (serial, None, [f"CPE {serial}: {str(exc)}"])
+                    )
+
+        for _serial, cached, errs in results:
+            aggregated["parsing_errors"].extend(errs)
+            if not cached:
+                continue
+
+            aggregated["cpes_with_syslog"] += 1
+            aggregated["total_events"] += cached["summary"]["parsed_events"]
+
+            for cat, count in cached["summary"]["event_type_counts"].items():
+                aggregated["event_category_totals"][cat] += count
+
+            for event in cached["events"]:
+                aggregated["top_event_ids"][event["event_id"]] += 1
+
+            cpe_id = cached.get("device_info", {}).get("cpe_id") or _serial
+            cpe_data = {
+                "cpe_id": cpe_id,
+                "total_events": cached["summary"]["parsed_events"],
+                "event_counts": cached["summary"]["event_type_counts"],
+                "time_range": cached["summary"]["time_range"],
+            }
+
+            if "reboot_correlation" in cached:
+                cpe_data["events_near_reboots"] = len(
+                    cached["reboot_correlation"]["events_near_reboots"]
+                )
+                cpe_data["total_reboots"] = len(
+                    cached["reboot_correlation"]["reboot_timestamps"]
+                )
+
+            aggregated["cpe_comparison"].append(cpe_data)
         
         # Sort top event IDs by frequency
         top_events = sorted(
@@ -319,7 +372,7 @@ def export_csv(project_id):
     cpe_id = request.args.get("cpe_id")
     
     # Verify project access
-    project, error_response = _verify_project(project_id, user_id)
+    _, error_response = _verify_project(project_id, user_id)
     if error_response:
         return error_response
     
@@ -383,7 +436,7 @@ def event_summary(project_id):
     cpe_id = request.args.get("cpe_id")
     
     # Verify project access
-    project, error_response = _verify_project(project_id, user_id)
+    _, error_response = _verify_project(project_id, user_id)
     if error_response:
         return error_response
     

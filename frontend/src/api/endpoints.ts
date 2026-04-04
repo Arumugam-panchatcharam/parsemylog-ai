@@ -700,8 +700,10 @@ export const syslogApi = {
     api.post(`/projects/${projectId}/syslog/parse`, null, {
       params: { ...(cpeId ? { cpe_id: cpeId } : {}), ...(reparse ? { reparse: "true" } : {}) },
     }),
-  crossCpeOverview: (projectId: string) =>
-    api.get(`/projects/${projectId}/syslog/cross-cpe-overview`),
+  crossCpeOverview: (projectId: string, force = false) =>
+    api.get(`/projects/${projectId}/syslog/cross-cpe-overview`, {
+      params: { ...(force ? { force: "1" } : {}) },
+    }),
   exportCsv: (projectId: string, cpeId: string | null) =>
     api.get(`/projects/${projectId}/syslog/export-csv`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
