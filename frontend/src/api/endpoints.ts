@@ -694,6 +694,25 @@ export const selfhealApi = {
     }),
 };
 
+// ---------- Syslog ----------
+export const syslogApi = {
+  parse: (projectId: string, cpeId: string | null, reparse = false) =>
+    api.post(`/projects/${projectId}/syslog/parse`, null, {
+      params: { ...(cpeId ? { cpe_id: cpeId } : {}), ...(reparse ? { reparse: "true" } : {}) },
+    }),
+  crossCpeOverview: (projectId: string) =>
+    api.get(`/projects/${projectId}/syslog/cross-cpe-overview`),
+  exportCsv: (projectId: string, cpeId: string | null) =>
+    api.get(`/projects/${projectId}/syslog/export-csv`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+      responseType: 'blob',
+    }),
+  eventSummary: (projectId: string, cpeId: string | null) =>
+    api.get(`/projects/${projectId}/syslog/event-summary`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
+};
+
 // ---------- Semantic Search ----------
 export const aiApi = {
   search: (projectId: string, query: string, topK = 10, cpeId?: string | null) =>

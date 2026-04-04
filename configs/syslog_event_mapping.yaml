@@ -1,0 +1,1653 @@
+# Syslog Event ID mapping — generated from Smart5 syslog requirements (Description column).
+# Source spreadsheet: Smart5SyslogRequirements2023-03-29v3.xlsx
+# Event Code / Meaning / Category extracted per row; product category inferred from code + meaning.
+# Re-run: python scripts/build_syslog_event_mapping.py
+
+GW001:
+  category: wifi
+  description: Guest WLAN access with <SSID> has been activated. — WLAN guest access was activated by user saving valid settings.
+  severity: info
+GW002:
+  category: wifi
+  description: Guest WLAN access with <SSID> has been deactivated. — WLAN guest access was deactivated after the configured
+    activation time was exceeded and no WLAN client was connected anymore.
+  severity: info
+GW003:
+  category: wifi
+  description: 'Guest WLAN access is not deactivated after the activation time is exceeded because a WLAN client is still
+    connected. — The WLAN guest access is not deactivated because one or more WLAN clients are still connected. (precondition:
+    the user has activated this configuration via Web-UI)'
+  severity: info
+GW004:
+  category: wifi
+  description: 'WLAN guest station/client successfully connected: Computer name <computer name>, MAC-address: <MAC-address>
+    — WLAN station/client authenticated and connected successful to 2.4 GHz SSID or 5.Ghz SSID of the WLAN guest access. Please
+    see important note at the end of the chapter.'
+  severity: info
+GW005:
+  category: wifi
+  description: 'WLAN guest station/client successfully disconnected: Computer name <computer name>, MAC-address: <MAC-address>,
+    IPv4-address <IPv4 address>. — This message occurs if a connected WLAN client is disconnected either because · The regarding
+    computer has been switched off or · The regarding computer is out of range or · The WLAN adapter has been removed from
+    the computer. or · The WLAN adapter has been deactivated. or · The WLAN client has actively disconnected from the WLAN
+    guest access. Please see important note at the end of the chapter.'
+  severity: info
+MFB101:
+  category: wifi
+  description: Firmware Update Check for the device and/or mesh system was manually triggered by the user via the Web-UI —
+    Availability check of a firmware update for the device itself and/or the connected WiFi-mesh devices was triggered manually
+    by the user
+  severity: info
+MFB102:
+  category: wifi
+  description: Firmware Update Check for the device and/or mesh system was automatically triggered by reaching the calculated
+    point in time to connect to the DTAG-CPE-Information.xml file.
+  severity: info
+MFB103:
+  category: wifi
+  description: 'The DT compatible mesh device e.g. Speed Home WiFi, Speed Home WLAN, MagentaTV-Box,... with MAC-address: <MAC-address>
+    was requested by the Master to update the FW-Version.'
+  severity: info
+W001:
+  category: wifi
+  description: 'WLAN station disconnected from either 2.4Ghz Wifi or 5.0Ghz Wifi radio: Computer name <computer name>, MAC-address:
+    <MAC-address> — 1. The regarding computer has been switched off. 2. The regarding computer is out of range 3. The WLAN
+    adapter has been removed from the PC 4. The WLAN adapter has been deactivated Please see important note at the end of
+    the chapter.'
+  severity: info
+W003:
+  category: wifi
+  description: 'WLAN station connection establishment to either 2.4Ghz Wifi or 5.0Ghz Wifi radio failed: association error.
+    Data rate not compatible: Computer name <computer name>, MAC-address: <MAC-address>'
+  severity: error
+W004:
+  category: wifi
+  description: 'WLAN station connection establishment to either 2.4Ghz Wifi or 5.0Ghz Wifi radio failed: association error.
+    MAC address is not allowed: Computer name <computer name>, MAC-address: <MAC-address>'
+  severity: error
+W005:
+  category: wifi
+  description: 'WLAN station connection establishment to either 2.4Ghz Wifi or 5.0Ghz Wifi radio failed: Authorisation failed.
+    Computer name <computer name>, MAC-address: <MAC-address>'
+  severity: error
+W006:
+  category: wifi
+  description: WLAN for either 2.4Ghz Wifi or 5.0Ghz Wifi radio has been activated — WLAN radio for either <2.4 or 5.0> Ghz
+    Wifi radio has been activated
+  severity: info
+W007:
+  category: wifi
+  description: WLAN for either 2.4Ghz Wifi or 5.0Ghz Wifi radio has been deactivated — WLAN radio <WLAN_radio> for either
+    <2.4 or 5.0> Ghz Wifi radio has been deactivated
+  severity: info
+W008:
+  category: wifi
+  description: 'WLAN SSID for either 2.4Ghz Wifi or 5.0Ghz Wifi radio has been changed: <WLAN SSID> — WLAN SSID for either
+    <2.4 or 5.0> Ghz Wifi radio has been changed'
+  severity: info
+W009:
+  category: wifi
+  description: 'WLAN security mode valid for either 2.4Ghz Wifi or 5.0Ghz Wifi radio has been changed: <mode> — The WiFi security
+    mode for either <2.4 or 5.0> Ghz Wifi radio was changed to <mode>. <mode>: · None · WPA2 . WPA2/WPA3 . WPA3'
+  severity: info
+W010:
+  category: wifi
+  description: WLAN password valid for either 2.4Ghz Wifi or 5.0Ghz Wifi radio has been changed — WiFi Password for either
+    <2.4 or 5.0> Ghz Wifi radio was changed successfull.
+  severity: info
+W011:
+  category: wifi
+  description: 'WLAN channel has been changed: <band, channel> — band: 2.4 GHz channel: 1-13, Auto band: 5.0 GHz channel:
+    36-140, Auto Category Information'
+  severity: info
+W012:
+  category: wifi
+  description: 'WLAN standard has been changed: <WLAN_standard> — WLAN standard has been changed in WebUI: · 802.11b/g · 802.11g/n
+    · 802.11b/g/n · 802.11ac · etc.'
+  severity: info
+W013:
+  category: wifi
+  description: Time scheduled WLAN usage enabled — WLAN Hibernation activated by UI
+  severity: info
+W014:
+  category: wifi
+  description: Time scheduled WLAN usage disabled — WLAN Hibernation deactivated by UI
+  severity: info
+W015:
+  category: wifi
+  description: WLAN activated by Time Schedule trigger — The WLAN radio is activated by passing the ‘WLAN Start Time’
+  severity: info
+W016:
+  category: wifi
+  description: WLAN deactivated by Time Schedule trigger — The WLAN radio is deactivated by passing the ‘WLAN End Time’
+  severity: info
+W017:
+  category: wifi
+  description: The WLAN channel is being dynamically switched from channel x to channel y — WLAN channel hopping from channel
+    x to channel y (not triggered by DFS)
+  severity: info
+W018:
+  category: wifi
+  description: The WLAN channel is being dynamically switched from channel x to channel y as result of a DFS scan — WLAN channel
+    hopping from channel x to channel y as result of a DFS scan.
+  severity: info
+W019:
+  category: wifi
+  description: 'WLAN station successfully connected to either 2.4Ghz Wifi or 5.0Ghz Wifi radio: Computer name <computer name>,
+    MAC-address: <MAC-address> — WLAN station authenticated and connected successful to either 2.4 GHz SSID or 5.Ghz radio.'
+  severity: info
+W201:
+  category: wifi
+  description: WPS has been started <wps method> — WPS has been started… 1. PushButton Method 2. PIN method
+  severity: info
+W202:
+  category: wifi
+  description: WPS action <result> — WPS finished.
+  severity: info
+WM001:
+  category: wifi
+  description: The device (home gateway; always claims the master role) starts the mesh system. — A DT compatible mesh device
+    was connected to the network and detected by the home gateway.
+  severity: info
+WM002-1:
+  category: wifi
+  description: The device claims the master role of the mesh system. — The device claims the master role of the mesh system.
+  severity: info
+WM003-1:
+  category: wifi
+  description: 'A DT compatible mesh device e.g. Speed Home WiFi, Speed Home WLAN, MagentaTV-Box,... with MAC-address: <MAC-address>
+    was identified in the network. — This message is displayed once after the device was booted and a mesh repeater joined
+    the network and got identified with the according hostname.'
+  severity: info
+WM003-2:
+  category: wifi
+  description: 'The DT compatible mesh device e.g. Speed Home WiFi, Speed Home WLAN, MagentaTV-Box,... with MAC-address: <MAC-address>
+    has the FW Version: <FW-Version>. — This message is displayed once after the device booted and the mesh base received
+    the FW-Version information from a connected mesh repeater.'
+  severity: info
+WM003-3:
+  category: wifi
+  description: 'A DT compatible mesh device e.g. Speed Home WiFi, Speed Home WLAN, MagentaTV-Box,... with MAC-address: <MAC-address>
+    is connected to the Mesh-Master or Mesh-Repeater by <Ethernet/WLAN>.'
+  severity: info
+WM003-4:
+  category: wifi
+  description: 'A DT compatible mesh device with MAC-address: <MAC-address> has the product type e.g. Speed Home WiFi, Speed
+    Home WLAN, MagentaTV-Box,... — This message is displayed once after the device booted and the mesh base received all information
+    after a mesh -repeater joined the network and was identified.'
+  severity: info
+WM004:
+  category: wifi
+  description: The mesh device with MAC-address <MAC-address> lost connection to the mesh network. — A specific mesh device
+    with the MAC-address <MAC-address> lost connection to the mesh network. Means no connected mesh device can communicate
+    with this specific mesh device anymore, e.g. because the device was switched off... .
+  severity: info
+WM005:
+  category: wifi
+  description: The device or any connected mesh repeater has detected another device in the used channel set. The device needs
+    to leave this channel set in order to switch to a another channelset.
+  severity: info
+WM007:
+  category: wifi
+  description: The user manually initiated a reboot of any connected mesh repeater and the running mesh process of the mesh
+    base itself or for the device itself. — The user manually initiated a reboot of any connected mesh repeater, the running
+    mesh process of the mesh base itself or for the device itself by pressing a button within the Web-UI of the mesh base
+    or the device.
+  severity: info
+WM008:
+  category: wifi
+  description: The user manually initiated a reset to manufacturing default settings of any connected mesh repeater and the
+    running mesh process of the mesh base itself. — The user manually initiated a restart of any connected mesh repeater and
+    the running mesh process of the mesh base itself by pressing a button within the Web-UI of the mesh base (home gateway).
+  severity: info
+WM009-1:
+  category: wifi
+  description: A calculation of the topology of the WiFi mesh network was started by the mesh master. — The mesh base initates
+    a (re-)calculation of the WiFi mesh network topology.
+  severity: info
+WM203:
+  category: wifi
+  description: WPS action was successfully finished with a DT mesh compatible device — The WPS enrollee was identified as
+    a DT mesh device and WPS process was finished successfully. Means WiFi data was provided to the enrollee and the enrollee
+    was identified as Dt compatible mesh device.
+  severity: info
+A001:
+  category: parodus
+  description: Configuration Server could not be reached — HG could not establish a TCP/IP connection to the ACS
+  severity: error
+A002:
+  category: parodus
+  description: Access denied — SSL connection could not be established because ACS rejected the client certificate
+  severity: error
+A003:
+  category: parodus
+  description: Invalid server certificate — HG rejected the server certificate.
+  severity: error
+A004:
+  category: parodus
+  description: Configuration Server reported an error — HG received a SOAP Fault from the ACS
+  severity: error
+A005:
+  category: parodus
+  description: Invalid request/response from ACS. — HG received an invalid request or response from the ACS
+  severity: error
+A006:
+  category: parodus
+  description: Connection breakdown — TCP/IP connection to ACS broke down during the session
+  severity: error
+  extract_metadata:
+  - connection_type
+A007:
+  category: parodus
+  description: Communication timeout — HG did not receive a HTTPS-Response within 4 minutes after having sent the HTTP-Get
+  severity: error
+  extract_metadata:
+  - connection_type
+A008:
+  category: parodus
+  description: VoIP data retrieval error — The VoIP code within the ProvisioningCode has been set to “1” by ACS.
+  severity: error
+A009:
+  category: parodus
+  description: VoIP not booked — The VoIP code within the ProvisioningCode has been set to “2” by ACS.
+  severity: error
+A010:
+  category: parodus
+  description: Could not download firmware update — HG could not download firmware image file.
+  severity: error
+A011:
+  category: parodus
+  description: Firmware check failed. — Downloaded firmware image did not pass internal checks on the HG
+  severity: error
+A012:
+  category: parodus
+  description: Access data retrieval error — The access code within the ProvisioningCode has been set to “1” by the ACS.
+  severity: error
+A101:
+  category: parodus
+  description: EasySupport activated — Device.ManagementServer.EnableCWMP set to TRUE
+  severity: info
+A102:
+  category: parodus
+  description: EasySupport deactivated — Device.ManagementServer.EnableCWMP set to FALSE
+  severity: info
+A103:
+  category: parodus
+  description: The device with firmware version <firmware version number> tries to contact the ACS. — HG sends Inform to ACS.
+  severity: info
+A104:
+  category: parodus
+  description: The HG has received access data from the ACS — Part for Access in ProvisioningCode has been set to 4 by theACS.
+  severity: info
+A105:
+  category: parodus
+  description: The HG has received VoIP configuration data from the ACS — Part for VoIP in ProvisioningCode has been set to
+    4 by the ACS.
+  severity: info
+A106:
+  category: parodus
+  description: The HG has successfully loaded/flashed a new firmware image. — Firmware update executed successfully after
+    requested with Download command by ACS. Category Information
+  severity: info
+A107:
+  category: parodus
+  description: HG could not be configured . — ProvisioningCode has been set to 000.001.001.000 by the ACS.
+  severity: info
+HC001:
+  category: wan
+  description: The device detects configured overlapping IPv4 address subnets after receiving a IPv4 address on VLAN-8 via
+    DHCP. The DHCP IPv4 address received on WAN side is also included within the DHCP Ipv4 address range used by the DHCP
+    server on LAN side.
+  severity: info
+HYB001:
+  category: wan
+  description: The Network service is not available (e.g. no LTE/5G network with MCC262 available) — The register network
+    service is not available
+  severity: error
+HYB002:
+  category: wan
+  description: No packet-switched (PS) service network — There is no PS service in the network
+  severity: error
+HYB003:
+  category: wan
+  description: PDP Dial failure <Cause value> — The PDP dial is rejected by the network.
+  severity: error
+HYB004:
+  category: wan
+  description: The PDP address obtain failure — The PDP can't get the IP address
+  severity: error
+HYB005:
+  category: wan
+  description: The PDP dial successfully with <IPv4 address>, <IPv6 address> — The PDP dial successfully and get the IPv4/IPv6
+    address.
+  severity: info
+P001:
+  category: wan
+  description: 'From internet service provider transferred WAN IPv6 address : <IPv6-address> — The WAN IPv6-address the device
+    received from the internet service provider => only if GUA has changed'
+  severity: info
+P002:
+  category: wan
+  description: 'From internet service provider transferred Gateway IPv6 address : <IPv6-address> — The IP-address the device
+    received from the internet service provider'
+  severity: info
+P003:
+  category: wan
+  description: IPv6 connection could be established. IPv6 Prefix received — IPv6 Prefix is assigned to HG => only if the prefix
+    has changed
+  severity: info
+P004:
+  category: wan
+  description: IPv6 connection could not be established. IPv6 Prefix not received — No IPv6 Prefix is assigned to HG
+  severity: error
+P005:
+  category: wan
+  description: Router configures DNSv6 Server Address — Successful configure DNSv6 Server => only if a DNS server is provided
+  severity: info
+P007:
+  category: wan
+  description: Retry burst algorithm "alg_01" is caused by IPv6CP negotiation event — Retry burst algorithm "alg_01" is triggered
+    by, no IPv6CP ACK is received or erroneous IPv6CP ACK
+  severity: error
+P008:
+  category: wan
+  description: Retry burst algorithm "alg_01" is caused by RA Solicit event — Retry burst algorithm "alg_01" is triggered
+    by, no RA is received or erroneous RA
+  severity: error
+P009:
+  category: wan
+  description: Retry burst algorithm "alg_01" is caused by DHCPv6 Solicit event — Retry burst algorithm "alg_01" is triggered
+    by, no DHCPv6 Reply is received or erroneous DHCPv6 Reply
+  severity: error
+P010:
+  category: wan
+  description: IPv6 establishment not possible caused by Protocol-Reject (northbound router) for IPv6CP — IPv6 establishment
+    not possible triggered by Protocol-Reject (northbound router) for IPv6CP
+  severity: error
+PAM001:
+  category: wan
+  description: Session Bandwidth information received — Session Bandwidth information successful via PPP Authentication Message
+    received
+  severity: info
+  extract_metadata:
+  - download_bandwidth
+  - upload_bandwidth
+PAM002:
+  category: wan
+  description: Session Bandwidth update received — Session Bandwidth update successful via LCP Connection Update Request received
+  severity: info
+R001:
+  category: wan
+  description: PPPoE connection could not be established. Login failed. — PPPoE connection could not be established. Login
+    failed but there was no detailed information delivered by the radius server.
+  severity: error
+R001-56-0001:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0002:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0003:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0004:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0005:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0006:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0007:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0008:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0009:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0012:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0013:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0014:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0015:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0016:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0017:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0018:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0019:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0020:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0021:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0022:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0023:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was Error detailed information delivered by the radius server.
+  severity: error
+R001-56-0024:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0025:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0026:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0027:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0028:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0029:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0030:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0031:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0032:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0033:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0034:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R001-56-0035:
+  category: wan
+  description: PPPoE connection could not be established. Login failed due to the message provided by radius server — PPPoE
+    connection could not be established. Login failed but there was detailed information delivered by the radius server.
+  severity: error
+R006:
+  category: wan
+  description: DSL is not responding (DSL synchronisation failed, means DSL training does not start because of missing DSL
+    connection to network side) — Initial DSL training fails/does not start, because there is no physical connection to the
+    network side could not be synchronized; it is no DSL synchronisation loss
+  severity: error
+R006-1:
+  category: wan
+  description: DSL is no longer responding (DSL synchronisation loss) — Successfull DSL synchronisation is lost, par example
+    because of physical connection loss, high error rate (FEC or CRC), different reasons are possible
+  severity: error
+R006-2:
+  category: wan
+  description: DSL is no longer responding (DSL synchronisation loss) — Successfull DSL synchronisation is lost, par example
+    because of physical connection loss, high error rate (FEC or CRC), different reasons are possible
+  severity: error
+R007:
+  category: wan
+  description: DSL is available (DSL successfully synchronized). DSL synchronization is logged in upstream and downstream
+    direction. — DSL successfully synchronized.
+  severity: error
+R008:
+  category: wan
+  description: DSL synchronization running — DSL synchronization is in progress
+  severity: error
+R009:
+  category: wan
+  description: Connection to the Internet has been terminated by <’Product name’> — Connection to the Internet has been terminated
+    by the HG. e.g. Reboot, Reconfiguration, forced termination (PADT)
+  severity: info
+R010:
+  category: wan
+  description: 'Internet connection successfully established. From internet service provider transferred Gateway IPv4 address
+    : <IPv4-address> — Internet connection successfully established with user specific access credentials means the access
+    credentials used are not containing the realm “@setup.xxx”. The device received a IPv4-address from the internet service
+    provider.'
+  severity: info
+  extract_metadata:
+  - ipv4_address
+R010-1:
+  category: wan
+  description: Internet connection successfully established with default credentials — Internet connection successfully established
+    with default credentials (
+  severity: info
+R010-2:
+  category: wan
+  description: Internet connection successfully established with setup credentials — Internet connection successfully established
+    with setup credentials (xxx@setup.t-online.de e.g. 5502186490410001@setup.t-online.de) to perform automatic configuration.
+    At this point in time the value corresponding to BNG of the second triplet of the current provisioning code is unequal
+    to the value 4.
+  severity: info
+R010-3:
+  category: wan
+  description: 'Internet connection successfully established and the value corresponding to BNG of the second triplet of the
+    current provisioning code is equal to the value 4. From internet service provider transferred Gateway IPv4 address : <IPv4-address>'
+  severity: info
+R011:
+  category: wan
+  description: PPP initialization failed — PPP initialization failed
+  severity: error
+R012:
+  category: wan
+  description: 'PPP initialization failed: Loopback found — PPP initialization failed: Loopback found'
+  severity: error
+R013:
+  category: wan
+  description: 'PPPoE error: DSL synchronization lost. — PPPoE error: DSL synchronization lost.'
+  severity: error
+R013-1:
+  category: wan
+  description: 'PPPoE error: Ethernet Link (WAN) lost. — PPPoE error: Ethernet Link (WAN) lost.'
+  severity: error
+R013-2:
+  category: wan
+  description: 'PPPoE error: Fiber optic (WAN) loss of signal detected. — PPPoE error: Fiber optic (WAN) loss of signal detected.'
+  severity: error
+R014:
+  category: wan
+  description: 'PPPoE error: false parameter (<Event Message>) — PPPoE error: false parameter (<Event Message>)'
+  severity: error
+R015:
+  category: wan
+  description: 'PPPoE error: wrong servicename (<Event Message>) — PPPoE error: wrong servicename (<Event Message>)'
+  severity: error
+R016:
+  category: wan
+  description: 'PPPoE error: illegal paket from PPPoE server (<Event Message>) — PPPoE error: illegal paket from PPPoE server
+    (<Event Message>)'
+  severity: error
+R017:
+  category: wan
+  description: 'PPPoE error: PPPoE server signals a system error (<Event Message>) — PPPoE error: PPPoE server signals a system
+    error (<Event Message>)'
+  severity: error
+R018:
+  category: wan
+  description: 'PPPoE error: PPPoE server signals that a problem occurred (<Event Message>) — PPPoE error: PPPoE server signals
+    that a problem occurred (<Event Message>)'
+  severity: error
+R019:
+  category: wan
+  description: 'PPPoE error: unknown error (<Event Message>) — PPPoE error: unknown error (<Event Message>)'
+  severity: error
+R020:
+  category: wan
+  description: 'PPPoE error: timeout (<Event Message>) — PPPoE error: timeout (<Event Message>)'
+  severity: error
+R021:
+  category: wan
+  description: 'Connection has been terminated: Remote station is not answering to LCP Echo requests. — The remote partner
+    is not answering LCP-Echo-Requests'
+  severity: error
+R101:
+  category: wan
+  description: ' — PADI sent by the HG during PPP Active Discovery Stage'
+  severity: info
+R102:
+  category: wan
+  description: 'Info: PADO packet received by the HG — PADO received by the HG during PPP Active Discovery Stage'
+  severity: info
+R103:
+  category: wan
+  description: 'Info: PADR packet sent by the HG — PADR sent by the HG during PPP Active Discovery Stage'
+  severity: info
+R104:
+  category: wan
+  description: 'Info: PADS packet received by the HG — PADS received by the HG during PPP Active Discovery Stage'
+  severity: info
+R105:
+  category: wan
+  description: 'Info: PADT packet received by the HG — PADT received by the HG'
+  severity: info
+R106:
+  category: wan
+  description: 'Info: PADT packet sent by the HG — PADT sent by the HG'
+  severity: info
+R200:
+  category: wan
+  description: Connection to the Internet has been terminated by IPv6 privacy level 2 function Telekom Datenschutz; corresponding
+    to to the additional specification) — Connection to the Internet has been terminated by the HG because of IPv6 privacy
+    level 2 function according to the additional specification.
+  severity: info
+D001:
+  category: dns
+  description: Dynamic DNS update was not successful. The Dynamic DNS provider could not be reached. The Update server could
+    not be reached — The Dynamic DNS update URL could not be resolved because of incorrectly entered information by the user.
+  severity: info
+D002-1:
+  category: dns
+  description: Dynamic DNS update was not successful. The Authentification failed because of bad user data. — The Dynamic
+    DNS provider replies with the returncode <badauth>
+  severity: info
+D002-2:
+  category: dns
+  description: Dynamic DNS update was not successful. The update was not successful because the host or domain name does not
+    exist — The Dynamic DNS provider replies with the returncode <nohost>
+  severity: info
+D002-3:
+  category: dns
+  description: Dynamic DNS update was not successful. The update was not successful because the host or domain name does not
+    exist. — The Dynamic DNS provider replies with the returncode <nofqdn>
+  severity: info
+D002-4:
+  category: dns
+  description: Dynamic DNS update was not successful. The update was not successful because the host or domain name is blocked
+    for update abuse — The Dynamic DNS provider replies with the returncode <abuse>
+  severity: info
+D002-5:
+  category: dns
+  description: Dynamic DNS update was not successful. The update was not successful because the the user agent was not send
+    or method of update procedure is incorrect. — The Dynamic DNS provider replies with the returncode <badagent>
+  severity: info
+D002-6:
+  category: dns
+  description: Dynamic DNS update was not successful. The update was not successful because of server failure or maintenance
+    update procedure is incorrect — The Dynamic DNS provider replies with the returncode <911>
+  severity: info
+D003:
+  category: dns
+  description: Dynamic DNS update was successful. The Dynamic DNS service replies <returncode> e.g. good (IP_ADDRESS) or nochg
+    (IP_ADDRESS) — The Dynamic DNS provider replies with the returncode good (IP_ADDRESS) or nochg (IP_ADDRESS).
+  severity: info
+DRP001:
+  category: dns
+  description: The DNS rebind functionality was enabled. — The DNS rebind functionality was enbaled via the Web-UI or by using
+    the corresponding parameter whithin the TR-181 data model.
+  severity: info
+DRP002:
+  category: dns
+  description: The DNS rebind functionality was disabled. — The DNS rebind functionality was disabled either via the Web-UI
+    or by using the corresponding parameter whithin the TR-181 data model.
+  severity: info
+DRP003:
+  category: dns
+  description: The DNS proxy has dropped a DNS response because the DNS response contains an IP address (IPv4 and/or IPv6)
+    located within the address range of the home network.
+  severity: info
+AS001:
+  category: network
+  description: User with IP-address <IPv4- or IPv6 address> successfully connected to the smb share. — User logiin to the
+    smb share acknowledged.
+  severity: info
+AS300:
+  category: network
+  description: SMB/cifs started and running — smb started via - Web-UI (new user account) - connection of smb/cifs device
+    across USB (printer, mass storages)
+  severity: info
+AS301:
+  category: network
+  description: SMB/cifs stopped — smb stopped via - Web-UI - disconnection of last smb/cifs device from USB
+  severity: info
+AS400:
+  category: network
+  description: UPnP AV server started — The UPnP media server is started.
+  severity: info
+AS401:
+  category: network
+  description: UPnP AV server stopped — The UPnP media server is stopped. Category Information
+  severity: info
+DEC001:
+  category: network
+  description: PP <Speedphonexxx> was successful paired with the FP — The pairing between PP and FP was successful
+  severity: info
+DEC002:
+  category: network
+  description: PP <Speedphonexxx> was Successful unpaired to FP — The unpairing between PP and FP was successful
+  severity: info
+DH101:
+  category: network
+  description: 'DHCPv6 server is active: <mini-DNSv6-server> <Mac-Address of the client> <IPv6 link local address of the client>
+    — DHCPv6 is active and a requesting station has successfully been provided with the relevant information: <mini-DNSv6-Server>
+    <Mac-Address of the client> <IPv6 link local address of the client> Category Information'
+  severity: info
+FW001:
+  category: network
+  description: 'Firewall has recognized a known attack vector from WAN side. The attack was initiated from <source IP address
+    (IPv4 or IPv6)> : <source port>. The attack was aimed at <destination IP address (IPv4 or IPv6)> : <destination port>."'
+  severity: info
+FW002:
+  category: network
+  description: 'Firewall has recognized a known attack vector from LAN side. The attack was initiated from <source IP address
+    (IPv4 or IPv6)> : <source port>. The attack was aimed at <destination IP address (IPv4 or IPv6)> : <destination port>.'
+  severity: info
+H001:
+  category: network
+  description: 'DHCP is active: <network> <computer name> <MAC address> <IP address> <subnet mask> <DNS-server> <gateway>
+    <lease time> — DHCP is active and a requesting client has successfully been provided with the relevant <network> information
+    means the requesting client is connected to LAN or by WLAN'
+  severity: info
+H002:
+  category: network
+  description: DHCP has been deactivated — DHCP has manually been deactivated
+  severity: info
+H003:
+  category: network
+  description: DHCP has been activated — DHCP has manually been activated
+  severity: info
+H004:
+  category: network
+  description: Providing DHCP information to a requesting station has failed. The requesting client is mentioned. — DHCP session
+    couldn’t be concluded by DHCP ACK to the client
+  severity: error
+H005:
+  category: network
+  description: The device prevents to configure overlapping IP address subnets to avoid conflicts. — The user wants to configure/save
+    an overlapping IPv4 subnet via the Web-UI which is already used on WAN side (VLAN-8)
+  severity: info
+H006:
+  category: network
+  description: Providing DHCP information to a requesting station has failed, because no more IPv4 addresses are available,
+    means the available pool of IPv4 addresses to delegate to a client is exhausted. Every available IPv4 address of the DHCP
+    pool is already in use by other clients. The requesting client is mentioned.
+  severity: error
+H007:
+  category: network
+  description: 'Configuration of a customized IPv4 address has been successfully completed The requesting host is mentioned:
+    <network> <computer name> <MAC address> former <IP address> upcoming <IP address>'
+  severity: info
+IG001:
+  category: network
+  description: The device has detected an IGMP query in version 1 <IP-address, MAC- adress of the IGMP querier) not originated
+    from the device within the home network of the user.
+  severity: info
+IG002:
+  category: network
+  description: The device has detected an IGMP query in version 2 <IP-address, MAC- adress of the IGMP querier) not originated
+    from the device within the home network of the user.
+  severity: info
+IG003:
+  category: network
+  description: The device has detected an IGMP query in version 3 <IP-address, MAC- adress of the IGMP querier) not originated
+    from the device within the home network of the user.
+  severity: info
+IPX001:
+  category: network
+  description: 'Successfull registration of <phone name> with IP <IP address> Info message: Das IP-Telefon <name> mit IP <IP
+    address> hat sich erfolgreich registriert. — When a SIP/IP phone registers successfully (subsequent register events within
+    240 minutes from the same client are not logged)'
+  severity: info
+IPX002:
+  category: network
+  description: 'Successfull deregistration of <phone name> with IP <IP address> Info message: Das IP-Telefon <name> mit IP
+    <IP address> hat sich deregistriert. — When a SIP/IP phone deregisters successfully'
+  severity: info
+IPX100:
+  category: network
+  description: SIP error occured with telephone <name> — SIP error occurs with a IP phone.
+  severity: info
+IPX101:
+  category: network
+  description: A SIP authentication error occured five times in a row with the IP-telephone <name> with MAC address <mac address>.
+    The IP-telephony functionality for the telephone <name> is deactivated.
+  severity: info
+IVA001:
+  category: network
+  description: '[SUOTA] New FW installation not successful on <SpeedphoneXXX> — PP notified a failure during FW upgrade'
+  severity: error
+IVA101:
+  category: network
+  description: '[SUOTA] Update triggered by PP <SpeedphoneXXX> — HG (as ‘FP’) received update request from PP'
+  severity: info
+IVA102:
+  category: network
+  description: '[SUOTA] New FW version available for <SpeedphoneXXX> — Entries ‘FW_new’ and ‘FW_old’ in Table ‘Firmware’ are
+    different'
+  severity: info
+IVA103:
+  category: network
+  description: '[SUOTA] No new FW version available for <SpeedphoneXXX> — Entries ‘FW_new’ and ‘FW_old’ in Table ‘Firmware’
+    are the same'
+  severity: info
+IVA104:
+  category: network
+  description: '[SUOTA] Firmwqare downloading initiated by <SpeedphoneXXX> at <timestamp> — HG (as ‘FP’) starts FW download
+    process'
+  severity: info
+IVA105:
+  category: network
+  description: '[SUOTA] New FW successfully installed on <SpeedphoneXXX> — PP notified a successful FW upgrade'
+  severity: info
+ME104:
+  category: network
+  description: IPv6 Address sent to LAN — IPv6 Prefix sent in to the LAN by Router Advertisement => only if the prefix has
+    changed
+  severity: info
+OAM001:
+  category: network
+  description: The device has entered the OAM state — State changed from any to ‘OAM state’
+  severity: info
+OAM002:
+  category: network
+  description: The device left the OAM state — State changed from ‘OAM-state’ to any
+  severity: info
+OAM003:
+  category: network
+  description: OAM remote loopback initiated — OAM remote loopback initiated
+  severity: info
+OAM004:
+  category: network
+  description: OAM remote loopback exited — OAM remote loopback exited
+  severity: info
+SPD001:
+  category: network
+  description: The Speeddial memory is erased by entering the keycode **#93# in a connected telefon — The customer enters
+    the keycode **#93# in telephone connected to the router.
+  severity: info
+SPD002:
+  category: network
+  description: The Speeddial memory is erased via the graphical user interface of the router. — The customer deletes the Speeddial
+    memory via the user interface of the router.
+  severity: info
+ST200:
+  category: network
+  description: NAPT port collision occurred — target port 5000/udp already in use
+  severity: info
+V001:
+  category: network
+  description: 'Registering with VoIP number (<RufNr>) failed: Reason: DNS error — The given VoIP registrar e.g. tal.t-online.de
+    is incorrect.'
+  severity: error
+V002:
+  category: network
+  description: 'Registering with VoIP number (<RufNr >) failed: Reason: <platform message> — The voice service platform returns
+    an error during the registering process which leads to an abortion of the register process. Hint: Error code 401 shall
+    not be logged.'
+  severity: error
+V003:
+  category: network
+  description: 'A general error regarding SIP telephony occurred: This action is not allowed <SIP error code 488> — Errors
+    returned from the voice service platform independently of the registering and call establishing process.'
+  severity: error
+V004:
+  category: network
+  description: 'Registering with VoIP number (<RufNr >) failed: Reason: no answer from remote station received — The registration
+    of a voip number is not possible because the voip service platform does not reply to the register requests. This message
+    must not be logged any time. Just once per voip number and registering process. Means if a registering process is completed
+    and a retry is necessary another the message is logged again if the registering fails again.'
+  severity: error
+V005:
+  category: network
+  description: 'UnRegister with VoIP number (<RufNr >) failed: Reason: <platform message> — De-Registering of a voip number
+    was not successful. The voice service platform returns an Event Message.'
+  severity: error
+V006:
+  category: network
+  description: 'VoIP Call with VoIP number (<RufNr >) failed: Reason: <platform message> — The establishment of a voice call
+    was not successful. The voice service platform returns an Event Message.'
+  severity: error
+V100:
+  category: network
+  description: Speed dialing memory was successful deleted — The user used the key code function **#93#
+  severity: info
+V101:
+  category: network
+  description: 'Internet Telephonie connection (voice number) has successfully been established: Destination IP-address of
+    the registration/registrar: <IP-address> — Subsequent register events within 1440 minutes from the same client MUST NOT
+    be logged. Please pay attention to important preliminary note'
+  severity: info
+VPN011:
+  category: network
+  description: VPN connection error. — Any VPN connection failure, exluding authentication errors.
+  severity: error
+VPN012:
+  category: network
+  description: VPN connection error. — VPN connection failed because of failed authentication (including either username/password
+    authentication or preshared key authentication)
+  severity: error
+VPN013:
+  category: network
+  description: VPN connection setup. — When a vpn connection is successfully established.
+  severity: info
+VPN014:
+  category: network
+  description: VPN connection released. — When a vpn connection is released.
+  severity: info
+VPN015:
+  category: network
+  description: VPN connection released because of connection time out. — When a vpn connection is released because of a connection
+    time out.
+  severity: info
+VPN021:
+  category: network
+  description: VPN connection error. — Any VPN connection failure, exluding authentication errors.
+  severity: error
+VPN022:
+  category: network
+  description: VPN connection error. — VPN connection failed because of failed authentication (preshared key authentication
+    only)
+  severity: error
+VPN023:
+  category: network
+  description: VPN connection setup. — When a vpn connection is successfully established.
+  severity: info
+VPN025:
+  category: network
+  description: VPN connection released because of connection time out. — When a vpn connection is released because of a connection
+    time out.
+  severity: info
+ZAB001:
+  category: network
+  description: Registering of the online address book <name of the address book> was not successful. Request-Header-Element
+    is missing. — "Request-Header-Element is missing. The client is unauthorizied to login to the server. Server sends HTTP-Statuscode
+    401."
+  severity: error
+ZAB002:
+  category: network
+  description: Login to online address book <name of the address book> was not successful. Username and/or password is incorrect.
+    — "HTTP-Event Code 403 (forbidden) or HTTP-Event Code 400 (invalid grant)" will be send by the server.
+  severity: error
+ZAB003:
+  category: network
+  description: 'Login to online address book <name of address book> was not successful. User has no permission to use the
+    service. — HTTP-Event Code 403 (forbidden) will be send by the server. The response-header contains the value “CustomReason:
+    Authorisation”.'
+  severity: error
+ZAB005:
+  category: network
+  description: 'Connection to online address book: <name of address book> successfully established. — Connection between Home
+    Gateway and online addressbook established.'
+  severity: info
+ZAB006:
+  category: network
+  description: 'Synchronization of contact data not completed. Unable to snycronize all contact data of the online address
+    book. Reason: too many contacts <name of the address book>'
+  severity: error
+ZAB007:
+  category: network
+  description: Syncronization of < XXXX> contact data in <name of address book> was successfull. — Successfull syncronisation
+    of <XXXX> contact data between Home Gateway and online adress book and vice versa.
+  severity: info
+ZAB008:
+  category: network
+  description: Connection to online adress book was interrupted. — "The connection between the central adress book and the
+    Home Gateway was interrupted. This can be triggerd by the user e.g. by deleting the login data in the Web-UI of the Home
+    Gateway."
+  severity: info
+AIA001:
+  category: system
+  description: The device changed the internet connection from DSL/WAN-UPLINK or optical fiber to the alternative Internet
+    connection (USB-Tethering using a celluar radio connection) after the loss of the internet connection via DSL/WAN-UPLINK
+    or optical fiber. The switch to the alternative Internet connection is conducted after the defined time out is expired.
+  severity: info
+AIA002:
+  category: system
+  description: The device changed the internet connection from the alternative internet connection (USB-Tethering using a
+    celluar radio connection) to DSL/WAN-UPLINK or optical fiber because the fixeline connection, e.g. DSL(successfull synchronisation)/WAN-UPLINK
+    or optical fiber is back for at least the defined time out (fallback) interval.
+  severity: info
+AIA003:
+  category: system
+  description: The device recognized a successfull attachment of a USB tethering capable device. — The user attached a device
+    which is capable of providing an internet connection via USB-Tethering using a celluar radio connection.
+  severity: info
+AIA004:
+  category: system
+  description: The device recognized a loss of the connection of a previously successfull attached USB tethering capable device.
+    — The user disconnects the device which is capable of providing an internet connection via USB-Tethering using a celluar
+    radio connection.
+  severity: info
+AIA005:
+  category: system
+  description: The device needs to reinitialize the USB port because interferences between the connected USB device and the
+    device itself. — The device detects interference between the USB capable device and itself. These interference triggers
+    a reinitialization of the USB device at the connected USB port.
+  severity: info
+AIA101:
+  category: system
+  description: The user has activated the usage of the alternative internet connection via USB-Tethering using a celluar radio
+    connection. — The user activates the usage of the alternative internet connection via USB-Tethering using a celluar radio
+    connection via the Web-UI.
+  severity: info
+AIA102:
+  category: system
+  description: The user has deactivated the usage of the alternative internet connection via USB-Tethering using a celluar
+    radio connection. — The user deactivates the usage of the alternative internet connection via USB-Tethering using a celluar
+    radio connection via the Web-UI.
+  severity: info
+B101:
+  category: system
+  description: Device is powered up (cold restart) — The device is rebooting means is switch on again.
+  severity: info
+B102:
+  category: system
+  description: Reboot has been triggered by web-ui or device-button (if device button for reboot is applicable) on purpose.
+    — A reboot was triggered by TR069, TR064, Web-UI, etc..
+  severity: info
+EP001:
+  category: system
+  description: An e-mail to test the e-mail push service was successfully sent — The user manually pushes the button "send
+    test e-mail".
+  severity: info
+EP002:
+  category: system
+  description: An e-mail was successfully sent because the device detected that a newer Firmware version is available. — The
+    regularly or manually firmware (via DTAG-CPE-Information.xml) update check was successfull.
+  severity: info
+EP003:
+  category: system
+  description: An e-mail was successfully sent because the device installed a new firmware version. — A new firmware version
+    was installed, either manually or automatically by the device.
+  severity: info
+EP004:
+  category: system
+  description: An e-mail was successfully sent because the device received a new IPv4 and / or IPv6 address. — The deivce
+    received a new IPv4 and/or IPv6 address on the WAN interface (either the DSL interface or the WAN Uplink interface).
+  severity: info
+EP005:
+  category: system
+  description: An e-mail was successfully sent because of an incoming missed call. — An incoming call was not answered.
+  severity: info
+EP006:
+  category: system
+  description: An e-mail was successfully sent because of an incoming call. — The e-mail is sent as soon as an incoming call
+    is detected (even if the call will be answered).
+  severity: info
+EP007:
+  category: system
+  description: An e-mail including the daily system report was successfully sent. — The daily system report was sent at midnight.
+  severity: info
+EP008:
+  category: system
+  description: An e-mail could no be sent because of an occured error. — An error occured during the process of sending an
+    e-mail.
+  severity: info
+EP009:
+  category: system
+  description: An e-mail was successfully sent because the mesh base, e.g. Speedport Smart 3, has detected a newer firmware
+    version for the connected mesh repeater devices. — The regularly or manually firmware (via DTAG-CPE-Information.xml) update
+    check for the connected mesh repeater devices was successfull.
+  severity: info
+EP010:
+  category: system
+  description: An e-mail was successfully sent because one specific mesh repeater has successfully installed the newer firmware
+    version. — A specific mesh repeater informs the mesh master about the successful installation of a new firmware version.
+  severity: info
+FUB001:
+  category: system
+  description: No Update of the Firmware possible — Availability of a Firmware update could not be checked successfully ·
+    Because of failed connection to the DTAG-CPE-Information.xml file
+  severity: info
+FUB002:
+  category: system
+  description: No Update of the Firmware possible — Availability of a Firmware update could not be checked successfully ·
+    Because of failed signature check of the DTAG-CPE-Information.xml file
+  severity: info
+FUB003:
+  category: system
+  description: No Update of the Firmware possible — Firmware update could not be conducted · The check was possible but no
+    new version available, means the latest Firmware Version is the currently used one.
+  severity: info
+FUB004:
+  category: system
+  description: No Update of the Firmware possible — Firmware update could not be conducted · Because of failed digest check
+    of the firmware file
+  severity: info
+FUB005:
+  category: system
+  description: No Update of the Firmware possible — Firmware update could not be conducted · Because of a problem during parsing
+    the XML file but not related to FUB001, FUB002, FUB003, FUB004
+  severity: info
+FUB006:
+  category: system
+  description: Firmware Download was manually started — The user manually confirmed that the latest version should be installed
+    and the download of the firmware was started.
+  severity: info
+FUB007:
+  category: system
+  description: The periodically conducted Firmware Update availability check was positive and the firmware download was started.
+    Update will be done during the time frame of <updateStartTime> and <updateStartTime>+<valueFirmwareInstallationMax> or
+    immediately In case <ns:updateStartTime>immediately</ns:updateStartTime> is not used
+  severity: info
+FUB007-2:
+  category: system
+  description: The periodically conducted Firmware Update availability check was positive and the firmware download was started.
+    The firmware update will be done immdiately after the download is successfully finished.
+  severity: info
+FUB008:
+  category: system
+  description: Firmware Update availibity check was positive and the button is renamed from "Update prüfen" to "Update durchführen".
+    — A new firmware version is available but won't be automatically installed because the option to automatically install
+    the firmware is either disabled or not available.
+  severity: info
+G101:
+  category: system
+  description: User has successfully logged into web-ui — The user successfully entered the Web-UI passwort and started a
+    Web-UI session.
+  severity: info
+G102:
+  category: system
+  description: User has logged out of the web-ui Event Message <ip-address> Abmeldung erfolgreich. — The log out button was
+    used to leave the Web-UI and actively end the Web-UI session.
+  severity: info
+G103:
+  category: system
+  description: Web-UI session has timed out — The Web-UI session timed out.
+  severity: info
+G104:
+  category: system
+  description: User has entered incorrect password — 1st – 5th incorrect attempt must be logged (6th and subsequent attempts
+    must not be logged until the next successful login)
+  severity: info
+G105:
+  category: system
+  description: User has successfully logged into Web-UI via https — The user successfully entered the Web-UI password and
+    started a Web-UI session using https..
+  severity: info
+G106:
+  category: system
+  description: User activated the login into Web-UI via https — The user successfully activated the access to the Web-UI password
+    via https.
+  severity: info
+G107:
+  category: system
+  description: User deactivated the login into Web-UI via https — The user successfully deactivated the access to the Web-UI
+    password via https.
+  severity: info
+HA001:
+  category: system
+  description: HAAP not reachable via LTE/5G during dial-in procedure — HAAP not reachable via LTE/5G during dial-in procedure.LTE/5G
+    Tunnel dial-in timeout
+  severity: error
+HA002:
+  category: system
+  description: HAAP not reachable via DSL during dial-in procedure — HAAP not reachable via DSL during dial-in procedure.DSL
+    Tunnel dial-in timeout
+  severity: error
+HA003:
+  category: system
+  description: LTE/5G Tunnel breakdown — Existing HAAP connection fails on LTE/5G path
+  severity: error
+HA004:
+  category: system
+  description: DSL Tunnel breakdown — Existing HAAP connection fails via DSL path
+  severity: error
+HA005:
+  category: system
+  description: DSL setup authorization fail with TOID unauthorized. — DSL User ID is not allowed to use bonding service. DSL
+    Tunnel not allowed. Error-code 401 is in GRE Deny response.
+  severity: error
+HA006:
+  category: system
+  description: MSISDN is not allowed to use bonding service. — MSISDN is not allowed to use bonding service. LTE/5G Tunnel
+    not allowed. Error-code 402 is in GRE Deny response.
+  severity: error
+HA007:
+  category: system
+  description: LTE/5G and DSL user ID mismatch — Mismatching LTE/5G and DSL User IDs.Error-code 403 is in GRE Deny response.
+  severity: error
+HA008:
+  category: system
+  description: 'A Session ID error occurred: a reinitialization of the bonding is needed. — HAAP rejects the dial-in attempt
+    because session with User ID already exists or doesn''t match. Error-code 404 is in GRE Deny response.'
+  severity: error
+HA009:
+  category: system
+  description: HAAP rejects the dial-in attempt because client uses non permitted CIN — HAAP rejects the dial-in attempt because
+    client uses non permitted CIN.Error-code 405 is in GRE Deny response.
+  severity: error
+HA010:
+  category: system
+  description: HAAP terminates customer session for maintenance reasons — HAAP terminates customer session for maintenance
+    reasons.Error-code 501 is in GRE Tear down.
+  severity: error
+HA011:
+  category: system
+  description: The communication error between HAAP and SOAP including error of SOAP message and method parameters while DSL
+    tunnel setup. — The communication error between HAAP and SOAP including error of SOAP message and method parameters while
+    DSL tunnel setup. Error-code 406 is in GRE Deny response.
+  severity: error
+HA012:
+  category: system
+  description: The communication error between HAAP and SOAP including error of SOAP message and method parameters while LTE/5G
+    tunnel setup. — The communication error between HAAP and SOAP including error of SOAP message and method parameters while
+    LTE/5G tunnel setup. Error-code 407 is in GRE Deny response.
+  severity: error
+HA013:
+  category: system
+  description: HAAP terminates LTE/5G tunnel for SOAP Parameters In-Session update — LTE/5G Parameters update termination.
+    Error-code 502 is in GRE Tear down.
+  severity: error
+HA014:
+  category: system
+  description: HAAP terminates DSL tunnel for SOAP Parameters In-Session update — DSL Parameters update termination. Error-code
+    503 is in GRE Tear down.
+  severity: error
+HA101:
+  category: system
+  description: The IP address of HAAP server:<IPv4 address>,<IPv6 address> — The IP address of HAAP currently CPE connected
+    to.
+  severity: info
+HA102:
+  category: system
+  description: DSL Tunnel setup successfully — The DSL tunnnel is setup successfully
+  severity: info
+HA103:
+  category: system
+  description: LTE/5G Tunnel setup successfully — The LTE/5G tunnnel is setup successfully
+  severity: info
+HA104:
+  category: system
+  description: HAAP service provider assigned Bonding tunnnel IPv4 address:<IPv4-address> — The IPv4 address is assigned to
+    the bonding tunnel.
+  severity: info
+HA105:
+  category: system
+  description: HAAP service provider assigned Bonding tunnnel IPv6 Prefix :<IPv6-Prefix> — The IPv6 Prefix is assigned to
+    the bonding tunnel.
+  severity: info
+HA106:
+  category: system
+  description: Telekom Filter List received — The telekom filter list is received from HAAP
+  severity: info
+HA107:
+  category: system
+  description: Bonding has started — The default routing is changed to Bonding
+  severity: info
+HA108:
+  category: system
+  description: 'The device creates a WAN IPv6 address from received BNG IPv6 prefix which the device uses for its own internal
+    services within the bonding tunnel. Event-Message: Für interne Dienste im Bonding-Tunnel zugewiesene WAN IPv6-Adresse:
+    <BNG IPv6 PD EUI-64>/128'
+  severity: info
+HA109:
+  category: system
+  description: 'The devices created WAN IPv6 address from received HAAP IPv6 prefix which the device uses for its own internal
+    services within the bonding tunnel. Event-Message: Für interne Dienste im Bonding-Tunnel zugewiesene WAN IPv6 Adresse:
+    <HAAP IPv6 PD EUI-64>/128'
+  severity: info
+M101:
+  category: system
+  description: The device has been reset to factory defaults. — A reset to manufacturing default was conducted.
+  severity: info
+M102:
+  category: system
+  description: The device running on firmware version <firmware version number> has finished the booting process successfully.
+    — The device has completed the boot process successfully and is ready for usage.
+  severity: info
+NT101:
+  category: system
+  description: The device with firmware version <firmware version number> successfully connected to the time server v6 and
+    synchronized the current time of day. — Successful time server v6 response
+  severity: info
+NT102:
+  category: system
+  description: Time server v6 connected but server responded with error. — Time server v6 responded error
+  severity: error
+NT103:
+  category: system
+  description: No time servers v6 reachable. — None of the configured time servers v6 respond within timeout period.
+  severity: error
+SV001:
+  category: system
+  description: Unexpected Message — inappropriate message received
+  severity: error
+SV002:
+  category: system
+  description: Incorrect MAC — TLSCiphertext decrypted in an invalid way
+  severity: error
+SV003:
+  category: system
+  description: Record Overflow — TLSCiphertext record received with excessive length
+  severity: error
+SV004:
+  category: system
+  description: Decompression failure — improper decompression input
+  severity: error
+SV005:
+  category: system
+  description: Handshake Failure — negotiation of proper security parameters not possible
+  severity: error
+SV006:
+  category: system
+  description: Bad Certificate — Certificate corrupt
+  severity: error
+SV007:
+  category: system
+  description: Unsupported Certificate — Certificate not supported
+  severity: error
+SV008:
+  category: system
+  description: Revoked Certificate — Certificate was revoked by signer
+  severity: error
+SV009:
+  category: system
+  description: Expired Certificate — Certificate has expired
+  severity: error
+SV010:
+  category: system
+  description: Unknown Certificate — Certificate is unknown
+  severity: error
+SV011:
+  category: system
+  description: Illegal Parameter — Handshake field out of range
+  severity: error
+SV012:
+  category: system
+  description: Unknown CA — Couldn't be matched with trusted CA
+  severity: error
+SV013:
+  category: system
+  description: Access Denied — Sender did not proceed negotiation
+  severity: error
+SV014:
+  category: system
+  description: Decode Error — Field or message length out of range
+  severity: error
+SV015:
+  category: system
+  description: Decrypt Error — Cryptographic operation failed
+  severity: error
+SV016:
+  category: system
+  description: Protocol Version — Protocol version not supported
+  severity: error
+SV017:
+  category: system
+  description: Insufficient Security — Server requires ciphers more secure than those supported by the client
+  severity: error
+SV018:
+  category: system
+  description: Internal Error — Internal error unrelated to the peer or the correctness of the protocol
+  severity: error
+SV019:
+  category: system
+  description: User Cancelled — Handshake is being canceled for some reason unrelated to a protocol failure
+  severity: error
+SV020:
+  category: system
+  description: No Re-negotiation — When renegotiation is not appropriate for server
+  severity: error
+SV021:
+  category: system
+  description: Unsupported Extension — Unsupported extension
+  severity: error
+SV101:
+  category: system
+  description: ‚INSECURE’ mode selected — Insecure mode selected by Web-UI
+  severity: info
+SV102:
+  category: system
+  description: ‚FALLBACK’ mode selected — Fallback mode selected by Web-UI
+  severity: info
+SV103:
+  category: system
+  description: SECURE’ mode selected — Secure mode selected by Web-UI
+  severity: info
+SV104:
+  category: system
+  description: Rejection during ‚SECURE’ mode — Connection error during ‚SECURE’ mode
+  severity: error
+SV105:
+  category: system
+  description: TLS connection established successfully — TLS connection successful established
+  severity: info
+SV106:
+  category: system
+  description: TLS connection failed — TLS closure alert
+  severity: error
+SV107:
+  category: system
+  description: TLS retry exceeded — TLS retry exhausted
+  severity: error
+SV108:
+  category: system
+  description: Invalid NAPTR entry — invalid or non existing SIPS+D2T NAPTR entry
+  severity: error
+SV109:
+  category: system
+  description: Unsupported request URI — Invalid request URI like e.g. „sips:tel.t-online.de“ used
+  severity: error
+SV110:
+  category: system
+  description: SRTP negotiation failed — SRTP negotiation unsuccesful
+  severity: error
+SV111:
+  category: system
+  description: Port unavailable <Port number, e.g. 5061> — Destination port unavailable
+  severity: error
+SV112:
+  category: system
+  description: Register error during ‚FALLBACK’ mode — Register error while in mode ‚FALLBACK’
+  severity: error
+SV113:
+  category: system
+  description: Register error during ‚SECURE’ mode — Register error while in mode ‚SECURE’
+  severity: error
+SV114:
+  category: system
+  description: Forced to ‚FALLBACK’ mode — FALLBACK mode forced due to error
+  severity: info
+SV116:
+  category: system
+  description: 'Secure Internet Telephonie connection (voice number) has successfully been established: Destination IP-address
+    of the registration/registrar: <IP-address> — Successful registration using a secure connection. Subsequent register events
+    within 240 minutes from the same client are not logged.'
+  severity: info
+T101:
+  category: system
+  description: The device with firmware version <firmware version number> successfully connected to the time server and synchronized
+    the current time of day. — Successful Time Server response (e.g. NO Leap Indicator ‘11’ answer)
+  severity: info
+T102:
+  category: system
+  description: Time Server connected but Server responded with Error. — Time Server responded with Error (e.g. Leap Indicator
+    ‘11’ answer)
+  severity: error
+T103:
+  category: system
+  description: No Time Servers reachable. — None of the configured Timeservers responded within Timout periode.
+  severity: error
+U002:
+  category: system
+  description: The attached USB mass storage device <devicename, port> is not working at all <reason> — The attached USB mass
+    storage device <devicename, port> is not usable.
+  severity: error
+U101:
+  category: system
+  description: USB device was mounted successfully. — The attached USB device was mounted successfully and is ready for usage.
+  severity: info
+U102:
+  category: system
+  description: USB device was dismounted successfully. — The attached USB was disconnected successfully.
+  severity: info
+UD101:
+  category: system
+  description: Update process has been started — The process to update the firmware was triggered by by TR069, TR064, Web-UI,
+    etc..
+  severity: info
+UD102:
+  category: system
+  description: Update to version <xxxxx> was successful. — The firmware update to version <xxxxx> was successful.
+  severity: info
+UD103:
+  category: system
+  description: 'Update to version <xxxxx> was not successful: <reason> — The update process to firmware version <xxxxxx> was
+    not successful <reason> Possible reasons: · Invalid format · Timeout · Internal error · Transfer failed (e.g. ACS) · Incomplete
+    firmware file · Damaged firmware file · cancelled by emergency call'
+  severity: error
+WD001:
+  category: system
+  description: Watchdog process has been started. — Watchdog process/deamon has been started.
+  severity: info
+WD002:
+  category: system
+  description: Watchdog process has been stopped. — Watchdog process/deamon has been stopped.
+  severity: info
+WD003:
+  category: system
+  description: Watchdog has restarted the system. — Watchdog timer is decreased to zero and system is restarted.
+  severity: error
+WD004:
+  category: system
+  description: Watchdog has restarted a specific process. — The (Software-) Watchdog has found a hanging process and restarts
+    it.
+  severity: error
+S001:
+  category: other
+  description: The given file is not of a valid structure — The file to import is not a formerly exported file containing
+    the settings but rather something else.
+  severity: error
+S002:
+  category: other
+  description: The given file does not fit to the firmware which is running on that speedport — The given file may was created
+    while an older firmware was running and is now tried to import.
+  severity: error
+S003:
+  category: other
+  description: The given file does not fit to the device typ of the speedport series. — The given file was e.g. created on
+    a speedport type A and is now tried to import on a speedport typ B.
+  severity: error
+S005:
+  category: other
+  description: The occurred error could not be specified in more detail. — An internal error occurred that could not be matched
+    to one of the above defined Event Messages.
+  severity: error
+S006:
+  category: other
+  description: A grave error occurred during import. The speedport has been set to factory default. — After the given file
+    has already been imported, during consistence check-up, an error has been recognized and therefore needs the device to
+    be set to factory default, because of inconsistent settings.
+  severity: info
+S101:
+  category: other
+  description: Properties are successfully saved into a file — Exported settings could be saved into a file without any problems.
+  severity: info
+S102:
+  category: other
+  description: Properties are successfully restored from a file — Exported settings could be restored into a file without
+    any problems.
+  severity: info
+W019-1:
+  category: wifi
+  description: 'WLAN station disconnected from either 2.4Ghz Wifi or 5.0Ghz Wifi radio: Computer name <computer name>, MAC-address:
+    <MAC-address> — 1. The regarding computer has been switched off. 2. The regarding computer is out of range 3. The WLAN
+    adapter has been removed from the PC 4. The WLAN adapter has been deactivated Please see important note at the end of
+    the chapter.'
+  severity: info
+  extract_metadata:
+  - mac_address
+  - ssid
+W019-2:
+  category: wifi
+  description: 'WLAN station successfully connected to either 2.4Ghz Wifi or 5.0Ghz Wifi radio: Computer name <computer name>,
+    MAC-address: <MAC-address> — WLAN station authenticated and connected successful to either 2.4 GHz SSID or 5.Ghz radio.'
+  severity: info
+  extract_metadata:
+  - mac_address
+  - ssid
+category_patterns:
+- pattern: WIFI\..*
+  category: wifi
+  default_severity: info
+- pattern: PARODUS\..*
+  category: parodus
+  default_severity: info
+- pattern: DNS.*
+  category: dns
+  default_severity: info
+- pattern: PAM.*
+  category: wan
+  default_severity: info
+- pattern: PPP.*
+  category: wan
+  default_severity: info
+- pattern: WAN.*
+  category: wan
+  default_severity: info
+- pattern: SYS.*
+  category: system
+  default_severity: info
+- pattern: NET.*
+  category: network
+  default_severity: info
+- pattern: DHCP.*
+  category: network
+  default_severity: info
+- pattern: .*\.ERROR
+  category: error
+  default_severity: error
+- pattern: .*\.WARN
+  category: warning
+  default_severity: warning
+- pattern: .*\.INFO
+  category: info
+  default_severity: info

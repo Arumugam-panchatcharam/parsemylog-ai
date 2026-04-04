@@ -102,9 +102,14 @@ def create_api_app():
     """
     app = Flask(__name__, static_folder=UPLOAD_DIRECTORY)
 
-    # Compress large JSON so dev server / clients don't hit ENOBUFS (e.g. macOS errno 55)
-    # on huge SelfHeal payloads. Register before CORS so CORS runs first, then gzip.
-    _gzip_min = int(os.environ.get("GZIP_JSON_MIN_BYTES", "1024"))
+    # Minified JSON for all jsonify() responses (smaller payloads; pairs with gzip below).
+    app.json.compact = True
+    app.json.ensure_ascii = False
+
+    # Compress JSON when client sends Accept-Encoding: gzip (browsers do by default).
+    # Low default threshold so medium syslog/overview responses still compress.
+    _gzip_min = int(os.environ.get("GZIP_JSON_MIN_BYTES", "256"))
+    _gzip_level = int(os.environ.get("GZIP_COMPRESS_LEVEL", "6"))
 
     @app.after_request
     def _maybe_gzip_json_response(response: Response) -> Response:
@@ -125,7 +130,7 @@ def create_api_app():
         if not data or len(data) < _gzip_min:
             return response
         try:
-            compressed = gzip.compress(data, compresslevel=6)
+            compressed = gzip.compress(data, compresslevel=_gzip_level)
         except OSError as exc:
             logging.getLogger(__name__).warning("gzip response skipped: %s", exc)
             return response
@@ -190,6 +195,7 @@ def create_api_app():
     from api.routes.files import files_bp
     from api.routes.patterns import patterns_bp
     from api.routes.telemetry import telemetry_bp
+    from api.routes.syslog import syslog_bp
     from api.routes.selfheal import selfheal_bp
     from api.routes.ai_analysis import ai_bp
     from api.routes.embedding import embedding_bp
@@ -214,6 +220,7 @@ def create_api_app():
     app.register_blueprint(files_bp, url_prefix="/api/projects")
     app.register_blueprint(patterns_bp, url_prefix="/api/projects")
     app.register_blueprint(telemetry_bp, url_prefix="/api/projects")
+    app.register_blueprint(syslog_bp, url_prefix="/api/projects")
     app.register_blueprint(selfheal_bp, url_prefix="/api/projects")
     app.register_blueprint(ai_bp, url_prefix="/api/projects")
     app.register_blueprint(embedding_bp, url_prefix="/api/projects")
