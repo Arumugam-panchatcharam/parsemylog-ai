@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { batchJobsApi } from "@/api/endpoints";
 
 export interface ChunkedUploadProgress {
@@ -39,12 +39,19 @@ export function useChunkedUpload(projectId: string, options: ChunkedUploadOption
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const onProgressRef = useRef(onProgress);
+  useEffect(() => {
+    onProgressRef.current = onProgress;
+  }, [onProgress]);
 
+  /** Always merge into latest state — avoids stale closures wiping status/totalBytes during chunk loop. */
   const updateProgress = useCallback((update: Partial<ChunkedUploadProgress>) => {
-    const newProgress = { ...progress, ...update };
-    setProgress(newProgress);
-    onProgress?.(newProgress);
-  }, [progress, onProgress]);
+    setProgress((prev) => {
+      const newProgress = { ...prev, ...update };
+      onProgressRef.current?.(newProgress);
+      return newProgress;
+    });
+  }, []);
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 

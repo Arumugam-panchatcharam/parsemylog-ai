@@ -315,6 +315,11 @@ export default function BatchJobsPage() {
                     Selected: {selectedFile.name} ({(selectedFile.size / (1024 * 1024)).toFixed(1)} MB)
                   </p>
                 )}
+                <p className="text-xs text-muted-foreground mt-2">
+                  Multiple log bundles for the <strong>same</strong> CPE (same vendor/MAC prefix before the
+                  timestamp or <code className="text-xs bg-muted px-1 rounded">_CPELogs_</code> marker in each file
+                  name) are merged into <strong>one</strong> batch job automatically.
+                </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Upload a .zip archive containing processed CPE files. Supports files up to 10GB with resume capability.
                 </p>

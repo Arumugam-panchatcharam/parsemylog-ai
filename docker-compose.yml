@@ -21,6 +21,7 @@ services:
       - ./logai:/app/logai:ro
       - ./services:/app/services:ro
       - ./configs:/app/configs:ro
+      - ./scripts:/app/scripts:ro
       - ./logai_api_wsgi.py:/app/logai_api_wsgi.py:ro
       - ./run_api.py:/app/run_api.py:ro
       - ./drain3.ini:/app/drain3.ini:ro
@@ -98,6 +99,7 @@ services:
       - ./logai:/app/logai:ro
       - ./services:/app/services:ro
       - ./configs:/app/configs:ro
+      - ./scripts:/app/scripts:ro
       - ./drain3.ini:/app/drain3.ini:ro
       # OUI database for MAC vendor lookups
       - ./oui.txt:/app/oui.txt

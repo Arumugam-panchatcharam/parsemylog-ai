@@ -10,6 +10,7 @@ Endpoints for managing batch CPE processing jobs:
 - Cancel running jobs
 """
 
+import fcntl
 import json
 import logging
 import os
@@ -31,39 +32,75 @@ logger = logging.getLogger(__name__)
 
 batch_jobs_bp = Blueprint("batch_jobs", __name__)
 
-# Upload tracking
-_upload_status = {}  # upload_id -> {status, progress, etc.}
-_upload_lock = threading.Lock()
 
-def _get_upload_dir():
+def _get_upload_dir() -> Path:
     """Get the temporary upload directory."""
     upload_dir = Path("/tmp/batch_uploads")
     upload_dir.mkdir(exist_ok=True)
     return upload_dir
 
-def _set_upload_status(upload_id: str, **kwargs):
-    """Update upload status (thread-safe)."""
-    with _upload_lock:
-        if upload_id not in _upload_status:
-            _upload_status[upload_id] = {
-                "status": "uploading",
-                "progress": 0,
-                "total_size": 0,
-                "uploaded_size": 0,
-                "error": None,
-            }
-        _upload_status[upload_id].update(kwargs)
+
+def _upload_meta_path(upload_id: str) -> Path:
+    """JSON metadata for chunked uploads (shared across Gunicorn workers)."""
+    return _get_upload_dir() / f"{upload_id}.upload.json"
+
+
+def _upload_not_found() -> dict:
+    return {
+        "status": "not_found",
+        "progress": 0,
+        "total_size": 0,
+        "uploaded_size": 0,
+        "error": "Upload not found",
+    }
+
+
+def _set_upload_status(upload_id: str, **kwargs) -> None:
+    """Persist upload status so any Gunicorn worker can read it."""
+    path = _upload_meta_path(upload_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            raw = f.read()
+            if raw.strip():
+                existing = json.loads(raw)
+            else:
+                existing = {}
+            if not existing:
+                existing = {
+                    "status": "uploading",
+                    "progress": 0,
+                    "total_size": 0,
+                    "uploaded_size": 0,
+                    "error": None,
+                }
+            existing.update(kwargs)
+            f.seek(0)
+            f.truncate()
+            json.dump(existing, f)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
 
 def _get_upload_status(upload_id: str) -> dict:
-    """Get upload status (thread-safe)."""
-    with _upload_lock:
-        return dict(_upload_status.get(upload_id, {
-            "status": "not_found",
-            "progress": 0,
-            "total_size": 0,
-            "uploaded_size": 0,
-            "error": "Upload not found",
-        }))
+    path = _upload_meta_path(upload_id)
+    if not path.exists():
+        return dict(_upload_not_found())
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                data = json.load(f)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return dict(data)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"[ChunkedUpload] Failed to read upload meta {upload_id}: {e}")
+        return dict(_upload_not_found())
 
 def _get_batch_logs_dir():
     """Get the batch CPE logs directory, supporting both local dev and Docker deployment."""
@@ -75,6 +112,40 @@ def _get_batch_logs_dir():
     # Local development path
     local_path = Path(BASE_DIR) / "batch_cpe_logs"
     return local_path
+
+
+_BATCH_UPLOAD_ROOT_MAX_DEPTH = 8
+
+
+def _is_noise_batch_path(name: str) -> bool:
+    """Skip macOS / archive metadata when detecting a single wrapper folder."""
+    return name == "__MACOSX" or name == ".DS_Store" or name.startswith("._")
+
+
+def _resolve_batch_cleanup_root(extract_dir: Path) -> Path:
+    """Descend single-child wrapper dirs so the cleanup script sees CPE subfolders with .tgz.
+
+    ``process_cpe_logs.py`` only scans *immediate* subdirectories. Many uploads are zipped as
+    ``outer/CPExxx/*.tgz``; running against ``outer`` would see no .tgz in ``CPExxx`` at the
+    wrong level without this step.
+    """
+    cur = extract_dir.resolve()
+    for _ in range(_BATCH_UPLOAD_ROOT_MAX_DEPTH):
+        try:
+            entries = [
+                p
+                for p in cur.iterdir()
+                if p.name != "archive" and not _is_noise_batch_path(p.name)
+            ]
+        except OSError:
+            break
+        subdirs = [p for p in entries if p.is_dir()]
+        files = [p for p in entries if p.is_file()]
+        if len(subdirs) == 1 and len(files) == 0:
+            cur = subdirs[0]
+            continue
+        break
+    return cur
 
 
 def _verify_project(project_id, user_id):
@@ -206,7 +277,7 @@ def init_chunked_upload(project_id):
         return err
     
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         filename = data.get("filename")
         total_size = data.get("total_size", 0)
         
@@ -438,13 +509,23 @@ def _process_uploaded_archive(flask_app, upload_id, project_id, user_id, temp_fi
             with zipfile.ZipFile(temp_file, 'r') as zf:
                 zf.extractall(extract_dir)
             
+            cleanup_root = _resolve_batch_cleanup_root(extract_dir)
+            if cleanup_root != extract_dir.resolve():
+                logger.info(
+                    f"[ChunkedUpload] {upload_id}: Cleanup root normalized "
+                    f"{extract_dir} -> {cleanup_root}"
+                )
+            
             _set_upload_status(upload_id, message="Running log cleanup script...")
             
-            # Run cleaning script
+            project_stem = Path(filename).stem
+            
+            # Run cleaning script (auto single-CPE merge is detected inside process_cpe_logs.py)
             script_path = Path(__file__).parent.parent.parent / "scripts" / "process_cpe_logs.py"
             cmd = [
                 "python3", str(script_path),
-                "--target-dir", str(extract_dir),
+                "--target-dir", str(cleanup_root),
+                "--project-name", project_stem,
             ]
             
             logger.info(f"[ChunkedUpload] {upload_id}: Running cleanup: {' '.join(cmd)}")
@@ -458,16 +539,19 @@ def _process_uploaded_archive(flask_app, upload_id, project_id, user_id, temp_fi
             
             _set_upload_status(upload_id, message="Creating batch job...")
             
-            # Count zip files created by cleanup script (look in archive subdirectory)
-            archive_dir = extract_dir / "archive"
+            # Per-CPE zips live under cleanup_root/archive/ (see process_cpe_logs.py)
+            archive_dir = cleanup_root / "archive"
             zip_files = list(archive_dir.glob("*.zip")) if archive_dir.exists() else []
             
-            # Fallback: also check root directory for backward compatibility
             if not zip_files:
-                zip_files = list(extract_dir.glob("*.zip"))
+                zip_files = list(cleanup_root.glob("*.zip"))
             
             if not zip_files:
-                error_msg = "No .zip files found after cleanup (checked both archive/ and root directory)"
+                detail = (result.stdout or "").strip() or (result.stderr or "").strip() or "no script output"
+                error_msg = (
+                    "No .zip files found after cleanup (expected CPE folders with .tgz under the "
+                    f"upload root; checked {archive_dir} and {cleanup_root}). Script output: {detail[:2000]}"
+                )
                 _set_upload_status(upload_id, status="error", error=error_msg)
                 logger.error(f"[ChunkedUpload] {upload_id}: {error_msg}")
                 return
@@ -475,8 +559,7 @@ def _process_uploaded_archive(flask_app, upload_id, project_id, user_id, temp_fi
             # Create batch job
             job_id = dbm.create_batch_job(project_id, user_id, len(zip_files), "cpe_processing", job_id=upload_id)
             
-            # Determine which directory contains the zip files
-            zip_dir = archive_dir if (archive_dir.exists() and list(archive_dir.glob("*.zip"))) else extract_dir
+            zip_dir = archive_dir if (archive_dir.exists() and list(archive_dir.glob("*.zip"))) else cleanup_root
             
             # Dispatch Celery task
             from services.celery_worker.tasks import process_cpe_batch_job

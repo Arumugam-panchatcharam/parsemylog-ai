@@ -10,9 +10,10 @@ Timestamp Patterns Supported:
 2. ISO format: 2025-11-13T08:06:53 or 2025-11-13T08:06:53Z
 3. Dash-separated: 2025-11-13-08-06-53
 4. Custom format 1: 200000-12:34:56.789 (device uptime)
-5. RFC short: Mon 1 12:34:56
+5. RFC short: Mon 1 12:34:56 (weekday) or syslog-style Mar 19 22:31:31 (month + day)
 6. RFC full: Mon Nov 01 12:34:56 UTC 2025
 7. Space-separated: 2025-11-13 08:06:53
+8. Compact date + time: 260325-02:58:46.700024 (YYMMDD-HH:MM:SS.microseconds), e.g. RDK/CPE logs
 """
 
 import re
@@ -39,11 +40,16 @@ _TIMESTAMP_PATTERNS = {
     # Space-separated: 2025-11-13 08:06:53
     "space_separated": re.compile(r"^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}"),
     
-    # RFC short format: Mon 1 12:34:56
-    "rfc_short": re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}"),
+    # Weekday or month + day + time (BSD/syslog): Mon 1 12:34:56 | Mar 19 22:31:31[.fraction]
+    "rfc_short": re.compile(
+        r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?$"
+    ),
     
     # RFC full format: Mon Nov 01 12:34:56 UTC 2025
     "rfc_full": re.compile(r"^[A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+UTC\s+\d{4}"),
+    
+    # YYMMDD-HH:MM:SS[.fraction]: 260325-02:58:46.700024 (must be valid calendar date)
+    "compact_yy_mm_dd_time": re.compile(r"^\d{6}-\d{2}:\d{2}:\d{2}(?:\.\d+)?$"),
 }
 
 
@@ -85,6 +91,7 @@ def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
         _parse_rfc_full,
         _parse_rfc_short,
         _parse_unix_epoch,
+        _parse_compact_yy_mm_dd_time,
         _parse_device_uptime,
     ]
     
@@ -138,28 +145,49 @@ def _parse_rfc_full(ts: str) -> Optional[datetime]:
     return datetime.strptime(ts, "%a %b %d %H:%M:%S %Z %Y")
 
 
+_MONTH_ABBREV = frozenset(
+    "jan feb mar apr may jun jul aug sep oct nov dec".split()
+)
+_WEEKDAY_ABBREV = frozenset(
+    "mon tue wed thu fri sat sun".split()
+)
+
+
 def _parse_rfc_short(ts: str) -> Optional[datetime]:
-    """Parse RFC short format: Mon 1 12:34:56
-    
-    This format is missing the year and month, so we need to infer them.
-    We assume the date is recent (current year or previous if month hasn't occurred yet).
+    """Parse weekday+day+time (Mon 1 12:34:56) or syslog month+day+time (Mar 19 22:31:31).
+
+    Year is inferred (current year, or previous if that makes the instant clearly in the future).
     """
     if not _TIMESTAMP_PATTERNS["rfc_short"].match(ts):
         return None
     
-    # Parse with a default year to extract month/day/time
-    # Use current year as default
+    parts = ts.split()
+    if len(parts) < 3:
+        return None
+    
+    first = parts[0].lower()
     now = datetime.now()
     
+    if first in _MONTH_ABBREV:
+        formats = ("%b %d %H:%M:%S.%f", "%b %d %H:%M:%S")
+    elif first in _WEEKDAY_ABBREV:
+        formats = ("%a %d %H:%M:%S.%f", "%a %d %H:%M:%S")
+    else:
+        return None
+    
     try:
-        # Parse Mon 1 12:34:56 format
-        parsed = datetime.strptime(ts, "%a %d %H:%M:%S")
+        parsed: Optional[datetime] = None
+        for fmt in formats:
+            try:
+                parsed = datetime.strptime(ts, fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return None
         
-        # Reconstruct with current year
         result = parsed.replace(year=now.year)
-        
-        # If the date is in the future, use previous year instead
-        if result > now:
+        if result > now + timedelta(days=1):
             result = result.replace(year=now.year - 1)
         
         return result
@@ -182,6 +210,22 @@ def _parse_unix_epoch(ts: str) -> Optional[datetime]:
         return datetime.fromtimestamp(epoch_float)
     except (ValueError, OSError):
         return None
+
+
+def _parse_compact_yy_mm_dd_time(ts: str) -> Optional[datetime]:
+    """Parse YYMMDD-HH:MM:SS[.microseconds], e.g. 260325-02:58:46.700024 → 2026-03-25.
+
+    Tried before device-uptime patterns that look similar but are not absolute times.
+    """
+    if not _TIMESTAMP_PATTERNS["compact_yy_mm_dd_time"].match(ts):
+        return None
+    
+    for fmt in ("%y%m%d-%H:%M:%S.%f", "%y%m%d-%H:%M:%S"):
+        try:
+            return datetime.strptime(ts, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_device_uptime(ts: str) -> Optional[datetime]:

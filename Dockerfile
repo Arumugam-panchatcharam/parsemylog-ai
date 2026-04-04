@@ -14,6 +14,9 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Batch / CPE helpers (compose also bind-mounts ./scripts for live updates)
+COPY scripts /app/scripts
+
 VOLUME ["/app/user_uploads", "/app/bge-small-en-v1.5-local"]
 
 EXPOSE 5000
