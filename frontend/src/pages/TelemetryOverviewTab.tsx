@@ -1,11 +1,21 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { telemetryApi } from "@/api/endpoints";
-import type { CrossCpeTelemetryEntry } from "@/api/endpoints";
+import type {
+  CrossCpeTelemetryEntry,
+  WifiFleetRadioChannelRow,
+  WifiFleetRadioTable,
+  WifiFleetRadioTransition,
+  WifiRfPayload,
+} from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import RebootAnalyticsSection from "@/components/RebootAnalyticsSection";
 import Plot from "react-plotly.js";
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
 import CircularProgress from "@mui/material/CircularProgress";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
@@ -15,6 +25,7 @@ import ErrorIcon from "@mui/icons-material/Error";
 import CloseIcon from "@mui/icons-material/Close";
 import MemoryIcon from "@mui/icons-material/Memory";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import WifiIcon from "@mui/icons-material/Wifi";
 
 /* ---------------------------------------------------------------- Types */
 
@@ -275,7 +286,8 @@ export default function TelemetryOverviewTab() {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
       setSortKey(key);
-      setSortDir("desc");
+      const defaultDesc: SortKey[] = ["reboot_count", "memory_usage_pct_peak"];
+      setSortDir(defaultDesc.includes(key) ? "desc" : "asc");
     }
   };
 
@@ -393,230 +405,689 @@ export default function TelemetryOverviewTab() {
         />
       </div>
 
-      {/* Reboot Analytics Section (Time-of-Day & Uptime Buckets) */}
-      {data.reboot_analytics && data.reboot_analytics.total_reboot_events > 0 && (
-        <div className="space-y-3">
-          <RebootAnalyticsSection analytics={data.reboot_analytics} />
-        </div>
-      )}
+      <Accordion
+        className="bg-card border border-border rounded-xl overflow-hidden shadow-none !mb-2"
+        sx={{ boxShadow: "none", "&:before": { display: "none" } }}
+      >
+        <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />} className="min-h-12 bg-muted/30">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+            <RestartAltIcon style={{ fontSize: 16, color: "#f9ab00" }} />
+            Reboot — time of day &amp; uptime buckets
+          </span>
+        </AccordionSummary>
+        <AccordionDetails className="pt-0 pb-3 px-2 space-y-3">
+          {data.reboot_analytics && data.reboot_analytics.total_reboot_events > 0 ? (
+            <RebootAnalyticsSection analytics={data.reboot_analytics} />
+          ) : (
+            <p className="text-xs text-muted-foreground px-1">No reboot events for the current filter.</p>
+          )}
+        </AccordionDetails>
+      </Accordion>
 
-      {/* CPE Detail Table */}
-      <div className="flex justify-center">
-        <div className="bg-card border border-border rounded-xl overflow-hidden inline-block">
-          <div className="px-3 py-1 border-b border-border bg-muted/30">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              CPE Memory &amp; Reboot Detail
-            </h3>
-          </div>
-
-          <div className="overflow-auto max-h-[calc(100vh-300px)]">
-            <table className="text-[11px] border-collapse">
-              <colgroup>
-                <col style={{ width: "140px" }} />
-                <col style={{ width: "100px" }} />
-                <col style={{ width: "80px" }} />
-                <col style={{ width: "100px" }} />
-                <col style={{ width: "100px" }} />
-                <col style={{ width: "100px" }} />
-                <col style={{ width: "100px" }} />
-                <col style={{ width: "120px" }} />
-                <col style={{ width: "100px" }} />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-card">
-                <tr className="border-b border-border bg-muted/20">
-                  <ThSort col="serial" label="Serial" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
-                  <ThSort col="model" label="Model" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
-                  <ThSort col="reboot_count" label="Reboots" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
-                  <ThSort col="memory_usage_pct_peak" label="Mem Usage" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
-                  <ThSort col="memory_free_min" label="Min Free" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
-                  <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Min Avail</th>
-                  <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Total</th>
-                  <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Uptime</th>
-                  <th className="text-center px-2 py-1 font-semibold text-muted-foreground">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedCpes.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="px-2 py-6 text-center text-muted-foreground">
-                      No CPEs with telemetry data found.
-                    </td>
+      <Accordion
+        className="bg-card border border-border rounded-xl overflow-hidden shadow-none !mb-2"
+        sx={{ boxShadow: "none", "&:before": { display: "none" } }}
+      >
+        <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />} className="min-h-12 bg-muted/30">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+            <MemoryIcon style={{ fontSize: 16, color: "#1a73e8" }} />
+            CPE reboot &amp; memory — table &amp; timeline
+          </span>
+        </AccordionSummary>
+        <AccordionDetails className="pt-0 pb-3 px-2 space-y-3">
+          <div className="w-full bg-card border border-border rounded-xl overflow-hidden">
+            <div className="px-3 py-1 border-b border-border bg-muted/20">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Fleet CPE detail — reboots &amp; memory ({sortedCpes.length} CPEs)
+              </h3>
+            </div>
+            <div className="overflow-auto max-h-[min(72vh,720px)]">
+              <table className="text-[11px] border-collapse w-full min-w-[880px]">
+                <thead className="sticky top-0 z-10 bg-card shadow-sm">
+                  <tr className="border-b border-border bg-muted/20">
+                    <ThSort col="serial" label="Serial" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
+                    <ThSort col="model" label="Model" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
+                    <ThSort col="reboot_count" label="Reboots" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
+                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Types</th>
+                    <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Uptime before</th>
+                    <ThSort col="memory_usage_pct_peak" label="Mem %" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
+                    <ThSort col="memory_free_min" label="Min Free" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} align="right" />
+                    <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Min Avail</th>
+                    <th className="text-right px-2 py-1 font-semibold text-muted-foreground">Total</th>
+                    <th className="text-center px-2 py-1 font-semibold text-muted-foreground">Status</th>
                   </tr>
-                )}
-                {sortedCpes.map((cpe) => {
-                  const isSelected = selectedCpe === cpe.serial;
-                  const unit = cpe.memory_unit ?? "KB";
-                  const cfg = statusCfg(cpe);
-                  return (
-                    <tr
-                      key={cpe.serial}
-                      className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${isSelected ? "ring-2 ring-primary/40 ring-inset" : ""} ${severityRowClass(cpe)}`}
-                      onClick={() => handleRowClick(cpe.serial)}
-                    >
-                      <td className="px-2 py-1.5 font-mono font-medium text-foreground">
-                        {cpe.serial}
-                      </td>
-                      <td className="px-2 py-1.5 text-muted-foreground">{cpe.model}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums font-medium">
-                        {cpe.reboot_count > 0 ? (
-                          <div className="inline-flex flex-col items-end gap-0.5">
-                            <span className="text-red-600 dark:text-red-400">{cpe.reboot_count}</span>
-                            {cpe.reboot_types && (cpe.reboot_types.soft > 0 || cpe.reboot_types.hard > 0) && (
-                              <div className="flex gap-1 text-[9px]">
-                                {cpe.reboot_types.soft > 0 && (
-                                  <span className="px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
-                                    {cpe.reboot_types.soft}S
-                                  </span>
-                                )}
-                                {cpe.reboot_types.hard > 0 && (
-                                  <span className="px-1 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
-                                    {cpe.reboot_types.hard}H
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">0</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums" title="Peak memory usage: (Total - Min Free) / Total × 100">
-                        {cpe.memory_usage_pct_peak != null ? (
-                          <span className={cpe.memory_usage_pct_peak > 90 ? "text-red-600 dark:text-red-400 font-bold" : cpe.memory_usage_pct_peak > 80 ? "text-orange-600 dark:text-orange-400 font-medium" : ""}>
-                            {cpe.memory_usage_pct_peak}%
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">N/A</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {fmtMemory(cpe.memory_free_min, unit)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {fmtMemory(cpe.memory_available_min, unit)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                        {fmtMemory(cpe.memory_total, unit)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
-                        {(cpe.reboot_events ?? []).length > 0
-                          ? (cpe.reboot_events ?? []).map((evt) => fmtDurationSec(evt.prev_uptime)).join(" / ")
-                          : "—"}
-                      </td>
-                      <td className="px-2 py-1.5 text-center">
-                        <StatusBadge status={cpe.status ?? "OK"} cfg={cfg} />
+                </thead>
+                <tbody>
+                  {sortedCpes.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="px-2 py-6 text-center text-muted-foreground">
+                        No CPEs with telemetry data found.
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  )}
+                  {sortedCpes.map((cpe) => {
+                    const isSelected = selectedCpe === cpe.serial;
+                    const unit = cpe.memory_unit ?? "KB";
+                    const cfg = statusCfg(cpe);
+                    return (
+                      <tr
+                        key={cpe.serial}
+                        className={`border-b border-border/60 cursor-pointer hover:bg-muted/30 transition-colors ${isSelected ? "ring-2 ring-primary/40 ring-inset" : ""} ${severityRowClass(cpe)}`}
+                        onClick={() => handleRowClick(cpe.serial)}
+                      >
+                        <td className="px-2 py-1.5 font-mono font-medium text-foreground whitespace-nowrap">{cpe.serial}</td>
+                        <td className="px-2 py-1.5 text-muted-foreground">{cpe.model}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums font-medium">
+                          {cpe.reboot_count > 0 ? (
+                            <span className="text-red-600 dark:text-red-400">{cpe.reboot_count}</span>
+                          ) : (
+                            <span className="text-muted-foreground">0</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-[9px]">
+                          {cpe.reboot_types && (cpe.reboot_types.soft > 0 || cpe.reboot_types.hard > 0) ? (
+                            <span className="flex gap-1 flex-wrap">
+                              {cpe.reboot_types.soft > 0 && (
+                                <span className="px-1 rounded bg-blue-100 dark:bg-blue-900/30">{cpe.reboot_types.soft}S</span>
+                              )}
+                              {cpe.reboot_types.hard > 0 && (
+                                <span className="px-1 rounded bg-red-100 dark:bg-red-900/30">{cpe.reboot_types.hard}H</span>
+                              )}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                          {(cpe.reboot_events ?? []).length > 0
+                            ? (cpe.reboot_events ?? []).map((evt) => fmtDurationSec(evt.prev_uptime)).join(" / ")
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums" title="Peak memory usage: (Total - Min Free) / Total × 100">
+                          {cpe.memory_usage_pct_peak != null ? (
+                            <span className={cpe.memory_usage_pct_peak > 90 ? "text-red-600 dark:text-red-400 font-bold" : cpe.memory_usage_pct_peak > 80 ? "text-orange-600 dark:text-orange-400 font-medium" : ""}>
+                              {cpe.memory_usage_pct_peak}%
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">N/A</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                          {fmtMemory(cpe.memory_free_min, unit)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                          {fmtMemory(cpe.memory_available_min, unit)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">{fmtMemory(cpe.memory_total, unit)}</td>
+                        <td className="px-2 py-1.5 text-center">
+                          <StatusBadge status={cpe.status ?? "OK"} cfg={cfg} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[10px] text-muted-foreground px-3 py-1.5 border-t border-border bg-muted/5">
+              Click a row to load the memory timeline below. Scroll vertically for large fleets.
+            </p>
           </div>
-        </div>
-      </div>
 
-      {/* Memory Timeline Chart */}
-      {selectedCpe && (
-        <div className="bg-card border border-border rounded-xl overflow-hidden max-h-[calc(100vh-280px)]">
-          <div className="px-3 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                <MemoryIcon style={{ fontSize: 14, color: "#1a73e8" }} />
-                Memory Timeline &mdash; {selectedCpe}
-              </h3>
-              <button
-                onClick={(e) => { e.stopPropagation(); setSelectedCpe(null); }}
-                className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
-              >
-                <CloseIcon style={{ fontSize: 14 }} />
-              </button>
-            </div>
-            {/* Reboot Legend */}
-            {(rebootShapes.length > 0 || (cpeChartData?.reboot_timeline?.all_events ?? []).length > 0) && (
-              <div className="px-3 py-1.5 border-b border-border bg-muted/10">
-                <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
-                  <span className="font-semibold">Reboot Markers:</span>
-                  <div className="flex items-center gap-1">
-                    <div className="w-5 h-0.5 bg-[#1a73e8]"></div>
-                    <span><span className="font-mono font-semibold text-[#1a73e8]">B</span> = BootTime</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-5 h-0.5 border-t-2 border-dashed border-[#d93025]"></div>
-                    <span><span className="font-mono font-semibold text-[#d93025]">TR</span> = Telemetry</span>
-                  </div>
-                  <div className="border-l border-border pl-4 ml-2 flex items-center gap-3">
-                    <div className="flex items-center gap-1">
-                      <span className="font-mono font-semibold text-[#3b82f6]">S</span>
-                      <span>= Soft (software)</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="font-mono font-semibold text-[#d93025]">H</span>
-                      <span>= Hard (power/crash)</span>
-                    </div>
-                  </div>
-                </div>
+          {selectedCpe && (
+            <div className="bg-card border border-border rounded-xl overflow-hidden max-h-[calc(100vh-280px)]">
+              <div className="px-3 py-1.5 border-b border-border bg-muted/30 flex items-center justify-between">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <MemoryIcon style={{ fontSize: 14, color: "#1a73e8" }} />
+                  Memory Timeline &mdash; {selectedCpe}
+                </h3>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setSelectedCpe(null); }}
+                  className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors"
+                >
+                  <CloseIcon style={{ fontSize: 14 }} />
+                </button>
               </div>
-            )}
-            <div className="px-2 py-1 overflow-auto">
-              {cpeChartLoading && (
-                <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
-                  <CircularProgress size={18} />
-                  <span className="text-xs">Loading memory data...</span>
+              {(rebootShapes.length > 0 || (cpeChartData?.reboot_timeline?.all_events ?? []).length > 0) && (
+                <div className="px-3 py-1.5 border-b border-border bg-muted/10">
+                  <div className="flex items-center gap-4 text-[10px] text-muted-foreground flex-wrap">
+                    <span className="font-semibold">Reboot Markers:</span>
+                    <div className="flex items-center gap-1">
+                      <div className="w-5 h-0.5 bg-[#1a73e8]" />
+                      <span><span className="font-mono font-semibold text-[#1a73e8]">B</span> = BootTime</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-5 h-0.5 border-t-2 border-dashed border-[#d93025]" />
+                      <span><span className="font-mono font-semibold text-[#d93025]">TR</span> = Telemetry</span>
+                    </div>
+                    <div className="border-l border-border pl-4 ml-2 flex items-center gap-3">
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono font-semibold text-[#3b82f6]">S</span>
+                        <span>= Soft</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono font-semibold text-[#d93025]">H</span>
+                        <span>= Hard</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
-              {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
-                <Plot
-                  data={[
-                    ...memoryTraces.map((t) => ({
-                      type: "scatter" as const,
-                      mode: "lines" as const,
-                      x: t.times,
-                      y: t.values,
-                      name: `${t.label} (${t.unit})`,
-                      line: { color: t.style.color, width: 2, dash: t.style.dash },
-                    })),
-                    rebootHoverTrace, // Add hover trace for reboot events
-                  ]}
-                  layout={{
-                    height: 340,
-                    margin: { l: 50, r: 20, t: 16, b: 40 },
-                    xaxis: {
-                      tickfont: { size: 10 },
-                      title: { text: "Time", font: { size: 11 } },
-                      tickformat: "%H:%M\n%b %d",
-                      dtick: 20 * 60 * 1000,
-                      ...(rebootXRange ? { range: rebootXRange } : {}),
-                    },
-                    yaxis: {
-                      tickfont: { size: 10 },
-                      title: { text: `Memory (${memoryTraces[0]?.unit ?? "MB"})`, font: { size: 11 } },
-                      rangemode: "tozero",
-                    },
-                    shapes: rebootShapes,
-                    annotations: rebootAnnotations,
-                    legend: { orientation: "h", y: -0.18, font: { size: 10 } },
-                    hovermode: "x unified",
-                    paper_bgcolor: "transparent",
-                    plot_bgcolor: "transparent",
-                    font: { family: "Roboto, sans-serif", size: 11 },
-                  }}
-                  config={{ displayModeBar: true, modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"], displaylogo: false }}
-                  useResizeHandler
-                  style={{ width: "100%" }}
-                />
-              )}
-              {!cpeChartLoading && (!memoryTraces || memoryTraces.length === 0) && (
-                <div className="py-8 text-center text-xs text-muted-foreground">
-                  No memory chart data available for this CPE.
-                </div>
-              )}
+              <div className="px-2 py-1 overflow-auto">
+                {cpeChartLoading && (
+                  <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+                    <CircularProgress size={18} />
+                    <span className="text-xs">Loading memory data...</span>
+                  </div>
+                )}
+                {!cpeChartLoading && memoryTraces && memoryTraces.length > 0 && (
+                  <Plot
+                    data={[
+                      ...memoryTraces.map((t) => ({
+                        type: "scatter" as const,
+                        mode: "lines" as const,
+                        x: t.times,
+                        y: t.values,
+                        name: `${t.label} (${t.unit})`,
+                        line: { color: t.style.color, width: 2, dash: t.style.dash },
+                      })),
+                      rebootHoverTrace,
+                    ]}
+                    layout={{
+                      height: 340,
+                      margin: { l: 50, r: 20, t: 16, b: 40 },
+                      xaxis: {
+                        tickfont: { size: 10 },
+                        title: { text: "Time", font: { size: 11 } },
+                        tickformat: "%H:%M\n%b %d",
+                        dtick: 20 * 60 * 1000,
+                        ...(rebootXRange ? { range: rebootXRange } : {}),
+                      },
+                      yaxis: {
+                        tickfont: { size: 10 },
+                        title: { text: `Memory (${memoryTraces[0]?.unit ?? "MB"})`, font: { size: 11 } },
+                        rangemode: "tozero",
+                      },
+                      shapes: rebootShapes,
+                      annotations: rebootAnnotations,
+                      legend: { orientation: "h", y: -0.18, font: { size: 10 } },
+                      hovermode: "x unified",
+                      paper_bgcolor: "transparent",
+                      plot_bgcolor: "transparent",
+                      font: { family: "Roboto, sans-serif", size: 11 },
+                    }}
+                    config={{ displayModeBar: true, modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"], displaylogo: false }}
+                    useResizeHandler
+                    style={{ width: "100%" }}
+                  />
+                )}
+                {!cpeChartLoading && (!memoryTraces || memoryTraces.length === 0) && (
+                  <div className="py-8 text-center text-xs text-muted-foreground">No memory chart data available for this CPE.</div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </AccordionDetails>
+      </Accordion>
+
+      <Accordion
+        className="bg-card border border-border rounded-xl overflow-hidden shadow-none !mb-2"
+        sx={{ boxShadow: "none", "&:before": { display: "none" } }}
+      >
+        <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />} className="min-h-12 bg-muted/30">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+            <WifiIcon style={{ fontSize: 16, color: "#00897b" }} />
+            WiFi RF — fleet channels, switches &amp; utilization
+          </span>
+        </AccordionSummary>
+        <AccordionDetails className="pt-0 pb-3 px-2 space-y-3">
+          {data.wifi_fleet_summary && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <SummaryBadge
+                  icon={<WifiIcon style={{ fontSize: 18, color: "#00897b" }} />}
+                  label="WiFi channel changes"
+                  value={data.wifi_fleet_summary.cpes_with_channel_changes}
+                  sub={fs.total > 0 ? `${Math.round((data.wifi_fleet_summary.cpes_with_channel_changes / fs.total) * 100)}% of CPEs` : undefined}
+                  bgClass="bg-teal-50 dark:bg-teal-900/20"
+                />
+                <SummaryBadge
+                  icon={<WifiIcon style={{ fontSize: 18, color: "#6a1b9a" }} />}
+                  label="DFS hint (5 GHz)"
+                  value={data.wifi_fleet_summary.cpes_with_dfs_hint_events}
+                  sub="EU-indicative"
+                  bgClass="bg-violet-50 dark:bg-violet-900/20"
+                />
+                <SummaryBadge
+                  icon={<WifiIcon style={{ fontSize: 18, color: "#e65100" }} />}
+                  label="Crowded WiFi util"
+                  value={data.wifi_fleet_summary.cpes_wifi_crowded}
+                  sub={fs.total > 0 ? `${Math.round((data.wifi_fleet_summary.cpes_wifi_crowded / fs.total) * 100)}%` : undefined}
+                  bgClass="bg-amber-50 dark:bg-amber-900/20"
+                />
+                <SummaryBadge
+                  icon={<WifiIcon style={{ fontSize: 18, color: "#1565c0" }} />}
+                  label="Channel events (total)"
+                  value={data.wifi_fleet_summary.total_channel_events}
+                  bgClass="bg-sky-50 dark:bg-sky-900/20"
+                />
+              </div>
+            </div>
+          )}
+
+          {(data.wifi_fleet_summary?.wifi_radio_fleet?.length ?? 0) > 0 ? (
+            <>
+              <p className="text-[10px] text-muted-foreground px-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>
+                  <span className="inline-block w-2 h-2 rounded-sm bg-violet-200 dark:bg-violet-800 align-middle mr-1" aria-hidden />
+                  5 GHz DFS channels (EU)
+                </span>
+                <span>
+                  <span className="inline-block w-2 h-2 rounded-sm bg-orange-200 dark:bg-orange-900 align-middle mr-1" aria-hidden />
+                  5 GHz radar overlap (EU-indicative)
+                </span>
+                <span className="text-muted-foreground/90">Tint when the radio&apos;s dominant band from CPEs is 5 GHz.</span>
+              </p>
+              <WifiFleetRadioGrid fleet={data.wifi_fleet_summary!.wifi_radio_fleet!} />
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground px-1">No per-radio WiFi fleet aggregates yet (needs WiFi channel data in telemetry cache).</p>
+          )}
+
+          {selectedCpe && (
+            <WifiRfDetailPanel serial={selectedCpe} wifi={sortedCpes.find((c) => c.serial === selectedCpe)?.wifi_rf} />
+          )}
+        </AccordionDetails>
+      </Accordion>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------- Sub-components */
+
+/** Match api/telemetry_wifi_metrics._band_hint for 5 GHz detection. */
+function bandHintIs5Ghz(band: string | null | undefined): boolean {
+  if (band == null || String(band).trim() === "") return false;
+  const s = String(band).toUpperCase().replace(/_/g, ".");
+  if (s.includes("6G") || (s.includes("6") && s.includes("GHZ")) || s.includes("6.0")) return false;
+  if (s.includes("2.4") || s.includes("24") || s.includes("2_4")) return false;
+  return s.includes("5G") || s.includes("5GHZ") || (s.includes("5") && s.includes("GHZ"));
+}
+
+/** EU (ETSI-style) 5 GHz DFS: 52–64, 100–140; aligns with telemetry_wifi_metrics._DFS_CHANNELS_5GHZ_EU. */
+const EU_DFS_5GHZ_CHANNELS: ReadonlySet<number> = new Set([
+  ...Array.from({ length: 65 - 52 }, (_, i) => 52 + i),
+  ...Array.from({ length: 141 - 100 }, (_, i) => 100 + i),
+]);
+
+/** EU-indicative radar-heavy overlap; aligns with telemetry_wifi_metrics._RADAR_CHANNELS_5GHZ_EU. */
+const EU_RADAR_5GHZ_CHANNELS: ReadonlySet<number> = new Set([116, 120, 124, 128, 132]);
+
+type FiveGhzChannelKind = "none" | "dfs" | "radar";
+
+function fiveGhzEuDefaultChannelKind(channel: number): FiveGhzChannelKind {
+  const ch = Math.round(channel);
+  if (EU_RADAR_5GHZ_CHANNELS.has(ch)) return "radar";
+  if (EU_DFS_5GHZ_CHANNELS.has(ch)) return "dfs";
+  return "none";
+}
+
+function wifiChannelRowClass(channel: number, is5GHzRadio: boolean): string {
+  if (!is5GHzRadio) return "border-b border-border/50";
+  const k = fiveGhzEuDefaultChannelKind(channel);
+  if (k === "radar") {
+    return "border-b border-orange-200/60 dark:border-orange-900/45 bg-orange-100/90 dark:bg-orange-950/35";
+  }
+  if (k === "dfs") {
+    return "border-b border-violet-200/50 dark:border-violet-900/40 bg-violet-100/85 dark:bg-violet-950/30";
+  }
+  return "border-b border-border/50";
+}
+
+function wifiChannelValueCellClass(channel: number, is5GHzRadio: boolean): string {
+  const base = "py-1 px-2 font-mono tabular-nums";
+  if (!is5GHzRadio) return base;
+  const k = fiveGhzEuDefaultChannelKind(channel);
+  if (k === "radar") {
+    return `${base} bg-orange-100/90 dark:bg-orange-950/35 text-orange-950 dark:text-orange-100`;
+  }
+  if (k === "dfs") {
+    return `${base} bg-violet-100/85 dark:bg-violet-950/30 text-violet-950 dark:text-violet-100`;
+  }
+  return base;
+}
+
+/** Scroll height from row count (capped); extra room for sticky header. */
+function wifiTableScrollMaxPx(rowCount: number): number {
+  const HEADER_BAND = 44;
+  const TABLE_HEAD = 28;
+  const ROW_PX = 26;
+  const CAP = 560;
+  const FLOOR = 96;
+  const body = Math.max(rowCount, 0) * ROW_PX;
+  const raw = HEADER_BAND + TABLE_HEAD + body;
+  return Math.min(CAP, Math.max(FLOOR, raw));
+}
+
+function WifiSortTh({
+  label,
+  active,
+  dir,
+  align,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  dir: "asc" | "desc";
+  align: "left" | "right";
+  onClick: () => void;
+}) {
+  return (
+    <th
+      className={`py-1.5 px-2 font-semibold text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap ${
+        align === "right" ? "text-right" : "text-left"
+      }`}
+      onClick={onClick}
+    >
+      <span className="inline-flex items-center gap-0.5">
+        {label}
+        {active ? (dir === "asc" ? <ArrowUpwardIcon style={{ fontSize: 12 }} /> : <ArrowDownwardIcon style={{ fontSize: 12 }} />) : null}
+      </span>
+    </th>
+  );
+}
+
+type ChannelSortKey = "channel" | "cpe_count" | "mean_util_pct" | "max_util_pct";
+
+function WifiRadioChannelsPanel({ radioNum, tbl }: { radioNum: 1 | 2; tbl: WifiFleetRadioTable | undefined }) {
+  const [sort, setSort] = useState<{ key: ChannelSortKey; dir: "asc" | "desc" }>({
+    key: "channel",
+    dir: "asc",
+  });
+
+  const toggleSort = useCallback((nextKey: ChannelSortKey) => {
+    setSort((s) => {
+      if (s.key !== nextKey) {
+        return {
+          key: nextKey,
+          dir: nextKey === "cpe_count" || nextKey === "mean_util_pct" || nextKey === "max_util_pct" ? "desc" : "asc",
+        };
+      }
+      return { key: s.key, dir: s.dir === "asc" ? "desc" : "asc" };
+    });
+  }, []);
+
+  const rows = tbl?.channels ?? [];
+  const is5GHzRadio = bandHintIs5Ghz(tbl?.band);
+
+  const sorted = useMemo(() => {
+    const list = [...rows];
+    const numOr = (v: number | null | undefined, fallback: number) =>
+      v == null || Number.isNaN(v) ? fallback : v;
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sort.key) {
+        case "channel":
+          cmp = a.channel - b.channel;
+          break;
+        case "cpe_count":
+          cmp = a.cpe_count - b.cpe_count;
+          break;
+        case "mean_util_pct":
+          cmp = numOr(a.mean_util_pct, sort.dir === "asc" ? Infinity : -Infinity) -
+            numOr(b.mean_util_pct, sort.dir === "asc" ? Infinity : -Infinity);
+          break;
+        case "max_util_pct":
+          cmp = numOr(a.max_util_pct, sort.dir === "asc" ? Infinity : -Infinity) -
+            numOr(b.max_util_pct, sort.dir === "asc" ? Infinity : -Infinity);
+          break;
+        default:
+          cmp = 0;
+      }
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [rows, sort]);
+
+  const maxH = wifiTableScrollMaxPx(sorted.length);
+
+  return (
+    <div className="border border-border rounded-lg overflow-hidden bg-card flex flex-col min-h-0 min-w-0">
+      <div className="shrink-0 px-2 py-1.5 bg-muted/20 border-b border-border">
+        <div className="text-[11px] font-semibold text-foreground">Radio {radioNum}</div>
+        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Channels &amp; utilization</div>
+        {tbl != null && (
+          <div className="text-[9px] text-muted-foreground mt-0.5">
+            {tbl.cpes_reporting} CPE radio row{tbl.cpes_reporting === 1 ? "" : "s"}
+            {tbl.band != null && String(tbl.band).trim() !== "" ? ` · ${tbl.band}` : ""}
+            {" · "}last sampled channel
+          </div>
+        )}
+      </div>
+      <div className="overflow-y-auto overflow-x-auto" style={{ maxHeight: maxH }}>
+        {!tbl ? (
+          <div className="p-4 text-[11px] text-muted-foreground">No fleet data for Radio {radioNum}.</div>
+        ) : sorted.length === 0 ? (
+          <div className="p-4 text-[11px] text-muted-foreground">No channel rows.</div>
+        ) : (
+          <table className="text-[10px] w-full border-collapse">
+            <thead className="sticky top-0 bg-card z-[1] border-b border-border shadow-sm">
+              <tr>
+                <WifiSortTh label="Channel" active={sort.key === "channel"} dir={sort.dir} align="left" onClick={() => toggleSort("channel")} />
+                <WifiSortTh label="CPEs" active={sort.key === "cpe_count"} dir={sort.dir} align="right" onClick={() => toggleSort("cpe_count")} />
+                <WifiSortTh label="Mean %" active={sort.key === "mean_util_pct"} dir={sort.dir} align="right" onClick={() => toggleSort("mean_util_pct")} />
+                <WifiSortTh label="Max %" active={sort.key === "max_util_pct"} dir={sort.dir} align="right" onClick={() => toggleSort("max_util_pct")} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((c: WifiFleetRadioChannelRow) => (
+                <tr key={c.channel} className={wifiChannelRowClass(c.channel, is5GHzRadio)}>
+                  <td className="py-1 px-2 font-mono tabular-nums">{c.channel}</td>
+                  <td className="py-1 px-2 text-right tabular-nums">{c.cpe_count}</td>
+                  <td className="py-1 px-2 text-right tabular-nums">{c.mean_util_pct ?? "—"}</td>
+                  <td className="py-1 px-2 text-right tabular-nums">{c.max_util_pct ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type SwitchSortKey = "from" | "to" | "count" | "share_pct";
+
+function WifiRadioSwitchesPanel({ radioNum, tbl }: { radioNum: 1 | 2; tbl: WifiFleetRadioTable | undefined }) {
+  const [sort, setSort] = useState<{ key: SwitchSortKey; dir: "asc" | "desc" }>({
+    key: "count",
+    dir: "desc",
+  });
+
+  const toggleSort = useCallback((nextKey: SwitchSortKey) => {
+    setSort((s) => {
+      if (s.key !== nextKey) {
+        return { key: nextKey, dir: nextKey === "count" || nextKey === "share_pct" ? "desc" : "asc" };
+      }
+      return { key: s.key, dir: s.dir === "asc" ? "desc" : "asc" };
+    });
+  }, []);
+
+  const rows = tbl?.top_transitions ?? [];
+  const is5GHzRadio = bandHintIs5Ghz(tbl?.band);
+
+  const sorted = useMemo(() => {
+    const list = [...rows];
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sort.key) {
+        case "from":
+          cmp = a.from - b.from;
+          break;
+        case "to":
+          cmp = a.to - b.to;
+          break;
+        case "count":
+          cmp = a.count - b.count;
+          break;
+        case "share_pct":
+          cmp = a.share_pct - b.share_pct;
+          break;
+        default:
+          cmp = 0;
+      }
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [rows, sort]);
+
+  const maxH = wifiTableScrollMaxPx(sorted.length);
+
+  return (
+    <div className="border border-border rounded-lg overflow-hidden bg-card flex flex-col min-h-0 min-w-0">
+      <div className="shrink-0 px-2 py-1.5 bg-muted/20 border-b border-border">
+        <div className="text-[11px] font-semibold text-foreground">Radio {radioNum}</div>
+        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Most common channel switches</div>
+        {tbl != null && tbl.band != null && String(tbl.band).trim() !== "" ? (
+          <div className="text-[9px] text-muted-foreground mt-0.5">{tbl.band}</div>
+        ) : null}
+      </div>
+      <div className="overflow-y-auto overflow-x-auto" style={{ maxHeight: maxH }}>
+        {!tbl ? (
+          <div className="p-4 text-[11px] text-muted-foreground">No fleet data for Radio {radioNum}.</div>
+        ) : sorted.length === 0 ? (
+          <div className="p-4 text-[11px] text-muted-foreground">No switch events recorded.</div>
+        ) : (
+          <table className="text-[10px] w-full border-collapse">
+            <thead className="sticky top-0 bg-card z-[1] border-b border-border shadow-sm">
+              <tr>
+                <WifiSortTh label="From" active={sort.key === "from"} dir={sort.dir} align="left" onClick={() => toggleSort("from")} />
+                <WifiSortTh label="To" active={sort.key === "to"} dir={sort.dir} align="left" onClick={() => toggleSort("to")} />
+                <WifiSortTh label="Events" active={sort.key === "count"} dir={sort.dir} align="right" onClick={() => toggleSort("count")} />
+                <WifiSortTh label="Share %" active={sort.key === "share_pct"} dir={sort.dir} align="right" onClick={() => toggleSort("share_pct")} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((tr: WifiFleetRadioTransition, i: number) => (
+                <tr key={`${tr.from}-${tr.to}-${i}`} className="border-b border-border/50">
+                  <td className={wifiChannelValueCellClass(tr.from, is5GHzRadio)}>{tr.from}</td>
+                  <td className={wifiChannelValueCellClass(tr.to, is5GHzRadio)}>{tr.to}</td>
+                  <td className="py-1 px-2 text-right tabular-nums">{tr.count}</td>
+                  <td className="py-1 px-2 text-right tabular-nums">{tr.share_pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WifiFleetRadioGrid({ fleet }: { fleet: WifiFleetRadioTable[] }) {
+  const r1 = useMemo(() => fleet.find((t) => t.radio === 1), [fleet]);
+  const r2 = useMemo(() => fleet.find((t) => t.radio === 2), [fleet]);
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <WifiRadioChannelsPanel radioNum={1} tbl={r1} />
+      <WifiRadioSwitchesPanel radioNum={1} tbl={r1} />
+      <WifiRadioChannelsPanel radioNum={2} tbl={r2} />
+      <WifiRadioSwitchesPanel radioNum={2} tbl={r2} />
+    </div>
+  );
+}
+
+function WifiRfDetailPanel({ serial, wifi }: { serial: string; wifi: WifiRfPayload | undefined }) {
+  const empty = !wifi || (wifi.radios.length === 0 && (wifi.channel_events?.length ?? 0) === 0);
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-border bg-muted/30">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+          <WifiIcon style={{ fontSize: 14, color: "#00897b" }} />
+          WiFi RF &mdash; {serial}
+        </h3>
+      </div>
+      {empty && (
+        <div className="px-3 py-6 text-xs text-muted-foreground">
+          No WiFi radio time series in cache (channel / utilization charts need at least two numeric samples per field). Latest band/BW may still appear if status cards were parsed.
+        </div>
+      )}
+      {!empty && wifi && (
+        <div className="px-2 py-2 space-y-3 text-[11px]">
+          <p className="text-[10px] text-muted-foreground px-1">
+            Crowded = max ch util ≥ {wifi.util_crowded_max_pct}% or avg ≥ {wifi.util_crowded_avg_pct}%. DFS hint = 5 GHz and channel in common EU (ETSI-style) DFS range (indicative).
+          </p>
+          {wifi.radios.length > 0 && (
+            <div className="overflow-auto">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 px-1">Radios</div>
+              <table className="w-full border-collapse text-[10px]">
+                <thead>
+                  <tr className="border-b border-border text-left text-muted-foreground">
+                    <th className="py-1 pr-2">R</th>
+                    <th className="py-1 pr-2">Band</th>
+                    <th className="py-1 pr-2">BW</th>
+                    <th className="py-1 pr-2">Channel</th>
+                    <th className="py-1 pr-2">Δ</th>
+                    <th className="py-1 pr-2">Util max</th>
+                    <th className="py-1 pr-2">Util avg</th>
+                    <th className="py-1 pr-2">Util last</th>
+                    <th className="py-1 pr-2">Crowded</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {wifi.radios.map((r) => (
+                    <tr key={r.radio} className="border-b border-border/60">
+                      <td className="py-1 pr-2 font-mono">{r.radio}</td>
+                      <td className="py-1 pr-2">{r.band ?? "—"}</td>
+                      <td className="py-1 pr-2">{r.bandwidth ?? "—"}</td>
+                      <td className="py-1 pr-2 tabular-nums">
+                        {r.channel_first != null && r.channel_last != null && r.channel_first !== r.channel_last
+                          ? `${r.channel_first}→${r.channel_last}`
+                          : r.channel_last ?? r.channel_first ?? "—"}
+                      </td>
+                      <td className="py-1 pr-2 tabular-nums">{r.channel_change_count}</td>
+                      <td className="py-1 pr-2 tabular-nums">{r.util_max != null ? `${r.util_max}%` : "—"}</td>
+                      <td className="py-1 pr-2 tabular-nums">{r.util_avg != null ? `${r.util_avg}%` : "—"}</td>
+                      <td className="py-1 pr-2 tabular-nums">{r.util_last != null ? `${r.util_last}%` : "—"}</td>
+                      <td className="py-1 pr-2">{r.crowded ? <span className="text-orange-600 dark:text-orange-400 font-semibold">Yes</span> : "No"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {(wifi.channel_events?.length ?? 0) > 0 && (
+            <div className="overflow-auto max-h-48">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 px-1">Channel changes</div>
+              <table className="w-full border-collapse text-[10px]">
+                <thead>
+                  <tr className="border-b border-border text-left text-muted-foreground">
+                    <th className="py-1 pr-2">Time</th>
+                    <th className="py-1 pr-2">R</th>
+                    <th className="py-1 pr-2">From→to</th>
+                    <th className="py-1 pr-2">Band</th>
+                    <th className="py-1 pr-2">DFS hint</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {wifi.channel_events.map((e, i) => (
+                    <tr key={`${e.at_time}-${e.radio}-${i}`} className="border-b border-border/60">
+                      <td className="py-1 pr-2 whitespace-nowrap font-mono text-[9px]">{e.at_time || "—"}</td>
+                      <td className="py-1 pr-2 font-mono">{e.radio}</td>
+                      <td className="py-1 pr-2 tabular-nums">{e.from_channel}→{e.to_channel}</td>
+                      <td className="py-1 pr-2">{e.band ?? "—"}</td>
+                      <td className="py-1 pr-2">{e.dfs_related ? <span className="text-violet-700 dark:text-violet-400">Yes</span> : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function StatusBadge({ status, cfg }: { status: string; cfg: typeof STATUS_CFG[string] }) {
   const Icon = cfg.icon;

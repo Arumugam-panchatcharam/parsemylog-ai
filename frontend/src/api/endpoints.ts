@@ -577,6 +577,68 @@ export const patternsApi = {
 };
 
 // ---------- Telemetry ----------
+export interface WifiRfChannelEvent {
+  radio: number;
+  from_channel: number;
+  to_channel: number;
+  at_time: string;
+  band?: string | null;
+  dfs_related?: boolean;
+}
+
+export interface WifiRfRadioRow {
+  radio: number;
+  band?: string | null;
+  bandwidth?: string | null;
+  channel_first?: number | null;
+  channel_last?: number | null;
+  channel_change_count: number;
+  util_first?: number | null;
+  util_last?: number | null;
+  util_max?: number | null;
+  util_avg?: number | null;
+  crowded: boolean;
+}
+
+export interface WifiRfPayload {
+  radios: WifiRfRadioRow[];
+  channel_events: WifiRfChannelEvent[];
+  util_crowded_max_pct: number;
+  util_crowded_avg_pct: number;
+}
+
+export interface WifiFleetRadioChannelRow {
+  channel: number;
+  cpe_count: number;
+  mean_util_pct: number | null;
+  max_util_pct: number | null;
+}
+
+export interface WifiFleetRadioTransition {
+  from: number;
+  to: number;
+  count: number;
+  share_pct: number;
+}
+
+export interface WifiFleetRadioTable {
+  radio: number;
+  /** Dominant Band string from CPE radio rows (e.g. 5GHz); used for DFS/radar channel coloring. */
+  band?: string | null;
+  cpes_reporting: number;
+  channels: WifiFleetRadioChannelRow[];
+  top_transitions: WifiFleetRadioTransition[];
+}
+
+export interface WifiFleetSummary {
+  cpes_with_channel_changes: number;
+  cpes_with_dfs_hint_events: number;
+  cpes_wifi_crowded: number;
+  total_channel_events: number;
+  transition_histogram: Array<{ from: number; to: number; count: number }>;
+  wifi_radio_fleet?: WifiFleetRadioTable[];
+}
+
 export interface CrossCpeTelemetryEntry {
   serial: string;
   model: string;
@@ -601,6 +663,7 @@ export interface CrossCpeTelemetryEntry {
     reboot_type?: "soft" | "hard";
   }>;
   reboot_types?: { soft: number; hard: number };
+  wifi_rf?: WifiRfPayload;
 }
 
 export interface RebootAnalytics {
@@ -639,6 +702,7 @@ export interface CrossCpeTelemetryOverview {
     with_low_memory: number;
     with_both: number;
   };
+  wifi_fleet_summary?: WifiFleetSummary;
   reboot_analytics?: RebootAnalytics;
 }
 

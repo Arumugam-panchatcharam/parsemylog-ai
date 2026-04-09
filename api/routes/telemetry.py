@@ -34,6 +34,11 @@ from logai.telemetry_parser import (
     load_available_fields_cache,
     extract_mesh_topology_timeline,
 )
+from api.telemetry_wifi_metrics import (
+    aggregate_wifi_fleet_from_cpes,
+    build_wifi_fleet_radio_tables,
+    extract_wifi_rf_from_cache,
+)
 from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -1064,7 +1069,7 @@ def _analyze_reboot_correlation(cpe_results, window_minutes=10, min_cpes=2):
 @jwt_required()
 def cross_cpe_overview(project_id):
     """
-    Aggregate memory health and reboot data across ALL CPEs in a project.
+    Aggregate memory health, reboot data, and WiFi RF metrics across ALL CPEs in a project.
 
     Query params:
         force (optional): Set to "1" or "true" to force re-parse all telemetry data
@@ -1073,17 +1078,11 @@ def cross_cpe_overview(project_id):
 
     Returns:
         {
-            "cpes": [ { serial, model, memory_free_min, memory_free_avg,
-                         memory_total, memory_usage_pct_peak, reboot_count,
-                         reboot_events, low_memory, status } ],
+            "cpes": [ { serial, model, memory_* , reboot_*, status,
+                        wifi_rf: { radios, channel_events, util_* thresholds } } ],
             "fleet_summary": { total, with_reboots, with_low_memory, with_both },
-            "reboot_correlation": {
-                "clusters": [ { cluster_id, window_start, window_end, affected_cpes,
-                               cpe_count, events, likely_power_outage, confidence } ],
-                "total_clusters": int,
-                "likely_power_outages": int,
-                "window_minutes": int
-            }
+            "wifi_fleet_summary": { cpes_with_channel_changes, transition_histogram, ... },
+            "reboot_analytics": { ... }
         }
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1115,6 +1114,12 @@ def cross_cpe_overview(project_id):
             "low_memory": False, "memory_usage_pct_peak": None,
             "status": "OK",
             "reboot_timeline_data": None,  # For bucketing analysis
+            "wifi_rf": {
+                "radios": [],
+                "channel_events": [],
+                "util_crowded_max_pct": 70.0,
+                "util_crowded_avg_pct": 50.0,
+            },
         }
         # Load from cache unless force re-parse is requested
         cached = None if force else load_telemetry_cache(cpe_dir)
@@ -1237,6 +1242,7 @@ def cross_cpe_overview(project_id):
             entry["low_memory"] = False
             entry["status"] = "OK"
 
+        entry.update(extract_wifi_rf_from_cache(cached))
         return entry
 
     # Build list of (serial, cpe_dir) pairs
@@ -1263,6 +1269,12 @@ def cross_cpe_overview(project_id):
                     "reboot_count": 0, "reboot_events": [],
                     "low_memory": False, "memory_usage_pct_peak": None,
                     "status": "OK",
+                    "wifi_rf": {
+                        "radios": [],
+                        "channel_events": [],
+                        "util_crowded_max_pct": 70.0,
+                        "util_crowded_avg_pct": 50.0,
+                    },
                 })
 
     # Fleet summary
@@ -1290,6 +1302,8 @@ def cross_cpe_overview(project_id):
 
     # Reboot bucketing analysis (time-of-day and uptime categories)
     reboot_analytics = _compute_reboot_analytics(cpe_results)
+    wifi_fleet_summary = aggregate_wifi_fleet_from_cpes(cpe_results)
+    wifi_fleet_summary.update(build_wifi_fleet_radio_tables(cpe_results))
 
     return jsonify({
         "cpes": cpe_results,
@@ -1299,6 +1313,7 @@ def cross_cpe_overview(project_id):
             "with_low_memory": with_low_memory,
             "with_both": with_both,
         },
+        "wifi_fleet_summary": wifi_fleet_summary,
         "reboot_analytics": reboot_analytics,
     }), 200
 
