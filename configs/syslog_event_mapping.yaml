@@ -126,11 +126,15 @@ W017:
   description: The WLAN channel is being dynamically switched from channel x to channel y — WLAN channel hopping from channel
     x to channel y (not triggered by DFS)
   severity: info
+  extract_metadata:
+  - channel_switch
 W018:
   category: wifi
   description: The WLAN channel is being dynamically switched from channel x to channel y as result of a DFS scan — WLAN channel
     hopping from channel x to channel y as result of a DFS scan.
   severity: info
+  extract_metadata:
+  - channel_switch
 W019:
   category: wifi
   description: 'WLAN station successfully connected to either 2.4Ghz Wifi or 5.0Ghz Wifi radio: Computer name <computer name>,
@@ -1615,6 +1619,9 @@ W019-2:
   - mac_address
   - ssid
 category_patterns:
+- pattern: ^ACSD$
+  category: wifi
+  default_severity: info
 - pattern: WIFI\..*
   category: wifi
   default_severity: info

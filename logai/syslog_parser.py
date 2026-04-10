@@ -4,10 +4,15 @@ Syslog Parser
 
 Parses merged syslog.txt files and extracts structured events with metadata.
 
-Format: <timestamp> telekom: <EVENT_ID> <MODULE>.<LOG_LEVEL> [tid=<thread_id>] <message>
+Format (common): <timestamp> telekom: <EVENT_ID> <MODULE>.<LOG_LEVEL> [tid=<thread_id>] <message>
 
 Example:
 2026-02-27 13:02:30.000 telekom: W019-1 WIFI.INFO [tid=12703]  CosaDMLWiFi_Send_ReceivedHostDetails_To_LMLite-21588 [0C:19:F8:10:DC:6B,NULL,Device.WiFi.SSID.1,0,0]
+
+Format (no level / no thread id): <timestamp> telekom: <EVENT_ID> <MODULE>: <message>
+
+Example:
+2026-02-21 13:38:20.000 telekom: W017 ACSD: wl1 Channel switched to 0xe832 . Reason :5 : TXOP
 """
 
 import json
@@ -23,6 +28,72 @@ from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
+
+def decode_chanspec(chanspec_hex: str) -> Dict[str, Any]:
+    """
+    Decode Broadcom chanspec (channel specification) from hex value.
+    
+    Broadcom chanspec format varies by chipset. This is a best-effort decoder.
+    Common format:
+    - Lower byte (bits 0-7): Channel number
+    - Upper bytes contain bandwidth and band information
+    
+    Heuristic approach:
+    - If upper nibble >= 0xE: 80MHz
+    - Else if upper byte >= 0x18: likely 20MHz with extended info
+    - Else if upper byte >= 0x10: 20MHz, 5GHz
+    - Else: 20MHz, 2.4GHz
+    
+    Examples from user data:
+    - 0x100b, 0x1007, 0x1809, 0x1803: channel X, 20MHz, 5GHz
+    - 0xe832: channel 50, 80MHz, 5GHz
+    
+    Returns dict with channel, bandwidth_mhz, band
+    """
+    try:
+        # Remove 0x prefix if present
+        hex_str = chanspec_hex.replace('0x', '').replace('0X', '')
+        value = int(hex_str, 16)
+        
+        # Extract channel number (bits 0-7)
+        channel = value & 0xFF
+        
+        # Extract upper byte for band/BW hints
+        upper_byte = (value >> 8) & 0xFF
+        upper_nibble = (value >> 12) & 0x0F
+        
+        # Heuristic bandwidth detection
+        if upper_nibble >= 0x0E:
+            # 0xEXXX pattern suggests 80MHz
+            bandwidth_mhz = 80
+        elif upper_nibble >= 0x0D:
+            # 0xDXXX pattern suggests 40MHz
+            bandwidth_mhz = 40
+        else:
+            # Default to 20MHz for 0x1XXX patterns
+            bandwidth_mhz = 20
+        
+        # Band detection: if upper_byte >= 0x10, likely 5GHz
+        band = '5GHz' if upper_byte >= 0x10 else '2.4GHz'
+        
+        # Sideband info (for 40MHz+) - simplified
+        sideband = None
+        
+        return {
+            'channel': channel,
+            'bandwidth_mhz': bandwidth_mhz,
+            'band': band,
+            'sideband': sideband
+        }
+    except (ValueError, TypeError) as e:
+        logger.debug(f"Failed to decode chanspec {chanspec_hex}: {e}")
+        return {
+            'channel': None,
+            'bandwidth_mhz': None,
+            'band': None,
+            'sideband': None
+        }
+
 # Format 1: Telekom event format with event IDs (from specialized log files)
 # <timestamp> telekom: <EVENT_ID> <MODULE>.<LOG_LEVEL> [tid=<thread_id>] <message>
 TELEKOM_EVENT_REGEX = re.compile(
@@ -33,6 +104,23 @@ TELEKOM_EVENT_REGEX = re.compile(
 # <timestamp> telekom: <MODULE>.<LOG_LEVEL> [tid=<thread_id>] <message>
 TELEKOM_MODULE_REGEX = re.compile(
     r'^(?P<timestamp>[\d\-\s:T\.]+)\s+telekom:\s+(?P<module>\S+)\s+\[tid=(?P<thread_id>\d+)\]\s+(?P<message>.*)$'
+)
+
+# Format 2b: Telekom with event id and module as "NAME:" (no .LOG_LEVEL, no [tid=])
+# <timestamp> telekom: <EVENT_ID> <MODULE>: <message>
+TELEKOM_EVENT_MODULE_COLON_REGEX = re.compile(
+    r'^(?P<timestamp>[\d\-\s:T\.]+)\s+telekom:\s+'
+    r'(?P<event_id>\S+)\s+'
+    r'(?P<module>[A-Za-z][A-Za-z0-9_]*):\s+'
+    r'(?P<message>.*)$'
+)
+
+# Format 2c: Same as 2b but optional leading event id (module-only prefix)
+# <timestamp> telekom: <MODULE>: <message>
+TELEKOM_MODULE_COLON_ONLY_REGEX = re.compile(
+    r'^(?P<timestamp>[\d\-\s:T\.]+)\s+telekom:\s+'
+    r'(?P<module>[A-Za-z][A-Za-z0-9_]*):\s+'
+    r'(?P<message>.*)$'
 )
 
 # Format 3: Standard syslog format (from syslog.txt)
@@ -111,6 +199,96 @@ def extract_metadata(message: str, fields: List[str]) -> Dict[str, str]:
             if domain_match:
                 metadata['domain'] = domain_match.group(1)
                 break
+    
+    if 'channel_switch' in fields:
+        # Extract ACSD channel switch information
+        # Pattern 1 (W017): wl0 Channel switched to 0x1803 . Reason :1 : Manual channel switch triggered by autochannel command
+        # Pattern 2 (W018): Channel switched to 0xef32 due to Radar Detection
+        
+        # Try W018 pattern first (radar detection - no radio interface in message)
+        radar_pattern = r'^Channel\s+switched\s+to\s+(?P<chanspec>0x[0-9A-Fa-f]+)\s+due\s+to\s+Radar\s+Detection'
+        radar_match = re.search(radar_pattern, message, re.IGNORECASE)
+        
+        if radar_match:
+            # W018 - Radar detection (no wl0/wl1 in message; label for fleet charts)
+            metadata['radio_interface'] = 'RADAR'
+            metadata['chanspec'] = radar_match.group('chanspec')
+            metadata['reason_code'] = '2'  # DFS/Radar
+            metadata['reason_text'] = 'Radar Detection'
+            metadata['reason_bucket'] = 'radar'
+            metadata['event_type'] = 'W018'
+            
+            # Decode chanspec
+            chanspec = radar_match.group('chanspec')
+            decoded = decode_chanspec(chanspec)
+            if decoded['bandwidth_mhz'] is not None:
+                metadata['bandwidth_mhz'] = decoded['bandwidth_mhz']
+            if decoded['band'] is not None:
+                metadata['band'] = decoded['band']
+            if decoded['channel'] is not None:
+                metadata['channel'] = decoded['channel']
+            if decoded.get('sideband'):
+                metadata['sideband'] = decoded['sideband']
+        else:
+            # Try W017 pattern
+            channel_switch_pattern = r'^(?P<radio>wl\d+)\s+Channel\s+switched\s+to\s+(?P<chanspec>0x[0-9A-Fa-f]+)\s+\.\s+Reason\s+:(?P<reason_code>\d+)\s+:\s+(?P<reason_text>.*)$'
+            cs_match = re.search(channel_switch_pattern, message)
+            if cs_match:
+                metadata['radio_interface'] = cs_match.group('radio')
+                chanspec = cs_match.group('chanspec')
+                metadata['chanspec'] = chanspec
+                metadata['reason_code'] = cs_match.group('reason_code')
+                metadata['reason_text'] = cs_match.group('reason_text').strip()
+                metadata['event_type'] = 'W017'
+                
+                # Decode chanspec to extract channel number and bandwidth
+                decoded = decode_chanspec(chanspec)
+                if decoded['bandwidth_mhz'] is not None:
+                    metadata['bandwidth_mhz'] = decoded['bandwidth_mhz']
+                if decoded['band'] is not None:
+                    metadata['band'] = decoded['band']
+                if decoded['channel'] is not None:
+                    metadata['channel'] = decoded['channel']
+                if decoded.get('sideband'):
+                    metadata['sideband'] = decoded['sideband']
+
+                # Derive reason bucket from reason code
+                # Based on Broadcom ACSD (Auto Channel Selection Daemon) reason codes:
+                # 0: None/Unknown
+                # 1: Manual (Airties cloud autochannel command)
+                # 2: DFS (Radar detection - older firmware)
+                # 3: CS_Timer (Periodic ACS run - 900 sec interval)
+                # 4: ITFR (Interference)
+                # 5: TXOP (Transmission opportunity - channel busy)
+                # 6: NONACS (Non-ACS channel switch - typically radar in newer firmware)
+                # 7: EXCL (Excluded channel)
+                # 8: FCS (Fast channel switch)
+                # 9+: Other/Extended reasons
+                reason_code = cs_match.group('reason_code')
+                reason_code_int = int(reason_code) if reason_code.isdigit() else -1
+                
+                if reason_code_int == 1:
+                    metadata['reason_bucket'] = 'airties_cloud'
+                elif reason_code_int in [2, 6]:
+                    # Both DFS (old) and NONACS (new) are radar-related
+                    metadata['reason_bucket'] = 'radar'
+                elif reason_code_int == 5:
+                    metadata['reason_bucket'] = 'txop'
+                elif reason_code_int == 3:
+                    # CS_Timer - periodic ACS run
+                    metadata['reason_bucket'] = 'cs_timer'
+                elif reason_code_int == 4:
+                    # General interference
+                    metadata['reason_bucket'] = 'interference'
+                elif reason_code_int in [7, 8]:
+                    # Excluded channel or fast channel switch
+                    metadata['reason_bucket'] = 'acs_policy'
+                elif reason_code_int == 0:
+                    metadata['reason_bucket'] = 'unknown'
+                else:
+                    metadata['reason_bucket'] = 'other'
+                    # Log unexpected reason codes for debugging
+                    logger.info(f"Unexpected ACSD reason code: {reason_code} - '{cs_match.group('reason_text')}')")
     
     return metadata
 
@@ -215,6 +393,23 @@ def parse_syslog_file(syslog_path: Path, event_mapping: Dict) -> Dict:
                         event_data = match.groupdict()
                         event_data['event_id'] = 'NO_ID'  # Generate from module/message
                         event_data['format_type'] = 'telekom_module'
+
+                # Format 2b: telekom: <event_id> <MODULE>: <message> (no .LEVEL, no tid)
+                if not event_data:
+                    match = TELEKOM_EVENT_MODULE_COLON_REGEX.match(line)
+                    if match:
+                        event_data = match.groupdict()
+                        event_data['format_type'] = 'telekom_event_module_colon'
+                        event_data['thread_id'] = '0'
+
+                # Format 2c: telekom: <MODULE>: <message>
+                if not event_data:
+                    match = TELEKOM_MODULE_COLON_ONLY_REGEX.match(line)
+                    if match:
+                        event_data = match.groupdict()
+                        event_data['event_id'] = 'NO_ID'
+                        event_data['format_type'] = 'telekom_module_colon_only'
+                        event_data['thread_id'] = '0'
                 
                 # Format 3: Standard syslog format
                 if not event_data:
@@ -280,6 +475,8 @@ def parse_syslog_file(syslog_path: Path, event_mapping: Dict) -> Dict:
                     if event_data['format_type'] == 'standard_syslog':
                         program = event_data.get('program', 'unknown')
                         event_id = f"SYSLOG_{program.upper()}"
+                    elif event_data['format_type'] == 'telekom_module_colon_only':
+                        event_id = f"LOG_{module.upper()}"
                     else:
                         # Generate from module name
                         module_parts = module.split('.')

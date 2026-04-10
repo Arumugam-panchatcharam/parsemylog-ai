@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import logging
+import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -24,6 +25,7 @@ from api.app import dbm
 from api.auth import get_user_id
 from logai.info_extractor import find_and_extract_reboots
 from logai.syslog_parser import (
+    decode_chanspec,
     load_event_mapping,
     load_syslog_cache,
     parse_syslog_file,
@@ -35,6 +37,37 @@ from logai.utils.constants import UPLOAD_DIRECTORY
 logger = logging.getLogger(__name__)
 
 syslog_bp = Blueprint("syslog", __name__)
+
+_CHANSPEC_FROM_MSG = re.compile(
+    r"Channel\s+switched\s+to\s+(?P<cs>0x[0-9A-Fa-f]+)", re.IGNORECASE
+)
+
+
+def _bandwidth_mhz_for_channel_event(metadata: Dict[str, Any], message: str) -> Optional[int]:
+    """
+    Best-effort bandwidth (MHz) for a channel-switch line.
+
+    Uses cached metadata when present; otherwise decodes ``chanspec`` or the
+    first ``0x..`` token after 'Channel switched to' in the message (helps
+    older caches parsed before bandwidth was stored).
+    """
+    bw = metadata.get("bandwidth_mhz")
+    if bw is not None:
+        return int(bw) if not isinstance(bw, int) else bw
+
+    cs = metadata.get("chanspec")
+    if isinstance(cs, str) and cs.startswith("0x"):
+        decoded = decode_chanspec(cs)
+        b = decoded.get("bandwidth_mhz")
+        if b is not None:
+            return b
+    m = _CHANSPEC_FROM_MSG.search(message or "")
+    if m:
+        decoded = decode_chanspec(m.group("cs"))
+        b = decoded.get("bandwidth_mhz")
+        if b is not None:
+            return b
+    return None
 
 
 def _verify_project(project_id, user_id):
@@ -362,6 +395,256 @@ def cross_cpe_overview(project_id):
     except Exception as e:
         logger.error(f"Error generating cross-CPE overview: {e}")
         return jsonify({"error": f"Failed to generate overview: {str(e)}"}), 500
+
+
+@syslog_bp.route("/<project_id>/syslog/channel-change-distribution", methods=["GET"])
+@jwt_required()
+def channel_change_distribution(project_id):
+    """
+    Aggregate ACSD channel change events (W017) across all CPEs in project.
+
+    Query params:
+        force (optional): ``1`` or ``true`` to re-parse syslog for every CPE
+
+    Returns:
+        - Summary: total CPEs, CPEs with channel switches, total channel switches
+        - Distribution by reason_bucket (airties_cloud, radar, txop, other)
+        - Distribution by radio_interface (wl0, wl1, etc.)
+        - Matrix by (radio_interface, reason_bucket)
+        - Top chanspecs
+        - Per-CPE breakdown for outlier detection
+    """
+    user_id = get_user_id()
+    force = request.args.get("force", "0") in ("1", "true")
+
+    # Verify project access
+    _, error_response = _verify_project(project_id, user_id)
+    if error_response:
+        return error_response
+
+    try:
+        cpes = dbm.list_project_cpes(project_id)
+        cpe_serials = [c.serial for c in cpes] if cpes else ["default"]
+
+        aggregated = {
+            "total_cpes": len(cpe_serials),
+            "cpes_with_syslog": 0,
+            "cpes_with_channel_switches": 0,
+            "total_channel_switches": 0,
+            "by_reason_bucket": defaultdict(int),
+            "by_reason_code": defaultdict(int),
+            "by_radio_interface": defaultdict(int),
+            "by_radio_and_bucket": defaultdict(lambda: defaultdict(int)),
+            "chanspec_counts": defaultdict(int),
+            "channel_counts": defaultdict(int),
+            "bandwidth_counts": defaultdict(int),
+            "bandwidth_by_radio": defaultdict(lambda: defaultdict(int)),
+            "channel_transitions": defaultdict(int),
+            "cpe_breakdown": [],
+            "parsing_errors": [],
+        }
+
+        workers = min(16, max(1, len(cpe_serials)))
+        results: List[Tuple[str, Optional[Dict[str, Any]], List[str]]] = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    _load_syslog_payload_for_cross_cpe, user_id, project_id, serial, force
+                ): serial
+                for serial in cpe_serials
+            }
+            for fut in as_completed(futures):
+                try:
+                    results.append(fut.result())
+                except Exception as exc:
+                    serial = futures[fut]
+                    logger.warning("Channel-change worker failed for %s: %s", serial, exc)
+                    results.append(
+                        (serial, None, [f"CPE {serial}: {str(exc)}"])
+                    )
+
+        for _serial, cached, errs in results:
+            aggregated["parsing_errors"].extend(errs)
+            if not cached:
+                continue
+
+            aggregated["cpes_with_syslog"] += 1
+
+            # Filter channel-change events (W017 + W018 with ACSD module)
+            channel_events = [
+                event for event in cached["events"]
+                if event.get("event_id") in ["W017", "W018"] 
+                and event.get("module") == "ACSD"
+                and "Channel switched to" in event.get("message", "")
+            ]
+
+            if not channel_events:
+                continue
+
+            aggregated["cpes_with_channel_switches"] += 1
+            cpe_channel_count = len(channel_events)
+            aggregated["total_channel_switches"] += cpe_channel_count
+
+            cpe_by_reason_bucket = defaultdict(int)
+            cpe_by_radio = defaultdict(int)
+            cpe_chanspecs = defaultdict(int)
+            cpe_channels = defaultdict(int)
+            cpe_transitions = defaultdict(int)
+
+            # Sort events by timestamp to track transitions per radio
+            sorted_events = sorted(channel_events, key=lambda e: e.get("timestamp", ""))
+            
+            # Track previous channel per radio for transition analysis
+            radio_prev_channel = {}
+
+            for event in sorted_events:
+                metadata = event.get("metadata", {})
+
+                reason_bucket = metadata.get("reason_bucket", "other")
+                aggregated["by_reason_bucket"][reason_bucket] += 1
+                cpe_by_reason_bucket[reason_bucket] += 1
+
+                reason_code = metadata.get("reason_code", "unknown")
+                reason_text = metadata.get("reason_text", "unknown")
+                aggregated["by_reason_code"][f"{reason_code}: {reason_text}"] += 1
+
+                radio = metadata.get("radio_interface", "unknown")
+                aggregated["by_radio_interface"][radio] += 1
+                cpe_by_radio[radio] += 1
+
+                aggregated["by_radio_and_bucket"][radio][reason_bucket] += 1
+
+                chanspec = metadata.get("chanspec", "unknown")
+                aggregated["chanspec_counts"][chanspec] += 1
+                cpe_chanspecs[chanspec] += 1
+
+                               # Track channel number and bandwidth (decode from message if cache lacks fields)
+                msg = event.get("message", "") or ""
+                channel = metadata.get("channel")
+                bandwidth = _bandwidth_mhz_for_channel_event(metadata, msg)
+                if channel is not None:
+                    aggregated["channel_counts"][channel] += 1
+                    cpe_channels[channel] += 1
+                if bandwidth is not None:
+                    aggregated["bandwidth_counts"][bandwidth] += 1
+                    aggregated["bandwidth_by_radio"][radio][bandwidth] += 1
+
+                # Track channel transitions (from → to) per radio
+                if channel is not None:
+                    if radio in radio_prev_channel:
+                        from_ch = radio_prev_channel[radio]
+                        to_ch = channel
+                        transition_key = f"{from_ch} → {to_ch}"
+                        aggregated["channel_transitions"][transition_key] += 1
+                        cpe_transitions[transition_key] += 1
+                    radio_prev_channel[radio] = channel
+
+            # Add CPE breakdown
+            cpe_id = cached.get("device_info", {}).get("cpe_id") or _serial
+            cpe_data = {
+                "cpe_id": cpe_id,
+                "total_channel_switches": cpe_channel_count,
+                "by_reason_bucket": dict(cpe_by_reason_bucket),
+                "by_radio_interface": dict(cpe_by_radio),
+                "top_chanspecs": sorted(
+                    cpe_chanspecs.items(), key=lambda x: x[1], reverse=True
+                )[:5],
+                "top_channels": sorted(
+                    cpe_channels.items(), key=lambda x: x[1], reverse=True
+                )[:5],
+                "top_transitions": sorted(
+                    cpe_transitions.items(), key=lambda x: x[1], reverse=True
+                )[:5],
+            }
+            aggregated["cpe_breakdown"].append(cpe_data)
+
+        # Sort CPE breakdown by total channel switches (descending)
+        aggregated["cpe_breakdown"].sort(
+            key=lambda x: x["total_channel_switches"],
+            reverse=True
+        )
+
+        # Top 20 chanspecs
+        top_chanspecs = sorted(
+            aggregated["chanspec_counts"].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:20]
+
+        # Top 20 reason codes
+        top_reason_codes = sorted(
+            aggregated["by_reason_code"].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:20]
+
+        # Calculate percentages for reason buckets
+        total_switches = aggregated["total_channel_switches"]
+        by_reason_bucket_with_pct = []
+        for bucket, count in aggregated["by_reason_bucket"].items():
+            pct = (count / total_switches * 100) if total_switches > 0 else 0
+            by_reason_bucket_with_pct.append({
+                "bucket": bucket,
+                "count": count,
+                "percentage": round(pct, 2)
+            })
+        by_reason_bucket_with_pct.sort(key=lambda x: x["count"], reverse=True)
+
+        # Format radio_and_bucket as nested structure for frontend
+        by_radio_and_bucket_formatted = {}
+        for radio, buckets in aggregated["by_radio_and_bucket"].items():
+            by_radio_and_bucket_formatted[radio] = dict(buckets)
+
+        # Top channel transitions
+        top_transitions = sorted(
+            aggregated["channel_transitions"].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:20]
+
+        # Top channels
+        top_channels = sorted(
+            aggregated["channel_counts"].items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:15]
+
+        # Bandwidth distribution
+        bandwidth_dist = sorted(aggregated["bandwidth_counts"].items())
+
+        bandwidth_by_radio_formatted = {}
+        for radio, bw_map in aggregated["bandwidth_by_radio"].items():
+            bandwidth_by_radio_formatted[radio] = [
+                {"bandwidth_mhz": bw, "count": cnt}
+                for bw, cnt in sorted(bw_map.items())
+            ]
+
+        response_data = {
+            "summary": {
+                "total_cpes": aggregated["total_cpes"],
+                "cpes_with_syslog": aggregated["cpes_with_syslog"],
+                "cpes_with_channel_switches": aggregated["cpes_with_channel_switches"],
+                "total_channel_switches": aggregated["total_channel_switches"],
+                "parsing_errors_count": len(aggregated["parsing_errors"])
+            },
+            "by_reason_bucket": by_reason_bucket_with_pct,
+            "by_reason_code": [{"reason": r, "count": c} for r, c in top_reason_codes],
+            "by_radio_interface": [{"radio": r, "count": c} for r, c in sorted(aggregated["by_radio_interface"].items())],
+            "by_radio_and_bucket": by_radio_and_bucket_formatted,
+            "top_chanspecs": [{"chanspec": cs, "count": cnt} for cs, cnt in top_chanspecs],
+            "top_channels": [{"channel": ch, "count": cnt} for ch, cnt in top_channels],
+            "top_transitions": [{"transition": trans, "count": cnt} for trans, cnt in top_transitions],
+            "bandwidth_distribution": [{"bandwidth_mhz": bw, "count": cnt} for bw, cnt in bandwidth_dist],
+            "bandwidth_by_radio": bandwidth_by_radio_formatted,
+            "cpe_breakdown": aggregated["cpe_breakdown"],
+            "parsing_errors": aggregated["parsing_errors"]
+        }
+
+        return jsonify({"data": response_data}), 200
+
+    except Exception as e:
+        logger.error(f"Error generating channel-change distribution: {e}", exc_info=True)
+        return jsonify({"error": f"Failed to generate channel-change distribution: {str(e)}"}), 500
 
 
 @syslog_bp.route("/<project_id>/syslog/export-csv", methods=["GET"])

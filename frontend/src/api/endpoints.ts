@@ -768,6 +768,10 @@ export const syslogApi = {
     api.get(`/projects/${projectId}/syslog/cross-cpe-overview`, {
       params: { ...(force ? { force: "1" } : {}) },
     }),
+  channelChangeDistribution: (projectId: string, force = false) =>
+    api.get(`/projects/${projectId}/syslog/channel-change-distribution`, {
+      params: { ...(force ? { force: "1" } : {}) },
+    }),
   exportCsv: (projectId: string, cpeId: string | null) =>
     api.get(`/projects/${projectId}/syslog/export-csv`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
