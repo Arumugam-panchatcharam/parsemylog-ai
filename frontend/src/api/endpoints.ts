@@ -24,11 +24,31 @@ export const authApi = {
 // ---------- Projects ----------
 export const projectsApi = {
   list: () => api.get("/projects/"),
-  create: (name: string, description: string | undefined, natcoId: number, projectType?: "normal" | "batch") =>
-    api.post("/projects/", { name, description, natco_id: natcoId, project_type: projectType || "normal" }),
+  create: (
+    name: string,
+    description: string | undefined,
+    natcoId: number,
+    projectType?: "normal" | "batch",
+    tags?: string[],
+  ) =>
+    api.post("/projects/", {
+      name,
+      description,
+      natco_id: natcoId,
+      project_type: projectType || "normal",
+      ...(tags && tags.length > 0 ? { tags } : {}),
+    }),
   get: (id: string) => api.get(`/projects/${id}`),
-  update: (id: string, data: { name?: string; description?: string; natco_id?: number | null }) =>
-    api.put(`/projects/${id}`, data),
+  update: (
+    id: string,
+    data: {
+      name?: string;
+      description?: string;
+      natco_id?: number | null;
+      project_type?: "normal" | "batch";
+      tags?: string[];
+    },
+  ) => api.put(`/projects/${id}`, data),
   delete: (id: string) => api.delete(`/projects/${id}`),
 };
 

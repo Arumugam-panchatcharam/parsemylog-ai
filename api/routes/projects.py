@@ -5,13 +5,51 @@ Projects API Routes
 CRUD endpoints for project management.
 """
 
+from typing import Any, List, Optional, Tuple
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
 from api.auth import get_user_id
+from api.user_db_mngr import project_tags_from_db, project_tags_to_db
 
 projects_bp = Blueprint("projects", __name__)
+
+_MAX_TAGS = 20
+_MAX_TAG_LEN = 40
+
+
+def _tags_for_project_row(project: Any) -> List[str]:
+    return project_tags_from_db(getattr(project, "tags", None))
+
+
+def normalize_project_tags(raw: Any) -> Tuple[Optional[List[str]], Optional[str]]:
+    """
+    Validate and normalize tags from JSON body.
+    Returns (tags, None) on success, or (None, error_message).
+    """
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list):
+        return None, "tags must be an array of strings"
+    if len(raw) > _MAX_TAGS:
+        return None, f"at most {_MAX_TAGS} tags allowed"
+    seen_lower: set = set()
+    out: List[str] = []
+    for item in raw:
+        s = str(item).strip()
+        if not s:
+            continue
+        if len(s) > _MAX_TAG_LEN:
+            return None, f"each tag must be at most {_MAX_TAG_LEN} characters"
+        low = s.lower()
+        if low in seen_lower:
+            continue
+        seen_lower.add(low)
+        out.append(s)
+    out.sort(key=lambda t: t.lower())
+    return out, None
 
 
 @projects_bp.route("/", methods=["GET"])
@@ -37,6 +75,7 @@ def list_projects():
             "name": p.name,
             "description": p.description or "",
             "project_type": p.project_type or "normal",
+            "tags": _tags_for_project_row(p),
             "created_at": str(p.created_at) if p.created_at else None,
             "last_accessed": str(p.last_accessed) if p.last_accessed else None,
             "natco_id": p.natco_id,
@@ -78,7 +117,13 @@ def create_project():
     if not natco:
         return jsonify({"error": "NATCO not found"}), 400
 
-    success, project_id, message = dbm.create_project(user_id, name, description, project_type)
+    tags_norm, tag_err = normalize_project_tags(data.get("tags"))
+    if tag_err:
+        return jsonify({"error": tag_err}), 400
+
+    success, project_id, message = dbm.create_project(
+        user_id, name, description, project_type, tags=tags_norm
+    )
 
     if not success:
         return jsonify({"error": message}), 400
@@ -93,6 +138,7 @@ def create_project():
         "id": project_id,
         "name": name,
         "project_type": project_type,
+        "tags": tags_norm,
         "message": "Project created successfully",
     }), 201
 
@@ -126,6 +172,7 @@ def get_project(project_id):
         "name": project.name,
         "description": project.description or "",
         "project_type": project.project_type or "normal",
+        "tags": _tags_for_project_row(project),
         "created_at": str(project.created_at) if project.created_at else None,
         "last_accessed": str(project.last_accessed) if project.last_accessed else None,
         "user_id": project.user_id,
@@ -151,7 +198,10 @@ def update_project(project_id):
 
     data = request.get_json(silent=True) or {}
     if "name" in data:
-        project.name = data["name"].strip()
+        name_val = (data["name"] or "").strip()
+        if not name_val:
+            return jsonify({"error": "Project name cannot be empty"}), 400
+        project.name = name_val
     if "description" in data:
         project.description = data["description"].strip()
     if "natco_id" in data:
@@ -161,6 +211,16 @@ def update_project(project_id):
             if not dbm.db.session.get(dbm.Natco, natco_id):
                 return jsonify({"error": "NATCO not found"}), 400
         project.natco_id = natco_id
+    if "project_type" in data:
+        pt = data["project_type"]
+        if pt not in ["normal", "batch"]:
+            return jsonify({"error": "Invalid project type. Must be 'normal' or 'batch'"}), 400
+        project.project_type = pt
+    if "tags" in data:
+        tags_norm, tag_err = normalize_project_tags(data.get("tags"))
+        if tag_err:
+            return jsonify({"error": tag_err}), 400
+        project.tags = project_tags_to_db(tags_norm)
 
     try:
         dbm.db.session.commit()

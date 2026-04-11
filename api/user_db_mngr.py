@@ -17,6 +17,26 @@ logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
+
+def project_tags_from_db(value: Optional[str]) -> List[str]:
+    """Parse projects.tags JSON column to a list of strings; invalid or empty → []."""
+    if not value or not str(value).strip():
+        return []
+    try:
+        data = json.loads(value)
+        if not isinstance(data, list):
+            return []
+        return [str(x) for x in data]
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def project_tags_to_db(tags: Optional[List[str]]) -> str:
+    """Serialize tag list for projects.tags column."""
+    if not tags:
+        return "[]"
+    return json.dumps(tags)
+
 # ---------------- Models defined at module level ----------------
 
 class User(db.Model, UserMixin):
@@ -111,6 +131,7 @@ class Project(db.Model):
     name = db.Column(db.String(120), nullable=False)
     description = db.Column(db.String(512), nullable=True)
     project_type = db.Column(db.String(20), default="normal")  # "normal" or "batch"
+    tags = db.Column(db.Text, nullable=True)  # JSON array of user-defined tag strings
     created_at = db.Column(db.DateTime, default=db.func.now())
     last_accessed = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
@@ -404,6 +425,7 @@ class DBManager:
             # Migrate existing tables
             self._migrate_add_cpe_columns(app)
             self._migrate_add_global_pattern_filter_columns(app)
+            self._migrate_add_project_tags_column(app)
             # create default admin user if not exists
             if not self.db.session.query(self.User).filter_by(username='admin').first():
                 self.create_user("admin", "admin123", is_admin=True)
@@ -470,6 +492,20 @@ class DBManager:
                     logger.info("[Migration] Added min_frequency_threshold column to global_patterns")
         except Exception as e:
             logger.warning(f"[Migration] Could not add filter columns (may already exist): {e}")
+
+    def _migrate_add_project_tags_column(self, app):
+        """Add tags JSON column to projects if missing."""
+        try:
+            with app.app_context():
+                from sqlalchemy import text, inspect as sa_inspect
+                inspector = sa_inspect(self.db.engine)
+                proj_cols = [c["name"] for c in inspector.get_columns("projects")]
+                if "tags" not in proj_cols:
+                    self.db.session.execute(text("ALTER TABLE projects ADD COLUMN tags TEXT"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added tags column to projects")
+        except Exception as e:
+            logger.warning(f"[Migration] Could not add project tags column (may already exist): {e}")
 
     # ---------------- User operations ----------------
     def create_user(self, username: str, password: str, email: Optional[str] = None, is_admin: bool = False) -> Tuple[bool, Optional[str]]:
@@ -685,13 +721,28 @@ class DBManager:
         return self.db.session.query(self.ProjectFile).filter_by(user_id=user_id).all()
 
     # ---------------- Project operations ----------------
-    def create_project(self, user_id: int, name: str, description: str, project_type: str = "normal") -> Tuple[bool, int, Optional[str]]:
+    def create_project(
+        self,
+        user_id: int,
+        name: str,
+        description: str,
+        project_type: str = "normal",
+        tags: Optional[List[str]] = None,
+    ) -> Tuple[bool, Any, Optional[str]]:
         if not name:
-            return False, "Project name required."
+            return False, None, "Project name required."
         if project_type not in ["normal", "batch"]:
             project_type = "normal"
         project_id = str(uuid.uuid4())
-        project = self.Project(id=project_id, user_id=user_id, name=name, description=description, project_type=project_type)
+        tags_json = project_tags_to_db(tags)
+        project = self.Project(
+            id=project_id,
+            user_id=user_id,
+            name=name,
+            description=description,
+            project_type=project_type,
+            tags=tags_json,
+        )
         self.db.session.add(project)
         try:
             self.db.session.commit()
