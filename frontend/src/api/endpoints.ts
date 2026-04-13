@@ -592,7 +592,8 @@ export const patternsApi = {
     ),
   exportGlobal: (projectId: string) =>
     api.get<Blob>(`/projects/${projectId}/patterns/export-global`, {
-      responseType: 'blob',
+      responseType: "blob",
+      timeout: 600_000,
     }),
 };
 

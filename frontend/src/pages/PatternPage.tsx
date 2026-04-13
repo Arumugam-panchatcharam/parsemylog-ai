@@ -15,12 +15,11 @@ import SearchIcon from "@mui/icons-material/Search";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import BarChartIcon from "@mui/icons-material/BarChart";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
-import SelectAllIcon from "@mui/icons-material/SelectAll";
-import DeselectIcon from "@mui/icons-material/Deselect";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
+import NotesIcon from "@mui/icons-material/Notes";
 import DevicesIcon from "@mui/icons-material/Devices";
 import PersonIcon from "@mui/icons-material/Person";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
@@ -73,7 +72,7 @@ export default function PatternPage() {
   const [selectedDomain, setSelectedDomain] = useState<string>("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [timeInterval, setTimeInterval] = useState(0);
-  const [viewMode, setViewMode] = useState<"single" | "aggregated">("single");
+  const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
   const [selectedPatternDetails, setSelectedPatternDetails] = useState<AggregatedPattern | null>(null);
 
   // Fetch sample logs when pattern is selected
@@ -103,7 +102,6 @@ export default function PatternPage() {
   // File filter for single CPE view
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [appliedFiles, setAppliedFiles] = useState<string[]>([]);
-  const [showFileFilter, setShowFileFilter] = useState(false);
   const [allSourceFiles, setAllSourceFiles] = useState<string[]>([]);
   const [singleTemplateSearch, setSingleTemplateSearch] = useState("");
   const [trendSectionExpanded, setTrendSectionExpanded] = useState(() => readStoredTrendExpanded());
@@ -164,7 +162,6 @@ export default function PatternPage() {
     setSelectedTemplate("");
     setSelectedFiles([]);
     setAppliedFiles([]);
-    setShowFileFilter(false);
     setAllSourceFiles([]);
     setSingleTemplateSearch("");
   }, [selectedDomain]);
@@ -187,7 +184,7 @@ export default function PatternPage() {
       );
       return response.data;
     },
-    enabled: !!projectId && !!selectedDomain && viewMode === "aggregated" && !searchAcrossDomains,
+    enabled: !!projectId && !!selectedDomain && activeTab === "overview" && !searchAcrossDomains,
   });
 
   // Fetch patterns from ALL domains when cross-domain search is enabled
@@ -234,7 +231,7 @@ export default function PatternPage() {
         total_patterns: totalPatterns,
       };
     },
-    enabled: !!projectId && viewMode === "aggregated" && searchAcrossDomains,
+    enabled: !!projectId && activeTab === "overview" && searchAcrossDomains,
   });
 
   // Update allDomainsPatterns when data loads (flatten patterns with domain info)
@@ -363,7 +360,7 @@ export default function PatternPage() {
       link.href = url;
       
       // Get filename from Content-Disposition header, fallback to default
-      let filename = 'patterns-export.xlsx';
+      let filename = "patterns-export.zip";
       const contentDisposition = response.headers['content-disposition'];
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
@@ -383,133 +380,257 @@ export default function PatternPage() {
     }
   };
 
-  // Reset when switching view modes or changing domain in aggregated view
+   // Reset when switching tabs or changing domain in Cross-CPE overview
   useEffect(() => {
-    if (viewMode === "aggregated") {
+    if (activeTab === "overview") {
       setAggregatedSelectedFiles([]);
       setAggregatedAppliedFiles([]);
       setPatternFilter("");
       setSearchAcrossDomains(false);
     }
-  }, [selectedDomain, viewMode]);
+  }, [selectedDomain, activeTab]);
 
   return (
-    <div className="p-4 space-y-3 max-w-full">
-      {/* View Mode Toggle - Modernized and Compact */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-lg font-bold">Pattern Analysis</h2>
-          {viewMode === "aggregated" && projectId && (
+    <div className="p-4 space-y-4 max-w-full overflow-y-auto" style={{ height: "calc(100vh - 48px)" }}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <BarChartIcon style={{ fontSize: 24, color: "#1a73e8" }} />
+          <h2 className="text-lg font-semibold">Pattern Analysis</h2>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {activeTab === "overview" && projectId && (
             <button
+              type="button"
               onClick={handleGlobalExport}
-              title="Export all domains to Excel with index (grouped by file)"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+              title="Download a .zip with the Excel workbook (all domains, by file). The server caches under your project after the first build—re-downloads are fast unless logs were re-indexed or CPEs changed."
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
             >
               <DownloadIcon style={{ fontSize: 14 }} />
               Export ALL
             </button>
           )}
         </div>
-        <div className="inline-flex items-center bg-muted rounded-lg p-0.5 gap-0.5">
-          <button
-            onClick={() => setViewMode("single")}
-            title="Analyze patterns for a single CPE"
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-              viewMode === "single"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <PersonIcon style={{ fontSize: 16 }} />
-            Single CPE
-          </button>
-          <button
-            onClick={() => setViewMode("aggregated")}
-            title="Aggregate patterns across all CPEs in this project"
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-              viewMode === "aggregated"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <DevicesIcon style={{ fontSize: 16 }} />
-            All CPEs
-          </button>
-        </div>
       </div>
 
-      {viewMode === "single" ? (
-        // SINGLE CPE VIEW (existing code)
-      <div className="space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Domain + File filter */}
-        <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
-          <h3 className="text-sm font-semibold flex items-center gap-1.5"><BarChartIcon style={{ fontSize: 18, color: "#1a73e8" }} /> Domain</h3>
-          <select value={selectedDomain} onChange={(e) => setSelectedDomain(e.target.value)} title="Choose log domain to analyze" className="w-full px-3 py-2 text-sm border border-input rounded-lg bg-background">
-            <option value="">Select a domain...</option>
-            {domains?.map((d: { domain: string; label: string; indexed: boolean }) => (
-              <option key={d.domain} value={d.domain} disabled={!d.indexed}>{d.label}{d.indexed ? "" : " (not indexed)"}</option>
-            ))}
-          </select>
+      <div className="flex items-center gap-1 border-b border-border">
+        <button
+          type="button"
+          onClick={() => setActiveTab("cpe")}
+          className={cn(
+            "flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+            activeTab === "cpe"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
+          )}
+        >
+          <PersonIcon style={{ fontSize: 16 }} />
+          CPE Analysis
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("overview")}
+          className={cn(
+            "flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+            activeTab === "overview"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
+          )}
+        >
+          <CompareArrowsIcon style={{ fontSize: 16 }} />
+          Cross-CPE Overview
+        </button>
+      </div>
 
-          {/* File filter */}
-          {selectedDomain && domainSourceFiles.length > 0 && (
-            <div className="space-y-1">
-              <button onClick={() => setShowFileFilter(!showFileFilter)} title="Filter pattern analysis by selected log files" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
-                <FilterListIcon style={{ fontSize: 16 }} />
-                {showFileFilter ? "Hide" : "Filter"} Files
-                {appliedFiles.length > 0 && <span className="ml-1 bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full text-[10px] font-bold">{appliedFiles.length}/{domainSourceFiles.length}</span>}
-              </button>
-              {showFileFilter && (
-                <div className="border border-border rounded-lg p-2 max-h-48 overflow-y-auto custom-scrollbar bg-muted/30 space-y-1">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Files ({domainSourceFiles.length})</span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setSelectedFiles([...domainSourceFiles])} title="Select all files" className="flex items-center gap-0.5 text-[10px] text-primary hover:underline"><SelectAllIcon style={{ fontSize: 12 }} /> All</button>
-                      <button onClick={() => setSelectedFiles([])} title="Deselect all files" className="flex items-center gap-0.5 text-[10px] text-primary hover:underline"><DeselectIcon style={{ fontSize: 12 }} /> None</button>
-                    </div>
-                  </div>
-                  {domainSourceFiles.map((fname) => (
-                    <label key={fname} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted rounded px-1 py-0.5" title={fname}>
-                      <input type="checkbox" checked={selectedFiles.includes(fname)} onChange={() => toggleFile(fname)} className="accent-primary rounded" />
-                      <span className="truncate">{fname}</span>
-                    </label>
-                  ))}
-                  {/* Apply button */}
+      {activeTab === "cpe" && (
+      <div className="space-y-4">
+      {/* Same top layout as Cross-CPE Overview: Domain | Files (60%) + Summary KPIs (40%), then index status */}
+      <div className="space-y-3">
+        <div className="flex h-auto flex-col gap-4 md:h-[180px] md:flex-row">
+          <div className="flex min-h-[160px] w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm md:min-h-0 md:h-full md:w-[60%] md:flex-row">
+            <div className="flex w-full min-h-0 flex-col border-border bg-muted/10 p-3 md:w-1/2 md:shrink-0 md:border-r">
+              <h3 className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                <ManageSearchIcon style={{ fontSize: 14 }} />
+                Domain
+              </h3>
+              <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 custom-scrollbar">
+                {domains?.map((d: { domain: string; label: string; indexed: boolean }) => (
                   <button
-                    onClick={() => setAppliedFiles([...selectedFiles])}
-                    disabled={!filtersChanged}
-                    title="Apply file filter"
-                    className={`mt-1.5 w-full flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg font-medium transition-colors ${filtersChanged ? "bg-primary text-primary-foreground hover:opacity-90" : "bg-muted text-muted-foreground cursor-default"}`}>
-                    <PlayArrowIcon style={{ fontSize: 14 }} /> Apply Filter
+                    key={d.domain}
+                    type="button"
+                    onClick={() => (!d.indexed ? null : setSelectedDomain(d.domain))}
+                    disabled={!d.indexed}
+                    className={`w-full rounded-md px-2.5 py-1.5 text-left text-xs transition-all ${
+                      selectedDomain === d.domain
+                        ? "bg-primary font-medium text-primary-foreground shadow-sm"
+                        : d.indexed
+                          ? "text-foreground hover:bg-background hover:shadow-sm"
+                          : "cursor-not-allowed opacity-50"
+                    }`}
+                  >
+                    <div className="truncate">{d.label}</div>
+                    {!d.indexed && <div className="text-[9px] opacity-70">(not indexed)</div>}
                   </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex min-h-0 w-full flex-col bg-card p-3 md:w-1/2 md:min-w-0">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <FilterListIcon style={{ fontSize: 14 }} />
+                  Files{" "}
+                  {selectedDomain && domainSourceFiles.length > 0 ? `(${domainSourceFiles.length})` : ""}
+                </h3>
+                {selectedDomain && domainSourceFiles.length > 0 && (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFiles([...domainSourceFiles])}
+                      className="rounded px-1.5 py-0.5 text-[9px] text-primary hover:bg-muted transition-colors"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFiles([])}
+                      className="rounded px-1.5 py-0.5 text-[9px] text-primary hover:bg-muted transition-colors"
+                    >
+                      None
+                    </button>
+                    {filtersChanged && (
+                      <button
+                        type="button"
+                        onClick={() => setAppliedFiles([...selectedFiles])}
+                        className="ml-1 rounded-full bg-primary px-2 py-0.5 text-[9px] font-bold text-primary-foreground shadow-sm hover:opacity-90 animate-in fade-in zoom-in duration-200"
+                      >
+                        Apply
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border/50 bg-muted/20 p-1 custom-scrollbar">
+                {analysisLoading && selectedDomain && domainSourceFiles.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 p-2 text-muted-foreground">
+                    <CircularProgress size={20} />
+                    <p className="text-xs">Loading files…</p>
+                  </div>
+                ) : selectedDomain && domainSourceFiles.length > 0 ? (
+                  <div className="space-y-0.5">
+                    {domainSourceFiles.map((fname) => (
+                      <label
+                        key={fname}
+                        className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[11px] transition-all hover:bg-background hover:shadow-sm"
+                        title={fname}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedFiles.includes(fname)}
+                          onChange={() => toggleFile(fname)}
+                          className="h-3.5 w-3.5 shrink-0 accent-primary rounded"
+                        />
+                        <span className="truncate opacity-90">{fname}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex h-full flex-col items-center justify-center p-2 text-center text-muted-foreground">
+                    <p className="text-xs">{!selectedDomain ? "Select a domain first" : "No source files found"}</p>
+                  </div>
+                )}
+              </div>
+              {appliedFiles.length > 0 && (
+                <div className="mt-1.5 text-right text-[10px] font-medium text-muted-foreground">
+                  Showing results for <span className="text-foreground">{appliedFiles.length}</span> file(s)
                 </div>
               )}
             </div>
-          )}
+          </div>
 
-          {analysisLoading && selectedDomain && <div className="flex items-center gap-2 text-xs text-muted-foreground"><CircularProgress size={14} /> Analyzing {selectedDomain}...</div>}
-          {analysisError && <div className="flex items-center gap-1.5 text-xs text-destructive"><ErrorOutlineIcon style={{ fontSize: 15 }} />{(analysisErr as { response?: { data?: { error?: string } } })?.response?.data?.error || "Analysis failed"}</div>}
+          <div className="relative flex w-full flex-col justify-center overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm md:h-full md:w-[40%]">
+            <div className="absolute right-0 top-0 p-3 opacity-5">
+              <BarChartIcon style={{ fontSize: 120 }} />
+            </div>
+            {summary ? (
+              <div className="relative z-10 flex flex-1 flex-col items-center justify-around gap-4 sm:flex-row sm:gap-0">
+                <div className="group cursor-default text-center">
+                  <div className="mb-2 flex items-center justify-center gap-2">
+                    <div className="rounded-full bg-blue-100 p-2 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                      <NotesIcon style={{ fontSize: 24 }} />
+                    </div>
+                    <div className="text-sm font-medium text-muted-foreground">Log lines</div>
+                  </div>
+                  <div className="text-4xl font-extrabold tracking-tight text-foreground transition-transform duration-200 group-hover:scale-110">
+                    {summary.total_loglines.toLocaleString()}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">In selected domain and files</div>
+                </div>
+
+                <div className="hidden h-24 w-px bg-border/60 sm:block" />
+
+                <div className="group cursor-default text-center">
+                  <div className="mb-2 flex items-center justify-center gap-2">
+                    <div className="rounded-full bg-purple-100 p-2 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                      <BarChartIcon style={{ fontSize: 24 }} />
+                    </div>
+                    <div className="text-sm font-medium text-muted-foreground">Unique patterns</div>
+                  </div>
+                  <div className="text-4xl font-extrabold tracking-tight text-foreground transition-transform duration-200 group-hover:scale-110">
+                    {summary.total_patterns.toLocaleString()}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">Drain3 templates for this CPE</div>
+                </div>
+              </div>
+            ) : (
+              <div className="relative z-10 flex h-full flex-col items-center justify-center text-muted-foreground">
+                <ManageSearchIcon style={{ fontSize: 32 }} className="mb-2 opacity-20" />
+                <p className="text-sm">{selectedDomain ? "Loading…" : "Select a domain to view statistics"}</p>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Summary + Index Status */}
-        <div className="bg-card border border-border rounded-2xl p-4">
-          <h3 className="text-sm font-semibold mb-2">Summary</h3>
-          {summary ? (
-            <div className="text-sm space-y-1">
-              <p>Total Log Lines: <strong>{summary.total_loglines.toLocaleString()}</strong></p>
-              <p>Unique Patterns: <strong>{summary.total_patterns.toLocaleString()}</strong></p>
-              {appliedFiles.length > 0 && <p className="text-xs text-muted-foreground">Filtered to {appliedFiles.length} file(s)</p>}
-            </div>
-          ) : <p className="text-sm text-muted-foreground">{selectedDomain ? "Loading..." : "Select a domain to analyze"}</p>}
-          <div className="mt-4">
-            <h4 className="text-xs font-medium mb-2">Indexed Domains</h4>
-            <div className="flex flex-wrap gap-1.5">
-              {indexStatus?.domains && Object.entries(indexStatus.domains).map(([key, val]: [string, unknown]) => {
+        {(analysisLoading && selectedDomain) || analysisError ? (
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            {analysisLoading && selectedDomain && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <CircularProgress size={14} /> Analyzing…
+              </div>
+            )}
+            {analysisError && (
+              <div className="flex items-center gap-1.5 text-destructive">
+                <ErrorOutlineIcon style={{ fontSize: 15 }} />
+                {(analysisErr as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+                  "Analysis failed"}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <div className="rounded-xl border border-border bg-card p-3">
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Index status</p>
+          <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto custom-scrollbar pr-0.5">
+            {indexStatus?.domains &&
+              Object.entries(indexStatus.domains).map(([key, val]: [string, unknown]) => {
                 const d = val as { indexed: boolean; label: string };
-                return <span key={key} title={d.indexed ? "Domain indexed and ready for analysis" : "Indexing in progress..."} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${d.indexed ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"}`}>{d.indexed ? <CheckCircleIcon style={{ fontSize: 14 }} /> : <CircularProgress size={12} />}{d.label}</span>;
+                return (
+                  <span
+                    key={key}
+                    title={
+                      d.indexed ? "Domain indexed and ready for analysis" : "Indexing in progress…"
+                    }
+                    className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${
+                      d.indexed
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
+                        : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                    }`}
+                  >
+                    {d.indexed ? <CheckCircleIcon style={{ fontSize: 13 }} /> : <CircularProgress size={11} />}
+                    {d.label}
+                  </span>
+                );
               })}
-            </div>
           </div>
         </div>
       </div>
@@ -741,8 +862,9 @@ export default function PatternPage() {
         )}
       </>)}
       </div>
-      ) : (
-        // AGGREGATED VIEW (All CPEs)
+      )}
+
+      {activeTab === "overview" && (
         <div className="space-y-3">
           {/* Redesigned Header: Fixed height container for perfect alignment */}
           <div className="flex gap-4 h-[180px]">

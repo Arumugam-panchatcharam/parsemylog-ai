@@ -5,13 +5,18 @@ Pattern Analysis API Routes
 Endpoints for domain-based Drain3 pattern analysis.
 """
 
+import hashlib
 import json
 import logging
+import re
+import zipfile
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
@@ -40,6 +45,22 @@ _DOMAIN_LABELS = {
     "voice": "Voice",
 }
 
+# Fleet Excel export cache under project root (same idea as telemetry/ JSON cache)
+PATTERNS_EXPORT_SUBDIR = "patterns_export"
+_FLEET_EXPORT_ZIP_NAME = "fleet_patterns_export.zip"
+_FLEET_EXPORT_MANIFEST_NAME = "manifest.json"
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _clean_for_excel(text: object) -> str:
+    """Remove ANSI codes and illegal characters for Excel."""
+    if not isinstance(text, str):
+        text = str(text)
+    text = _ANSI_RE.sub("", text)
+    text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]", "", text)
+    return text
+
 
 def _verify_project(project_id, user_id):
     project = dbm.get_project_by_id(project_id)
@@ -62,6 +83,63 @@ def _load_domain_parquet(project_dir, domain):
     if not parquet_path.exists():
         return pd.DataFrame()
     return pd.read_parquet(parquet_path)
+
+
+def _load_domain_parquet_for_export(project_dir, domain):
+    """
+    Load only columns needed for fleet pattern export (faster I/O, less RAM).
+    """
+    parquet_path = project_dir / f"{domain}_rg.parquet"
+    if not parquet_path.exists():
+        return pd.DataFrame()
+    want = ("template", "source_file", "loglines")
+    try:
+        import pyarrow.parquet as pq
+
+        names = set(pq.read_schema(str(parquet_path)).names)
+        cols = [c for c in want if c in names]
+        if "template" not in cols:
+            return pd.DataFrame()
+        return pd.read_parquet(parquet_path, columns=cols)
+    except Exception:
+        logger.debug(
+            "[export] full parquet read for %s/%s", project_dir, domain, exc_info=True
+        )
+        return pd.read_parquet(parquet_path)
+
+
+def _fleet_pattern_scan_entries(user_id: str, project_id: str) -> list[tuple[str, Path]]:
+    cpes = dbm.list_project_cpes(project_id)
+    scan_entries: list[tuple[str, Path]] = []
+    if cpes:
+        for cpe in cpes:
+            scan_entries.append((cpe.serial, _project_dir(user_id, project_id, cpe.serial)))
+    else:
+        scan_entries.append(("root", _project_dir(user_id, project_id)))
+    return scan_entries
+
+
+def _fleet_export_input_fingerprint(
+    scan_entries: list[tuple[str, Path]],
+    min_prevalence: float | None,
+    include_prevalence_sheet: bool,
+) -> str:
+    """Invalidate cache when any indexed parquet changes or export options change."""
+    parts: list[str] = [
+        "scan_labels=" + ",".join(sorted(l for l, _ in scan_entries)),
+    ]
+    for label, entry_dir in sorted(scan_entries, key=lambda x: x[0]):
+        for domain in _ALL_DOMAINS:
+            p = entry_dir / f"{domain}_rg.parquet"
+            if p.exists():
+                try:
+                    st = p.stat()
+                    parts.append(f"{label}\t{domain}\t{st.st_mtime_ns}\t{st.st_size}")
+                except OSError:
+                    parts.append(f"{label}\t{domain}\terr")
+    parts.append(f"min_prevalence={min_prevalence!s}")
+    parts.append(f"include_prevalence_sheet={include_prevalence_sheet}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 # ---------- List Domains ----------
@@ -763,185 +841,127 @@ def get_template_flow_fleet(project_id):
 
 # ---------- Global Export ----------
 
-@patterns_bp.route("/<project_id>/patterns/export-global", methods=["GET"])
-@jwt_required()
-def export_global_patterns(project_id):
-    """
-    Export ALL domain patterns across all CPEs to Excel.
-    Creates one sheet per source filename with an index sheet.
-    
-    Returns: Excel file (.xlsx) with:
-        - Index sheet: Domain groups, files, and navigation links
-        - Data sheets: One per source filename with columns:
-          Domain Name | File Name | Pattern | Frequency | CPE Count | Sample Log Lines
-    """
-    import re
-    from datetime import datetime
-    from io import BytesIO
-    from flask import send_file
+
+def _build_fleet_patterns_zip_from_scan(
+    project,
+    scan_entries: list[tuple[str, Path]],
+    min_prevalence: float | None,
+    include_prevalence_sheet: bool,
+) -> tuple[bytes, str, str] | None:
+    """Build zip bytes (one .xlsx inside). Returns None if there are no patterns."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
-    
-    # Helper function to clean strings for Excel
-    ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
-    
-    def clean_for_excel(text):
-        """Remove ANSI codes and illegal characters for Excel."""
-        if not isinstance(text, str):
-            text = str(text)
-        # Remove ANSI color codes
-        text = ANSI_RE.sub("", text)
-        # Remove control characters (except newline, tab, carriage return)
-        text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', '', text)
-        return text
-    
-    user_id = get_user_id()
-    project, err = _verify_project(project_id, user_id)
-    if err:
-        return err
-    
-    # Build list of (label, directory) pairs to scan
-    cpes = dbm.list_project_cpes(project_id)
-    scan_entries: list[tuple[str, Path]] = []
-    if cpes:
-        for cpe in cpes:
-            scan_entries.append((cpe.serial, _project_dir(user_id, project_id, cpe.serial)))
-    else:
-        # No CPE records — fall back to project root (single-CPE uploads)
-        project_root = _project_dir(user_id, project_id)
-        scan_entries.append(("root", project_root))
-    
+
     if not scan_entries:
-        return jsonify({"error": "No CPE data found"}), 404
-    
+        return None
+
     total_cpes = len(scan_entries)
-    
-    # Data structure: { filename: { domain: [pattern_records] } }
-    file_data = {}
-    # Track which domains have which files
-    domain_files = {}
-    
-    # Iterate through all domains and collect pattern data
+    file_data: dict = {}
+    domain_files: dict[str, set] = {}
+
     for domain in _ALL_DOMAINS:
         domain_label = _DOMAIN_LABELS.get(domain, domain)
         domain_files[domain_label] = set()
-        
-        # Aggregate patterns from all CPEs for this domain
-        pattern_data = {}  # template -> {occurrence_count, cpe_details: {serial: count}}
-        
+
         for label, entry_dir in scan_entries:
-            df = _load_domain_parquet(entry_dir, domain)
-            
+            df = _load_domain_parquet_for_export(entry_dir, domain)
+
             if df.empty or "template" not in df.columns:
                 continue
-            
-            # Track source files
-            if "source_file" in df.columns:
-                source_files = df["source_file"].dropna().unique()
-                domain_files[domain_label].update(source_files)
-            
-            # Count occurrences per template for this CPE
-            template_counts = df["template"].value_counts()
-            
-            for template, count in template_counts.items():
+
+            work = df.dropna(subset=["template"]).copy()
+            if work.empty:
+                continue
+
+            if "source_file" in work.columns:
+                domain_files[domain_label].update(
+                    str(s) for s in work["source_file"].dropna().unique()
+                )
+                work["source_file"] = work["source_file"].fillna("unknown").astype(str)
+            else:
+                work["source_file"] = "unknown"
+
+            for (source_file, template), group in work.groupby(
+                ["source_file", "template"], dropna=False, sort=False
+            ):
                 template_str = str(template)
-                
-                # Get source file(s) for this template
-                if "source_file" in df.columns:
-                    template_df = df[df["template"] == template]
-                    source_file = template_df["source_file"].iloc[0] if len(template_df) > 0 else "unknown"
-                else:
-                    source_file = "unknown"
-                
-                # Initialize structure
+                count = int(len(group))
+
                 if source_file not in file_data:
                     file_data[source_file] = {}
                 if domain_label not in file_data[source_file]:
                     file_data[source_file][domain_label] = {}
-                
+
                 if template_str not in file_data[source_file][domain_label]:
                     file_data[source_file][domain_label][template_str] = {
                         "occurrence_count": 0,
                         "cpe_details": {},
-                        "sample_logs": []
+                        "sample_logs": [],
                     }
-                
-                file_data[source_file][domain_label][template_str]["occurrence_count"] += int(count)
-                file_data[source_file][domain_label][template_str]["cpe_details"][label] = int(count)
-                
-                # Get sample logs (up to 3) from first CPE
-                if len(file_data[source_file][domain_label][template_str]["sample_logs"]) == 0:
-                    template_df = df[df["template"] == template]
-                    for _, row in template_df.head(3).iterrows():
-                        sample_log = str(row.get("loglines", ""))
-                        if sample_log:
-                            file_data[source_file][domain_label][template_str]["sample_logs"].append(sample_log)
-    
-    if not file_data:
-        return jsonify({"error": "No pattern data found"}), 404
 
-    min_prevalence = request.args.get("min_prevalence", type=float)
-    include_prevalence_sheet = request.args.get(
-        "include_prevalence_sheet", "true"
-    ).lower() not in ("0", "false", "no")
+                rec = file_data[source_file][domain_label][template_str]
+                rec["occurrence_count"] += count
+                rec["cpe_details"][label] = int(rec["cpe_details"].get(label, 0)) + count
+
+                if not rec["sample_logs"] and "loglines" in group.columns:
+                    logs = [
+                        str(x)
+                        for x in group["loglines"].dropna().head(3).tolist()
+                        if str(x).strip()
+                    ]
+                    if logs:
+                        rec["sample_logs"] = logs
+
+    if not file_data:
+        return None
+
     high_prevalence_rows: list[dict] = []
 
-    # Create Excel workbook
     wb = Workbook()
-    wb.remove(wb.active)  # Remove default sheet
-    
-    # Create Index sheet
+    wb.remove(wb.active)
+
     index_sheet = wb.create_sheet("INDEX", 0)
-    
-    # Style definitions
+
     header_font = Font(bold=True, size=12, color="FFFFFF")
     header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
     link_font = Font(color="0563C1", underline="single")
-    
-    # Index sheet headers
+
     index_sheet["A1"] = "DOMAIN"
     index_sheet["B1"] = "FILES"
-    
+
     for cell in ["A1", "B1"]:
         index_sheet[cell].font = header_font
         index_sheet[cell].fill = header_fill
         index_sheet[cell].alignment = Alignment(horizontal="center", vertical="center")
-    
-    # Build index data
+
     index_row = 2
     for domain_label in sorted(domain_files.keys()):
         files = sorted(domain_files[domain_label])
         if not files:
             continue
-        
-        # First file row - include domain name
+
         first_file = True
         for filename in files:
             if filename in file_data and domain_label in file_data[filename]:
-                # Sanitize sheet name
                 sheet_name = filename[:31].replace("/", "_").replace("\\", "_").replace("*", "_").replace("?", "_").replace("[", "_").replace("]", "_")
-                
+
                 if first_file:
                     index_sheet[f"A{index_row}"] = domain_label
                     index_sheet[f"A{index_row}"].font = Font(bold=True)
                     first_file = False
-                
-                # Merge filename and hyperlink into single cell
+
                 index_sheet[f"B{index_row}"] = f'=HYPERLINK("#{sheet_name}!A1", "{filename}")'
                 index_sheet[f"B{index_row}"].font = link_font
-                
+
                 index_row += 1
-    
-    # Adjust column widths for index
+
     index_sheet.column_dimensions["A"].width = 20
     index_sheet.column_dimensions["B"].width = 50
-    
-    # Create data sheets (one per file)
+
     for filename in sorted(file_data.keys()):
-        # Sanitize sheet name (max 31 chars, no special chars)
         sheet_name = filename[:31].replace("/", "_").replace("\\", "_").replace("*", "_").replace("?", "_").replace("[", "_").replace("]", "_")
-        
+
         data_sheet = wb.create_sheet(sheet_name)
 
         headers = [
@@ -981,20 +1001,20 @@ def export_global_patterns(project_id):
                     high_prevalence_rows.append({
                         "domain": domain_label,
                         "filename": filename,
-                        "template": clean_for_excel(str(template)),
+                        "template": _clean_for_excel(str(template)),
                         "frequency": data["occurrence_count"],
                         "cpe_count_str": cpe_count_str,
                         "prevalence": prevalence_f,
-                        "samples": clean_for_excel(sample_logs_str),
+                        "samples": _clean_for_excel(sample_logs_str),
                     })
 
-                data_sheet.cell(row=row, column=1, value=clean_for_excel(filename))
-                data_sheet.cell(row=row, column=2, value=clean_for_excel(template))
+                data_sheet.cell(row=row, column=1, value=_clean_for_excel(filename))
+                data_sheet.cell(row=row, column=2, value=_clean_for_excel(template))
                 data_sheet.cell(row=row, column=3, value=data["occurrence_count"])
                 data_sheet.cell(row=row, column=4, value=cpe_count_str)
                 prev_cell = data_sheet.cell(row=row, column=5, value=prevalence_f)
                 prev_cell.number_format = "0.00%"
-                data_sheet.cell(row=row, column=6, value=clean_for_excel(sample_logs_str))
+                data_sheet.cell(row=row, column=6, value=_clean_for_excel(sample_logs_str))
                 data_sheet.cell(row=row, column=6).alignment = Alignment(
                     wrap_text=True, vertical="top"
                 )
@@ -1010,7 +1030,10 @@ def export_global_patterns(project_id):
 
         data_sheet.freeze_panes = "A2"
         last_row = max(1, row - 1)
-        data_sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{last_row}"
+        if last_row <= 100_000:
+            data_sheet.auto_filter.ref = (
+                f"A1:{get_column_letter(len(headers))}{last_row}"
+            )
 
     if include_prevalence_sheet and high_prevalence_rows:
         ps = wb.create_sheet("Prevalence_ge_50pct")
@@ -1044,23 +1067,104 @@ def export_global_patterns(project_id):
         for col, w in zip("ABCDEFG", (14, 28, 60, 12, 12, 14, 100)):
             ps.column_dimensions[col].width = w
         ps.freeze_panes = "A2"
-        ps.auto_filter.ref = f"A1:{get_column_letter(len(ph))}{max(1, pr - 1)}"
-    
-    # Save to BytesIO
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    
-    # Generate filename in format: project_name-patterns-YYYYMMDD.xlsx
+        last_pr = max(1, pr - 1)
+        if last_pr <= 100_000:
+            ps.auto_filter.ref = f"A1:{get_column_letter(len(ph))}{last_pr}"
+
+    xlsx_buf = BytesIO()
+    wb.save(xlsx_buf)
+    xlsx_bytes = xlsx_buf.getvalue()
+
     timestamp = datetime.now().strftime("%Y%m%d")
-    # Sanitize project name for filename (replace spaces and special chars)
-    safe_project_name = re.sub(r'[^\w\-]', '_', project.name)
-    filename = f"{safe_project_name}-patterns-{timestamp}.xlsx"
-    
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    safe_project_name = re.sub(r"[^\w\-]", "_", project.name)
+    inner_name = f"{safe_project_name}-patterns-{timestamp}.xlsx"
+    zip_name = f"{safe_project_name}-patterns-{timestamp}.zip"
+
+    zip_buf = BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr(inner_name, xlsx_bytes)
+    return zip_buf.getvalue(), inner_name, zip_name
+
+
+@patterns_bp.route("/<project_id>/patterns/export-global", methods=["GET"])
+@jwt_required()
+def export_global_patterns(project_id):
+    """
+    Export ALL domain patterns across all CPEs to Excel (zipped).
+
+    Cached under ``<project>/patterns_export/``; invalidated when any indexed
+    parquet changes or export query args change. ``?force=1`` forces rebuild.
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    scan_entries = _fleet_pattern_scan_entries(user_id, project_id)
+    if not scan_entries:
+        return jsonify({"error": "No CPE data found"}), 404
+
+    min_prevalence = request.args.get("min_prevalence", type=float)
+    include_prevalence_sheet = request.args.get(
+        "include_prevalence_sheet", "true"
+    ).lower() not in ("0", "false", "no")
+    force = request.args.get("force", "").lower() in ("1", "true", "yes")
+
+    fp = _fleet_export_input_fingerprint(
+        scan_entries, min_prevalence, include_prevalence_sheet
     )
+    project_root = _project_dir(user_id, project_id)
+    cache_dir = project_root / PATTERNS_EXPORT_SUBDIR
+    zip_path = cache_dir / _FLEET_EXPORT_ZIP_NAME
+    manifest_path = cache_dir / _FLEET_EXPORT_MANIFEST_NAME
+
+    if not force and zip_path.is_file() and manifest_path.is_file():
+        try:
+            meta = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if meta.get("fingerprint") == fp:
+                dl = meta.get("download_zip", "patterns-export.zip")
+                return send_file(
+                    zip_path,
+                    as_attachment=True,
+                    download_name=dl,
+                    mimetype="application/zip",
+                )
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("[fleet patterns export] cache read failed: %s", exc)
+
+    built = _build_fleet_patterns_zip_from_scan(
+        project, scan_entries, min_prevalence, include_prevalence_sheet
+    )
+    if built is None:
+        return jsonify({"error": "No pattern data found"}), 404
+
+    zip_bytes, inner_name, zip_name = built
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = cache_dir / f".{_FLEET_EXPORT_ZIP_NAME}.part"
+        tmp.write_bytes(zip_bytes)
+        tmp.replace(zip_path)
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "fingerprint": fp,
+                    "built_at": datetime.now().astimezone().isoformat(),
+                    "inner_xlsx": inner_name,
+                    "download_zip": zip_name,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("[fleet patterns export] cache write failed: %s", exc)
+
+    return send_file(
+        BytesIO(zip_bytes),
+        as_attachment=True,
+        download_name=zip_name,
+        mimetype="application/zip",
+    )
+
 
