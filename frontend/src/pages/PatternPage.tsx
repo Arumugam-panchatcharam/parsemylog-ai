@@ -1,13 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { cn } from "@/lib/utils";
+import { labelForPosition } from "@/lib/drain3MaskLabels";
+import { DynamicValuesMacRichText, plainTextWithFormattedMacs } from "@/lib/macAddressDisplay";
 import { useCPE } from "@/hooks/useCPE";
 import Plot from "react-plotly.js";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CircularProgress from "@mui/material/CircularProgress";
 import FilterListIcon from "@mui/icons-material/FilterList";
+import SearchIcon from "@mui/icons-material/Search";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import BarChartIcon from "@mui/icons-material/BarChart";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
@@ -20,8 +24,29 @@ import PersonIcon from "@mui/icons-material/Person";
 import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
+
+/** Persists single-CPE pattern trend panel open/closed across templates, routes, and reloads. */
+const PATTERN_TREND_EXPANDED_KEY = "parsemylog.patternPage.trendSectionExpanded";
+
+function readStoredTrendExpanded(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(PATTERN_TREND_EXPANDED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function persistTrendExpanded(expanded: boolean): void {
+  try {
+    localStorage.setItem(PATTERN_TREND_EXPANDED_KEY, expanded ? "true" : "false");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 interface AggregatedPattern {
   template: string;
@@ -80,6 +105,17 @@ export default function PatternPage() {
   const [appliedFiles, setAppliedFiles] = useState<string[]>([]);
   const [showFileFilter, setShowFileFilter] = useState(false);
   const [allSourceFiles, setAllSourceFiles] = useState<string[]>([]);
+  const [singleTemplateSearch, setSingleTemplateSearch] = useState("");
+  const [trendSectionExpanded, setTrendSectionExpanded] = useState(() => readStoredTrendExpanded());
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== PATTERN_TREND_EXPANDED_KEY || e.newValue == null) return;
+      setTrendSectionExpanded(e.newValue === "true");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // File filter for aggregated view
   const [aggregatedSelectedFiles, setAggregatedSelectedFiles] = useState<string[]>([]);
@@ -103,6 +139,16 @@ export default function PatternPage() {
   const chartData = analysisRaw?.chart_data;
   const summary = analysisRaw?.summary;
 
+  const singleTemplateTableRows = useMemo(() => {
+    if (!chartData?.length) return [];
+    type Row = { template: string; count: number };
+    const q = singleTemplateSearch.trim().toLowerCase();
+    const filtered = q
+      ? (chartData as Row[]).filter((r) => r.template.toLowerCase().includes(q))
+      : [...(chartData as Row[])];
+    return filtered.sort((a, b) => b.count - a.count);
+  }, [chartData, singleTemplateSearch]);
+
   // Populate allSourceFiles from UNFILTERED analysis response
   useEffect(() => {
     if (analysisRaw?.source_files && appliedFiles.length === 0) {
@@ -120,6 +166,7 @@ export default function PatternPage() {
     setAppliedFiles([]);
     setShowFileFilter(false);
     setAllSourceFiles([]);
+    setSingleTemplateSearch("");
   }, [selectedDomain]);
 
   const { data: tsData } = useQuery({ queryKey: ["timeseries", projectId, selectedDomain, selectedTemplate, timeInterval, fileFilterStr, cpeId], queryFn: async () => (await patternsApi.getTimeseries(projectId!, selectedDomain, selectedTemplate, timeInterval, fileFilterStr, cpeId)).data, enabled: !!projectId && !!selectedDomain && !!selectedTemplate });
@@ -467,55 +514,221 @@ export default function PatternPage() {
         </div>
       </div>
 
-      {/* Frequency Chart */}
+      {/* Templates table (sorted by frequency descending, optional search) */}
       {chartData && chartData.length > 0 && (
         <div className="bg-card border border-border rounded-2xl p-4">
-          <h3 className="text-sm font-semibold mb-2">Template Frequency ({chartData.length} patterns)</h3>
-          <Plot
-            data={[{ x: chartData.map((_: unknown, i: number) => i), y: chartData.map((d: { count: number }) => d.count), type: "bar", hovertext: chartData.map((d: { template: string }) => d.template), marker: { color: "#1a73e8" } }]}
-            layout={{ height: 350, margin: { l: 50, r: 20, t: 10, b: 40 }, xaxis: { title: { text: "Log Pattern" } }, yaxis: { title: { text: "Occurrence (Log Scale)" }, type: "log" }, hovermode: "closest", paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { family: "Roboto, sans-serif" } }}
-            config={NO_TOOLBAR} style={{ width: "100%" }}
-            onClick={(data) => { setSelectedTemplate(chartData[data.points[0].pointIndex].template); }}
-          />
-          <p className="text-[11px] text-muted-foreground mt-1">Click a bar to inspect the pattern</p>
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h3 className="text-sm font-semibold">
+              Templates
+              {singleTemplateSearch.trim() ? (
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  ({singleTemplateTableRows.length} of {chartData.length} patterns)
+                </span>
+              ) : (
+                <span className="ml-1.5 font-normal text-muted-foreground">({chartData.length} patterns)</span>
+              )}
+            </h3>
+            <div className="relative w-full sm:max-w-xs">
+              <SearchIcon
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                style={{ fontSize: 18 }}
+              />
+              <input
+                type="search"
+                value={singleTemplateSearch}
+                onChange={(e) => setSingleTemplateSearch(e.target.value)}
+                placeholder="Search templates…"
+                className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-8 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Search templates"
+              />
+              {singleTemplateSearch ? (
+                <button
+                  type="button"
+                  onClick={() => setSingleTemplateSearch("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <div className="max-h-[min(28rem,55vh)] overflow-y-auto custom-scrollbar rounded-lg border border-border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 z-10 border-b border-border bg-muted/95 backdrop-blur-sm">
+                <tr>
+                  <th className="w-10 py-2 px-3 text-left font-medium text-muted-foreground">#</th>
+                  <th className="py-2 px-3 text-left font-medium text-muted-foreground">Template</th>
+                  <th className="w-28 py-2 px-3 text-right font-medium text-muted-foreground">Count</th>
+                  <th className="w-14 py-2 px-2 text-center font-medium text-muted-foreground" title="Pattern Analyzer">
+                    <span className="sr-only">Analyzer</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {singleTemplateTableRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">
+                      No templates match &quot;{singleTemplateSearch.trim()}&quot;.
+                    </td>
+                  </tr>
+                ) : (
+                  singleTemplateTableRows.map((row: { template: string; count: number }, idx: number) => (
+                    <tr
+                      key={row.template}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedTemplate(row.template)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedTemplate(row.template);
+                        }
+                      }}
+                      className={cn(
+                        "cursor-pointer border-b border-border transition-colors last:border-b-0",
+                        selectedTemplate === row.template
+                          ? "bg-primary/15 hover:bg-primary/20"
+                          : "hover:bg-muted/50",
+                      )}
+                    >
+                      <td className="py-2 px-3 align-top text-muted-foreground tabular-nums">{idx + 1}</td>
+                      <td className="py-2 px-3 align-top font-mono text-[11px] break-all">{row.template}</td>
+                      <td className="py-2 px-3 align-top text-right font-semibold tabular-nums">{row.count.toLocaleString()}</td>
+                      <td className="py-2 px-1 align-top text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(
+                              `/workspace/pattern-analyzer?template=${encodeURIComponent(row.template)}&domain=${encodeURIComponent(selectedDomain)}`,
+                            );
+                          }}
+                          title="Open in Pattern Analyzer"
+                          className="inline-flex rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        >
+                          <ManageSearchIcon style={{ fontSize: 16 }} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Sorted by count (high → low). Click a row for trend, dynamic values, and matching log lines.
+          </p>
         </div>
       )}
 
       {selectedTemplate && (<>
-        <div className="bg-card border border-border rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="text-sm font-semibold">Selected Template</h3>
-            <button
-              onClick={() => navigate(`/workspace/pattern-analyzer?template=${encodeURIComponent(selectedTemplate)}&domain=${encodeURIComponent(selectedDomain)}`)}
-              title="Open in Pattern Analyzer for detailed analysis"
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-400 transition-colors"
-            >
-              <ManageSearchIcon style={{ fontSize: 14 }} /> Add to Pattern Analyzer
-            </button>
-          </div>
-          <p className="text-xs font-mono bg-muted p-2 rounded-lg break-all">{selectedTemplate}</p>
-        </div>
-
         {tsData?.data && tsData.data.length > 0 && (
-          <div className="bg-card border border-border rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-              <h3 className="text-sm font-semibold">Trend ({tsData.freq})</h3>
-              <div className="flex items-center gap-2">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card">
+            <div
+              className={cn(
+                "flex flex-wrap items-center justify-between gap-2 px-4 py-3",
+                trendSectionExpanded && "border-b border-border",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setTrendSectionExpanded((v) => {
+                    const next = !v;
+                    persistTrendExpanded(next);
+                    return next;
+                  })
+                }
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg py-1 pl-1 pr-2 text-left hover:bg-muted/60"
+                aria-expanded={trendSectionExpanded}
+                aria-controls="pattern-trend-plot-panel"
+                id="pattern-trend-toggle"
+              >
+                <ExpandMoreIcon
+                  className={cn("shrink-0 text-muted-foreground transition-transform duration-200", trendSectionExpanded && "rotate-180")}
+                  style={{ fontSize: 22 }}
+                />
+                <h3 className="text-sm font-semibold">Trend ({tsData.freq})</h3>
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
                 <ScheduleIcon style={{ fontSize: 16 }} className="text-muted-foreground" />
-                {intervalMarks.map((label, idx) => <button key={idx} onClick={() => setTimeInterval(idx)} title={label === "1s" ? "1 second" : label === "1m" ? "1 minute" : label === "1h" ? "1 hour" : "1 day"} className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-colors ${timeInterval === idx ? "bg-primary text-primary-foreground" : "border border-border hover:bg-muted text-muted-foreground"}`}>{label}</button>)}
+                {intervalMarks.map((label, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setTimeInterval(idx)}
+                    title={label === "1s" ? "1 second" : label === "1m" ? "1 minute" : label === "1h" ? "1 hour" : "1 day"}
+                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${timeInterval === idx ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-muted"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
-            <Plot data={[{ x: tsData.data.map((d: { timestamp: string }) => d.timestamp), y: tsData.data.map((d: { count: number }) => d.count), type: "scattergl", mode: "lines+markers", marker: { size: 4, color: "#1a73e8" }, line: { width: 2 } }]}
-              layout={{ height: 300, margin: { l: 40, r: 20, t: 10, b: 30 }, hovermode: "closest", paper_bgcolor: "transparent", plot_bgcolor: "transparent", font: { family: "Roboto, sans-serif" } }}
-              config={NO_TOOLBAR} style={{ width: "100%" }} />
+            {trendSectionExpanded ? (
+              <div id="pattern-trend-plot-panel" className="p-4 pt-2" role="region" aria-labelledby="pattern-trend-toggle">
+                <Plot
+                  data={[
+                    {
+                      x: tsData.data.map((d: { timestamp: string }) => d.timestamp),
+                      y: tsData.data.map((d: { count: number }) => d.count),
+                      type: "scattergl",
+                      mode: "lines+markers",
+                      marker: { size: 4, color: "#1a73e8" },
+                      line: { width: 2 },
+                    },
+                  ]}
+                  layout={{
+                    height: 300,
+                    margin: { l: 40, r: 20, t: 10, b: 30 },
+                    hovermode: "closest",
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                    font: { family: "Roboto, sans-serif" },
+                  }}
+                  config={NO_TOOLBAR}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            ) : null}
           </div>
         )}
 
         {params?.parameters && params.parameters.length > 0 && (
           <div className="bg-card border border-border rounded-2xl p-4">
             <h3 className="text-sm font-semibold mb-2">Dynamic Values</h3>
-            <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-border"><th className="text-left py-2 px-3">Position</th><th className="text-left py-2 px-3">Count</th><th className="text-left py-2 px-3">Values</th></tr></thead>
-              <tbody>{params.parameters.map((p: { position: string; count: number; values: string[] }) => <tr key={p.position} className="border-b border-border"><td className="py-2 px-3 font-medium">{p.position}</td><td className="py-2 px-3">{p.count}</td><td className="py-2 px-3 max-w-md truncate" title={p.values.join(", ")}>{p.values.join(", ")}</td></tr>)}</tbody></table></div>
+            <div className="min-w-0 overflow-x-auto">
+              <table className="w-full table-fixed text-xs">
+                <colgroup>
+                  <col className="w-40" />
+                  <col />
+                </colgroup>
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="whitespace-nowrap py-2 px-3 text-left font-medium text-muted-foreground">Placeholder</th>
+                    <th className="min-w-0 py-2 px-3 text-left font-medium text-muted-foreground">Values</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {params.parameters.map((p: { position: string; values: string[] }) => {
+                    const title = p.values.map((v) => plainTextWithFormattedMacs(v)).join(", ");
+                    return (
+                      <tr key={p.position} className="border-b border-border">
+                        <td className="whitespace-nowrap py-2 px-3 align-top font-medium">{labelForPosition(p.position, selectedTemplate)}</td>
+                        <td className="min-w-0 py-2 px-3 align-top whitespace-normal break-words" title={title}>
+                          {p.values.map((v, i) => (
+                            <span key={i}>
+                              {i > 0 ? <span className="text-muted-foreground">, </span> : null}
+                              <DynamicValuesMacRichText raw={v} />
+                            </span>
+                          ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
