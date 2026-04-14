@@ -2,12 +2,15 @@
 """
 Process CPE Logs: Deduplicate, remove empty folders, and zip .tgz archives.
 
-- Computes MD5 checksums of all .tgz / .tar.gz files within each subdirectory.
-- Removes duplicate .tgz files (same MD5), keeping the first occurrence.
-- Removes subdirectories that contain no .tgz files.
-- Creates one .zip per remaining subdirectory (containing its unique .tgz files).
-- If there are no subdirectories but *.tgz / *.tar.gz files sit directly under the
-  target dir (flat upload), normally creates one .zip per archive file.
+- Finds all ``.tgz`` / ``.tar.gz`` files under each area **recursively** (nested paths such as
+  ``<MAC>/<timestamp>/CPELOGS/<realm>/<model>/*.tgz`` are supported).
+- Computes MD5 checksums, removes duplicate archives (same MD5), keeping the first.
+- Removes immediate subdirectories that contain no matching archives anywhere beneath them.
+- Creates one .zip per remaining top-level subdirectory; each ``.tgz`` is stored at the **root**
+  of that zip (file name only). If two paths share the same name, the extra entries use a
+  flattened relative path (slashes replaced with underscores).
+- If there are no subdirectories but archives exist under the target dir, creates one .zip
+  per top-level archive file (flat upload).
 
 - **Auto single-CPE:** if there are 2+ archives and every basename matches the same
   CPE log prefix (e.g. ``vendor_MAC`` before ``_YYYY-MM-DD-HH-MM-SS_``, or before
@@ -19,12 +22,14 @@ Usage:
 """
 
 import argparse
-import glob
 import hashlib
 import os
 import re
 import shutil
 import zipfile
+
+# Prune these from directory traversal (avoid picking outputs or macOS junk).
+_SKIP_WALK_DIRS = frozenset({"archive", "__MACOSX"})
 
 # CPE log bundle names, e.g. telekom-cz_DC08DAE34B1F_2026-03-19-18-16-13_CPELogs_...tgz
 _RE_CPE_TS_PREFIX = re.compile(
@@ -129,16 +134,58 @@ def deduplicate_tgz(tgz_files: list[str], folder_name: str, dry_run: bool) -> tu
 
 
 def collect_tgz_files_in_dir(folder: str) -> list[str]:
-    """Return sorted unique paths for .tgz and .tar.gz directly under folder."""
-    patterns = ("*.tgz", "*.tar.gz", "*.TGZ", "*.TAR.GZ")
+    """
+    Return sorted unique paths for .tgz and .tar.gz under folder (any depth).
+
+    Skips ``archive/`` and ``__MACOSX/`` subtrees so re-runs do not ingest prior outputs.
+    """
+    root = os.path.abspath(folder)
+    if not os.path.isdir(root):
+        return []
+
     seen: set[str] = set()
     out: list[str] = []
-    for pattern in patterns:
-        for path in sorted(glob.glob(os.path.join(folder, pattern))):
-            if path not in seen:
+    for walk_root, dirs, files in os.walk(root):
+        dirs[:] = [d for d in sorted(dirs) if d not in _SKIP_WALK_DIRS]
+        for name in sorted(files):
+            lower = name.lower()
+            if not (lower.endswith(".tgz") or lower.endswith(".tar.gz")):
+                continue
+            path = os.path.join(walk_root, name)
+            if os.path.isfile(path) and path not in seen:
                 seen.add(path)
                 out.append(path)
     return out
+
+
+def _pair_paths_flat_zip_arcnames(paths: list[str], base_folder: str) -> list[tuple[str, str]]:
+    """
+    Build (filepath, zip_arcname) pairs with no directory prefixes in the zip.
+
+    Uses each file's basename when unique under base_folder; on basename collision,
+    uses a flattened relative path (``/`` -> ``_``) so members stay unique.
+    """
+    base_abs = os.path.abspath(base_folder)
+    used: set[str] = set()
+    pairs: list[tuple[str, str]] = []
+    for path in paths:
+        name = os.path.basename(path)
+        if name not in used:
+            arc = name
+        else:
+            rel = os.path.relpath(os.path.abspath(path), base_abs).replace("\\", "/")
+            arc = rel.replace("/", "_")
+            if arc in used:
+                stem, ext = os.path.splitext(arc)
+                n = 1
+                candidate = f"{stem}__{n}{ext}"
+                while candidate in used:
+                    n += 1
+                    candidate = f"{stem}__{n}{ext}"
+                arc = candidate
+        used.add(arc)
+        pairs.append((path, arc))
+    return pairs
 
 
 def cpe_stem_from_archive(path: str) -> str:
@@ -171,7 +218,6 @@ def _single_cpe_bundle(
     removed_folders: list[str] = []
     created_zips: list[str] = []
     total_duplicates = 0
-    target_abs = os.path.abspath(target_dir)
 
     candidates: list[str] = []
     if not subdirs:
@@ -207,12 +253,10 @@ def _single_cpe_bundle(
             f"with {len(unique_files)} archive file(s)"
         )
     else:
+        pairs = _pair_paths_flat_zip_arcnames(unique_files, target_dir)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
-            for tgz in unique_files:
-                rel = os.path.relpath(os.path.abspath(tgz), target_abs)
-                if rel.startswith(".."):
-                    rel = os.path.basename(tgz)
-                zf.write(tgz, arcname=rel.replace("\\", "/"))
+            for tgz, arc in pairs:
+                zf.write(tgz, arcname=arc)
         print(f"  Created {zip_filename} with {len(unique_files)} archive file(s)")
     created_zips.append(zip_filename)
 
@@ -309,9 +353,10 @@ def process(
                         f"({dup_count} duplicate(s) removed)"
                     )
                 else:
+                    pairs = _pair_paths_flat_zip_arcnames(unique_files, folder)
                     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
-                        for tgz in unique_files:
-                            zf.write(tgz, arcname=os.path.basename(tgz))
+                        for tgz, arc in pairs:
+                            zf.write(tgz, arcname=arc)
                     print(
                         f"  Created {zip_filename} "
                         f"with {len(unique_files)} unique .tgz file(s) "

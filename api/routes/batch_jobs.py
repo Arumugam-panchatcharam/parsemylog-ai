@@ -123,11 +123,12 @@ def _is_noise_batch_path(name: str) -> bool:
 
 
 def _resolve_batch_cleanup_root(extract_dir: Path) -> Path:
-    """Descend single-child wrapper dirs so the cleanup script sees CPE subfolders with .tgz.
+    """Descend single-child wrapper dirs so the cleanup script sees the intended upload root.
 
-    ``process_cpe_logs.py`` only scans *immediate* subdirectories. Many uploads are zipped as
-    ``outer/CPExxx/*.tgz``; running against ``outer`` would see no .tgz in ``CPExxx`` at the
-    wrong level without this step.
+    ``process_cpe_logs.py`` groups by *immediate* subdirectories of the target (one CPE per
+    folder) but discovers ``.tgz`` / ``.tar.gz`` **recursively** inside each. Unwrapping
+    ``outer/Archive1/...`` avoids pointing the script at a wrapper that has no per-CPE
+    folders yet.
     """
     cur = extract_dir.resolve()
     for _ in range(_BATCH_UPLOAD_ROOT_MAX_DEPTH):
