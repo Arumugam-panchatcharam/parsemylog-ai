@@ -271,6 +271,43 @@ def analyze_domain(project_id, domain):
     }), 200
 
 
+def _coarsen_timeseries_bucket_counts(
+    ts_df: pd.DataFrame,
+    max_points: int,
+    base_freq: str,
+) -> pd.DataFrame:
+    """
+    Reduce the number of time buckets while preserving total event counts.
+
+    The previous implementation used ``iloc[::step]``, which decimates rows and
+    can drop sparse spikes—so the trend chart no longer matched log lines.
+    """
+    if ts_df.empty or len(ts_df) <= max_points:
+        return ts_df.sort_values("timestamp", na_position="last").reset_index(drop=True)
+    ts_series = ts_df.sort_values("timestamp").set_index("timestamp")["count"]
+    try:
+        base_td = pd.to_timedelta(base_freq)
+    except (ValueError, TypeError):
+        base_td = pd.Timedelta(minutes=1)
+    mult = max(2, int(np.ceil(len(ts_df) / max_points)))
+    while mult < 10**12:
+        bucket = base_td * mult
+        agg = ts_series.resample(bucket, label="left", closed="left").sum()
+        agg = agg[agg > 0]
+        if len(agg) <= max_points:
+            out = agg.reset_index()
+            out.columns = ["timestamp", "count"]
+            return out
+        n = len(agg)
+        if n == 0:
+            break
+        mult = max(mult + 1, int(np.ceil(mult * n / max_points)))
+    out = ts_series.resample(base_td * mult, label="left", closed="left").sum()
+    out = out[out > 0].reset_index()
+    out.columns = ["timestamp", "count"]
+    return out
+
+
 # ---------- Time Series ----------
 
 @patterns_bp.route("/<project_id>/domains/<domain>/timeseries", methods=["GET"])
@@ -311,17 +348,20 @@ def get_timeseries(project_id, domain):
     if df_pattern.empty:
         return jsonify({"data": []}), 200
 
-    df_pattern["timestamp"] = pd.to_datetime(df_pattern["timestamp"])
+    df_pattern["timestamp"] = pd.to_datetime(df_pattern["timestamp"], errors="coerce")
+    df_pattern = df_pattern.dropna(subset=["timestamp"])
+    if df_pattern.empty:
+        return jsonify({"data": []}), 200
+
     ts_df = (
         df_pattern.groupby(pd.Grouper(key="timestamp", freq=freq))
         .size()
         .reset_index(name="count")
     )
+    ts_df = ts_df.dropna(subset=["timestamp"])
 
-    # Downsample if too many points
     max_points = 5000
-    if len(ts_df) > max_points:
-        ts_df = ts_df.iloc[:: len(ts_df) // max_points + 1]
+    ts_df = _coarsen_timeseries_bucket_counts(ts_df, max_points, freq)
 
     result = []
     for _, row in ts_df.iterrows():

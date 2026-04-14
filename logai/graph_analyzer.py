@@ -281,6 +281,33 @@ def _template_field_matches(
     return any(k in tl for k in tmpl_kwds if k)
 
 
+def _series_matches_any_regex(s: pd.Series, patterns: List[re.Pattern]) -> pd.Series:
+    """Vectorized OR of ``str.contains`` for compiled regex patterns (ignore case)."""
+    if s.empty or not patterns:
+        return pd.Series(False, index=s.index)
+    out = pd.Series(False, index=s.index)
+    for p in patterns:
+        out |= s.str.contains(p.pattern, regex=True, case=False, na=False)
+    return out
+
+
+def _series_matches_template_field(
+    tmpl_series: pd.Series,
+    tmpl_pats: List[re.Pattern],
+    tmpl_kwds: List[str],
+) -> pd.Series:
+    """Vectorized equivalent of :func:`_template_field_matches` per row."""
+    if tmpl_series.empty or (not tmpl_pats and not tmpl_kwds):
+        return pd.Series(False, index=tmpl_series.index)
+    out = _series_matches_any_regex(tmpl_series, tmpl_pats)
+    if tmpl_kwds:
+        tl = tmpl_series.str.lower()
+        for k in tmpl_kwds:
+            if k:
+                out |= tl.str.contains(re.escape(str(k)), regex=False, na=False)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Ripgrep-based detection
 # ---------------------------------------------------------------------------
@@ -623,38 +650,70 @@ def _detect_events_for_node(
         return evidence
 
     has_template_col = "template" in subset.columns
-    rdk_acc: Dict[str, Dict[str, Any]] = {}
+    log_series = (
+        subset["loglines"].fillna("").astype(str)
+        if "loglines" in subset.columns
+        else pd.Series("", index=subset.index)
+    )
+    tmpl_series = (
+        subset["template"].fillna("").astype(str)
+        if has_template_col
+        else pd.Series("", index=subset.index)
+    )
 
-    for _, row in subset.iterrows():
+    if has_log:
+        log_pat_ok = _series_matches_any_regex(log_series, compiled_patterns)
+        log_ok = log_series.ne("") & log_pat_ok
+    else:
+        log_ok = pd.Series(False, index=subset.index)
+
+    tmpl_ok = (
+        _series_matches_template_field(tmpl_series, tmpl_pats, tmpl_kwds)
+        if has_template_col and (tmpl_pats or tmpl_kwds)
+        else pd.Series(False, index=subset.index)
+    )
+
+    if has_log and has_tmpl:
+        matched = log_ok | tmpl_ok
+    elif has_log:
+        matched = log_ok
+    else:
+        matched = tmpl_ok
+
+    if compiled_exclusions:
+        excl = _series_matches_any_regex(log_series, compiled_exclusions)
+        if has_template_col:
+            excl |= _series_matches_any_regex(tmpl_series, compiled_exclusions)
+        matched &= ~excl
+
+    evidence["count"] = int(matched.sum())
+    if evidence["count"] == 0:
+        return evidence
+
+    matched_df = subset.loc[matched]
+    if "_ts" in matched_df.columns:
+        for ts in matched_df["_ts"]:
+            if ts is not None and pd.notna(ts):
+                evidence["timestamps"].append(
+                    ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+                )
+
+    mhead = matched_df.head(5)
+    for _, sample_row in mhead.iterrows():
+        logv = str(sample_row.get("loglines", ""))
+        tmv = (
+            str(sample_row.get("template", ""))
+            if has_template_col
+            else ""
+        )
+        evidence["sample_lines"].append((logv or tmv)[:400])
+
+    rdk_acc: Dict[str, Dict[str, Any]] = {}
+    for _, row in matched_df.iterrows():
+        if len(rdk_acc) >= 12:
+            break
         text = str(row.get("loglines", ""))
         tmpl = str(row.get("template", "")) if has_template_col else ""
-
-        if compiled_exclusions:
-            if text and any(ex.search(text) for ex in compiled_exclusions):
-                continue
-            if tmpl and any(ex.search(tmpl) for ex in compiled_exclusions):
-                continue
-
-        log_ok = bool(text) and any(p.search(text) for p in compiled_patterns)
-        tmpl_ok = has_template_col and _template_field_matches(tmpl, tmpl_pats, tmpl_kwds)
-
-        if has_log and has_tmpl:
-            matched = log_ok or tmpl_ok
-        elif has_log:
-            matched = log_ok
-        else:
-            matched = tmpl_ok
-
-        if not matched:
-            continue
-
-        evidence["count"] += 1
-        ts = row.get("_ts")
-        if ts:
-            evidence["timestamps"].append(ts.isoformat())
-        if len(evidence["sample_lines"]) < 5:
-            evidence["sample_lines"].append((text or tmpl)[:400])
-
         dom = str(row.get("_domain", "")) if "_domain" in row.index else ""
         src_file = str(row.get("source_file", "")) if "source_file" in row.index else ""
         for m in resolve_modules(dom, src_file, tmpl, text):

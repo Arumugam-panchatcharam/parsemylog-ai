@@ -12,7 +12,7 @@ Timestamp Patterns Supported:
 4. Custom format 1: 200000-12:34:56.789 (device uptime)
 5. RFC short: Mon 1 12:34:56 (weekday) or syslog-style Mar 19 22:31:31 (month + day)
 6. RFC full: Mon Nov 01 12:34:56 UTC 2025
-7. Space-separated: 2025-11-13 08:06:53
+7. Space-separated: 2025-11-13 08:06:53 or 2025-11-13 08:06:53.041582
 8. Compact date + time: 260325-02:58:46.700024 (YYMMDD-HH:MM:SS.microseconds), e.g. RDK/CPE logs
 """
 
@@ -37,8 +37,10 @@ _TIMESTAMP_PATTERNS = {
     # Device uptime format: 200000-12:34:56.789 or 123456.789
     "device_uptime": re.compile(r"^(?:\d{6}-)?\d{2}:\d{2}:\d{2}\.\d+"),
     
-    # Space-separated: 2025-11-13 08:06:53
-    "space_separated": re.compile(r"^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}"),
+    # Space-separated: 2025-11-13 08:06:53[.fraction]
+    "space_separated": re.compile(
+        r"^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d+)?$"
+    ),
     
     # Weekday or month + day + time (BSD/syslog): Mon 1 12:34:56 | Mar 19 22:31:31[.fraction]
     "rfc_short": re.compile(
@@ -120,11 +122,16 @@ def _parse_iso_format(ts: str) -> Optional[datetime]:
 
 
 def _parse_space_separated(ts: str) -> Optional[datetime]:
-    """Parse YYYY-MM-DD HH:MM:SS format: 2025-11-13 08:06:53"""
+    """Parse YYYY-MM-DD HH:MM:SS[.microseconds] format: 2025-11-13 08:06:53"""
     if not _TIMESTAMP_PATTERNS["space_separated"].match(ts):
         return None
-    
-    return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(ts, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_dash_separated(ts: str) -> Optional[datetime]:
@@ -260,6 +267,7 @@ if __name__ == "__main__":
     # Test the parser with various timestamp formats
     test_timestamps = [
         "2025-11-13 08:06:53",           # Space-separated
+        "2026-03-26 23:03:05.041582",    # Space-separated + microseconds
         "2025-11-13T08:06:53Z",          # ISO format
         "2025-11-13T08:06:53",           # ISO format (no Z)
         "2025-11-13-08-06-53",           # Dash-separated

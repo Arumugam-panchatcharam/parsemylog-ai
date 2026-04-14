@@ -32,10 +32,10 @@ def template_sequence_from_dataframe(
     sort_df = df
     if "_ts" in df.columns:
         sort_df = df.sort_values("_ts", na_position="first")
+    templates = sort_df["template"].fillna("").astype(str).str.strip().to_numpy()
     seq: List[str] = []
     prev: Optional[str] = None
-    for _, row in sort_df.iterrows():
-        t = str(row.get("template", "")).strip()
+    for t in templates:
         if not t:
             continue
         if dedupe_consecutive and t == prev:
