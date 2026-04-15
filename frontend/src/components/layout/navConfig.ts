@@ -7,7 +7,6 @@ import MemoryIcon from "@mui/icons-material/Memory";
 import ArticleIcon from "@mui/icons-material/Article";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
-import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import HubIcon from "@mui/icons-material/Hub";
@@ -33,7 +32,6 @@ export const workspaceNav: readonly WorkspaceNavItem[] = [
   { to: "/workspace/syslog", icon: ArticleIcon, label: "Syslog" },
   { to: "/workspace/selfheal", icon: MemoryIcon, label: "SelfHeal" },
   { to: "/workspace/ai", icon: PsychologyIcon, label: "Semantic Search" },
-  { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
   { to: "/workspace/issue-analysis", icon: AccountTreeIcon, label: "Issue Analysis" },
   { to: "/workspace/ml-pipeline", icon: ModelTrainingIcon, label: "ML Pipeline" },
   { to: "/workspace/analytics", icon: AssessmentIcon, label: "Analytics" },

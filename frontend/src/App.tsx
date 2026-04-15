@@ -20,7 +20,6 @@ const SyslogPage = lazy(() => import("@/pages/SyslogPage"));
 const SelfHealPage = lazy(() => import("@/pages/SelfHealPage"));
 const AIAnalysisPage = lazy(() => import("@/pages/AIAnalysisPage"));
 const PatternAnalyzerPage = lazy(() => import("@/pages/PatternAnalyzerPage"));
-const CPEOverviewPage = lazy(() => import("@/pages/CPEOverviewPage"));
 const AdminPage = lazy(() => import("@/pages/AdminPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
@@ -123,7 +122,10 @@ function AppRoutes() {
         <Route path="/workspace/selfheal" element={<SelfHealPage />} />
         <Route path="/workspace/ai" element={<AIAnalysisPage />} />
         <Route path="/workspace/pattern-analyzer" element={<PatternAnalyzerPage />} />
-        <Route path="/workspace/cpe-overview" element={<CPEOverviewPage />} />
+        <Route
+          path="/workspace/cpe-overview"
+          element={<Navigate to="/workspace/pattern-analyzer?tab=overview" replace />}
+        />
         <Route path="/workspace/issue-analysis" element={<IssueAnalysisPage />} />
         <Route path="/workspace/ml-pipeline" element={<MLPipelinePage />} />
         <Route path="/workspace/analytics" element={<AnalyticsPage />} />

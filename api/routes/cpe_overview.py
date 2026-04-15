@@ -9,6 +9,7 @@ pattern summary per domain, and log file statistics.
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -31,7 +32,37 @@ from logai.timestamp_parser import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
+# ripgrep subprocess limits (large projects + filtered scans can exceed Gunicorn worker timeout).
+_RG_TIMEOUT_SIMPLE = max(30, int(os.environ.get("LOGAI_RG_TIMEOUT_SEC", "120")))
+_RG_TIMEOUT_ALL_CPES = max(60, int(os.environ.get("LOGAI_RG_ALL_CPES_TIMEOUT_SEC", "300")))
+_RG_TIMEOUT_FILTERED = max(60, int(os.environ.get("LOGAI_RG_FILTERED_TIMEOUT_SEC", "480")))
+_PATTERN_SCAN_MAX_WORKERS = max(
+    1, min(16, int(os.environ.get("CPE_OVERVIEW_PATTERN_SCAN_WORKERS", "4")))
+)
+
 cpe_overview_bp = Blueprint("cpe_overview", __name__)
+
+
+def _cpe_overview_api_enabled() -> bool:
+    """Cross-CPE overview + pattern scan are heavy (parallel rg). On by default; set CPE_OVERVIEW_ENABLED=0 to disable."""
+    v = os.environ.get("CPE_OVERVIEW_ENABLED", "1").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+@cpe_overview_bp.before_request
+def _require_cpe_overview_enabled():
+    if _cpe_overview_api_enabled():
+        return None
+    return (
+        jsonify(
+            {
+                "error": "CPE Overview API is disabled. Set CPE_OVERVIEW_ENABLED=1 on the API to enable.",
+                "disabled": True,
+            }
+        ),
+        503,
+    )
+
 
 # Core domains (same as patterns.py)
 _CORE_DOMAINS = ["wireless", "platform", "core_router", "cellular", "mesh"]
@@ -658,7 +689,7 @@ def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=_RG_TIMEOUT_SIMPLE,
         )
     except subprocess.TimeoutExpired:
         logger.warning(f"[CPEOverview] rg -c timed out for regex: {regex[:80]}")
@@ -707,7 +738,7 @@ def _run_rg_count_all_cpes(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=_RG_TIMEOUT_ALL_CPES,
         )
     except subprocess.TimeoutExpired:
         logger.warning(f"[CPEOverview] rg -c (all CPEs) timed out for: {regex[:80]}")
@@ -831,7 +862,7 @@ def _run_rg_count_all_cpes_filtered(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=_RG_TIMEOUT_FILTERED,
         )
     except subprocess.TimeoutExpired:
         logger.warning(
@@ -1149,7 +1180,8 @@ def run_pattern_scan(project_id):
                 )
             return key, counts
 
-        with ThreadPoolExecutor(max_workers=min(8, len(all_tasks))) as pool:
+        scan_workers = max(1, min(_PATTERN_SCAN_MAX_WORKERS, len(all_tasks)))
+        with ThreadPoolExecutor(max_workers=scan_workers) as pool:
             futures = {pool.submit(_scan_pattern, t): t for t in all_tasks}
             for future in as_completed(futures):
                 key, counts = future.result()

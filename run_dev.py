@@ -14,8 +14,9 @@ Prerequisites:
     - Frontend dev server: cd frontend && npm run dev
 
 Environment variables (optional):
-    QDRANT_URL   - Qdrant server URL (default: http://localhost:6333)
-    APP_PORT     - API port (default: 40901)
+    QDRANT_URL              - Qdrant server URL (default: http://localhost:6333)
+    APP_PORT                - API port (default: 40901)
+    CPE_OVERVIEW_ENABLED    - Cross-CPE pattern scan (default: 1; set 0 to disable)
 """
 
 import os
@@ -29,6 +30,8 @@ if PROJECT_ROOT not in sys.path:
 
 # Default to localhost Qdrant for local development
 os.environ.setdefault("QDRANT_URL", "http://localhost:6333")
+# Match docker-compose: cross-CPE overview enabled unless explicitly turned off
+os.environ.setdefault("CPE_OVERVIEW_ENABLED", "1")
 
 # Suppress HuggingFace tokenizers fork warning
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")

@@ -49,6 +49,12 @@ const DOMAIN_COLORS: string[] = [
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
 
+function isCpeOverviewDisabledError(e: unknown): boolean {
+  if (typeof e !== "object" || e === null || !("response" in e)) return false;
+  const r = (e as { response?: { status?: number; data?: { disabled?: boolean } } }).response;
+  return r?.status === 503 && r?.data?.disabled === true;
+}
+
 function escapeHtmlForPlotlyHover(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -97,10 +103,13 @@ export default function PatternOverviewTab() {
   const {
     data: scanData,
     isLoading: loadingCache,
+    isError: scanCacheError,
+    error: scanCacheErr,
   } = useQuery<PatternScanResult>({
     queryKey: ["cpe-overview-pattern-scan", projectId],
     queryFn: async () => (await cpeOverviewApi.getPatternScan(projectId!)).data,
     enabled: !!projectId,
+    retry: false,
   });
 
   const scanMutation = useMutation({
@@ -223,6 +232,19 @@ export default function PatternOverviewTab() {
     return (
       <div className="flex items-center justify-center h-40 text-muted-foreground">
         Select a project from the Dashboard.
+      </div>
+    );
+  }
+
+  if (scanCacheError && isCpeOverviewDisabledError(scanCacheErr)) {
+    return (
+      <div className="bg-card border border-border rounded-xl p-6 text-center space-y-2 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">Cross-CPE pattern scan is disabled</p>
+        <p>
+          The server has turned off CPE Overview / pattern-scan APIs. Enable with{" "}
+          <code className="text-xs bg-muted px-1 rounded">CPE_OVERVIEW_ENABLED=1</code> on the API if you need this
+          tab.
+        </p>
       </div>
     );
   }

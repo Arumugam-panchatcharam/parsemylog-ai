@@ -1,8 +1,8 @@
 """
 Production WSGI entry point for the REST API (Gunicorn).
 
-Usage (Docker):
-    gunicorn -w 4 -b 0.0.0.0:40901 --timeout 900 --preload logai_api_wsgi:app
+Usage (Docker): see docker-compose.yml (GUNICORN_TIMEOUT, typically 1800s).
+    gunicorn -w 4 -b 0.0.0.0:5000 --timeout 1800 --graceful-timeout 120 --preload logai_api_wsgi:app
 
 Environment variables (set via .env):
     LOG_LEVEL              - Python log level (default: INFO).

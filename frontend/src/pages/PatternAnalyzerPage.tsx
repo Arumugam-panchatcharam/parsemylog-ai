@@ -244,6 +244,11 @@ export default function PatternAnalyzerPage() {
 
   const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
 
+  useEffect(() => {
+    const t = searchParams.get("tab");
+    setActiveTab(t === "overview" ? "overview" : "cpe");
+  }, [searchParams]);
+
   // Domain-grouped pattern state
   const [domains, setDomains] = useState<DomainPatterns>({});
   const [patternsLoaded, setPatternsLoaded] = useState(false);
@@ -1033,7 +1038,14 @@ export default function PatternAnalyzerPage() {
       {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-border">
         <button
-          onClick={() => setActiveTab("cpe")}
+          onClick={() => {
+            setActiveTab("cpe");
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete("tab");
+              return next;
+            }, { replace: true });
+          }}
           className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
             activeTab === "cpe"
               ? "border-primary text-primary"
@@ -1044,7 +1056,14 @@ export default function PatternAnalyzerPage() {
           CPE Analysis
         </button>
         <button
-          onClick={() => setActiveTab("overview")}
+          onClick={() => {
+            setActiveTab("overview");
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.set("tab", "overview");
+              return next;
+            }, { replace: true });
+          }}
           className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
             activeTab === "overview"
               ? "border-primary text-primary"
