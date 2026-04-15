@@ -474,6 +474,54 @@ class Pattern:
             return None
 
 
+def build_template_miner_for_extract(
+    project_dir: Optional[str | Path] = None,
+    domain: Optional[str] = None,
+    config: Optional[LogAIConfig] = None,
+) -> TemplateMiner | None:
+    """
+    One ``TemplateMiner`` for many ``get_parameter_list(template, line)`` calls.
+
+    Building the miner loads ``drain3.ini`` and optional ``drain3_{domain}.json``;
+    doing that once per parquet instead of once per template avoids large ETL slowdowns.
+    """
+    cfg = config or default_config()
+    try:
+        miner_config = TemplateMinerConfig()
+        drain3_path = cfg.resolve_drain3_config_path()
+        if drain3_path.exists():
+            miner_config.load(str(drain3_path))
+
+        persistence = None
+        if project_dir and domain:
+            state_path = Path(project_dir) / f"drain3_{domain}.json"
+            if state_path.exists():
+                persistence = FilePersistence(str(state_path))
+
+        return TemplateMiner(persistence, config=miner_config)
+    except Exception as e:
+        logger.warning("[build_template_miner_for_extract] Failed to init TemplateMiner: %s", e)
+        return None
+
+
+def extract_parameters_with_miner(
+    miner: TemplateMiner,
+    template: str,
+    loglines: List[str],
+) -> List[List[str]]:
+    """Extract parameters using an existing miner (see ``build_template_miner_for_extract``)."""
+    if not template or not loglines:
+        return [[] for _ in loglines]
+    result: List[List[str]] = []
+    for line in loglines:
+        try:
+            params = miner.get_parameter_list(template, str(line))
+            result.append(params if params else [])
+        except Exception:
+            result.append([])
+    return result
+
+
 def extract_parameters(
     template: str,
     loglines: List[str],
@@ -511,33 +559,8 @@ def extract_parameters(
     if not template or not loglines:
         return [[] for _ in loglines]
 
-    # Load a TemplateMiner with the masking config from drain3.ini.
-    # If a saved state exists for the domain, load it for accuracy.
-    cfg = config or default_config()
-    try:
-        miner_config = TemplateMinerConfig()
-        drain3_path = cfg.resolve_drain3_config_path()
-        if drain3_path.exists():
-            miner_config.load(str(drain3_path))
-
-        persistence = None
-        if project_dir and domain:
-            state_path = Path(project_dir) / f"drain3_{domain}.json"
-            if state_path.exists():
-                persistence = FilePersistence(str(state_path))
-
-        miner = TemplateMiner(persistence, config=miner_config)
-    except Exception as e:
-        logger.warning(f"[extract_parameters] Failed to init TemplateMiner: {e}")
+    miner = build_template_miner_for_extract(project_dir, domain, config)
+    if miner is None:
         return [[] for _ in loglines]
-
-    result = []
-    for line in loglines:
-        try:
-            params = miner.get_parameter_list(template, str(line))
-            result.append(params if params else [])
-        except Exception:
-            result.append([])
-
-    return result
+    return extract_parameters_with_miner(miner, template, loglines)
 

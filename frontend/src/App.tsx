@@ -31,6 +31,7 @@ const BatchJobDetailPage = lazy(() => import("@/pages/BatchJobDetailPage"));
 const KnowledgeGraphPage = lazy(() => import("@/pages/KnowledgeGraphPage"));
 const IssueAnalysisPage = lazy(() => import("@/pages/IssueAnalysisPage"));
 const MLPipelinePage = lazy(() => import("@/pages/MLPipelinePage"));
+const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -125,6 +126,7 @@ function AppRoutes() {
         <Route path="/workspace/cpe-overview" element={<CPEOverviewPage />} />
         <Route path="/workspace/issue-analysis" element={<IssueAnalysisPage />} />
         <Route path="/workspace/ml-pipeline" element={<MLPipelinePage />} />
+        <Route path="/workspace/analytics" element={<AnalyticsPage />} />
         <Route path="/workspace/chat" element={<ChatPage />} />
       </Route>
 

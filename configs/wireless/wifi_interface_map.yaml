@@ -1,0 +1,38 @@
+# Static VAP / BSSID layout for Telekom HGW mesh models (base MAC + byte offsets).
+# Runtime joins device_info_cache["mac"] as base_mac after normalization (colon hex, lowercase).
+
+model_family: telekom_hgw_orion
+models:
+  - DT-HGW01A-ARC
+  - DT-HGW01A-ASK
+  - DT-HGW02A-ASK
+  - DT-HGW03A-ASK
+
+base_mac_field: mac
+
+# bssid_offset: added to 48-bit base MAC (full integer add with carry).
+interfaces:
+  - ifname: ra0
+    role: primary 2G
+    bssid_offset: 1
+  - ifname: ra1
+    role: Guest 2G
+    bssid_offset: 2
+  - ifname: ra2
+    role: secondary 2G
+    bssid_offset: 3
+  - ifname: ra6
+    role: Backhaul 2G
+    bssid_offset: 4
+  - ifname: rai0
+    role: primary 5G
+    bssid_offset: 9
+  - ifname: rai1
+    role: Guest 5G
+    bssid_offset: 10
+  - ifname: rai2
+    role: secondary 5G
+    bssid_offset: 11
+  - ifname: rai6
+    role: Backhaul 5G
+    bssid_offset: 13

@@ -1089,6 +1089,26 @@ def _raw_cache_is_fresh(cpe_dir: Path) -> bool:
     return True
 
 
+def _raw_cache_miss_reason(cpe_dir: Path) -> str:
+    """Human-readable reason ``_raw_cache_is_fresh`` is False (for logging)."""
+    cache = _raw_cache_path(cpe_dir)
+    if not cache.exists():
+        return "no raw_telemetry_cache.json"
+    cache_mtime = cache.stat().st_mtime
+    stale_parts: List[str] = []
+    for name in ("telemetry2_0.txt", "dcmscript.log"):
+        src = cpe_dir / name
+        if not src.exists():
+            continue
+        src_mtime = src.stat().st_mtime
+        if src_mtime > cache_mtime:
+            delta = src_mtime - cache_mtime
+            stale_parts.append(f"{name} newer than cache (+{delta:.3f}s)")
+    if stale_parts:
+        return "stale: " + "; ".join(stale_parts)
+    return "raw_telemetry_cache.json present but not considered fresh"
+
+
 def _save_raw_telemetry_cache(
     cpe_dir: Path,
     reports: List[Dict[str, Any]],
@@ -1179,13 +1199,29 @@ def parse_telemetry_file(
         Tuple of (reports, merged, summary, source) where *source* is one
         of ``"telemetry2_0"``, ``"legacy"``, ``"dcmscript"``, or ``"none"``.
     """
-    if cpe_dir and not force and _raw_cache_is_fresh(cpe_dir):
+    if cpe_dir and force:
+        logger.info(
+            "[TelemetryParser] force=True: re-parsing telemetry (bypassing "
+            "raw_telemetry_cache.json). dir=%s",
+            cpe_dir,
+        )
+        _invalidate_api_response_cache(cpe_dir)
+    elif cpe_dir and not force and _raw_cache_is_fresh(cpe_dir):
         cached = _load_raw_telemetry_cache(cpe_dir)
         if cached is not None:
             return cached
-
-    if cpe_dir and force:
-        _invalidate_api_response_cache(cpe_dir)
+        logger.warning(
+            "[TelemetryParser] raw_telemetry_cache.json appears fresh but load "
+            "failed; performing full parse. dir=%s",
+            cpe_dir,
+        )
+    elif cpe_dir and not force:
+        logger.info(
+            "[TelemetryParser] Raw cache not used (%s); full parse from sources. "
+            "dir=%s",
+            _raw_cache_miss_reason(cpe_dir),
+            cpe_dir,
+        )
 
     reports: List[Dict[str, Any]] = []
     source = "none"

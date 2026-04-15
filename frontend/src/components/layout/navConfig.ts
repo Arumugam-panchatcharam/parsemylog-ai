@@ -14,6 +14,7 @@ import HubIcon from "@mui/icons-material/Hub";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import WifiIcon from "@mui/icons-material/Wifi";
 import TableChartIcon from "@mui/icons-material/TableChart";
+import AssessmentIcon from "@mui/icons-material/Assessment";
 
 /** MUI icon components accept `style` / `className` like Sidebar usage */
 export type NavIcon = ComponentType<{ style?: React.CSSProperties; className?: string }>;
@@ -35,6 +36,7 @@ export const workspaceNav: readonly WorkspaceNavItem[] = [
   { to: "/workspace/cpe-overview", icon: CompareArrowsIcon, label: "CPE Overview" },
   { to: "/workspace/issue-analysis", icon: AccountTreeIcon, label: "Issue Analysis" },
   { to: "/workspace/ml-pipeline", icon: ModelTrainingIcon, label: "ML Pipeline" },
+  { to: "/workspace/analytics", icon: AssessmentIcon, label: "Analytics" },
 ] as const;
 
 export interface MainNavItem {

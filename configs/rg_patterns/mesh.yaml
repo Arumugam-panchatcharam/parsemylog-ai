@@ -29,6 +29,7 @@ regex:
   # Generic auth/disassociation keywords
   - "\\b(deauth(orized)?|disassoc(iat(ed|ion)?)?|disconnect(ed)?|left|removed|kicked|rejected|denied)\\b"
   - "\\b(auth(orized)?|authenticate(d)?|assoc(iate)?|associat(ed|ion)?)\\b"
+  - "\\b(eapol|wpa|rsn|802.1x|nl80211|station|auth_alg|pmkid)\\b"
   # Signal quality issues
   - "\\b(lost|weak|degraded|low)\\b"
   # Generic mesh keywords

@@ -813,8 +813,9 @@ def search_all_files(project_id):
         return jsonify({"error": f"Invalid regex: {str(e)}"}), 400
 
     dedup_cfg = load_dedup_config(user_dedup_patterns_path(_get_user_dir(user_id)))
+    # No single filename yet (multi-file search); None => all enabled patterns apply.
     inv_pats = (
-        enabled_invert_patterns(dedup_cfg, filename)
+        enabled_invert_patterns(dedup_cfg, None)
         if apply_dedup and dedup_cfg.get("dedup_active")
         else []
     )

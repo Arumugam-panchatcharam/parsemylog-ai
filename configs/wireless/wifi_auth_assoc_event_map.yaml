@@ -1,0 +1,182 @@
+# WiFi auth / assoc / hostapd protocol events and STA issue detectors.
+# Matchers: first event definition (map key order) whose matchers match wins.
+# Tune param_index per deployment using wifi_labeled_events debug output.
+
+events:
+  AUTH_REQ_MLME:
+    matchers:
+      - { logline_contains: ap_peer_auth_req_at_idle_action }
+      - { logline_contains: CFG80211_AuthHandle }
+      - { template_contains: received auth }
+    sta_mac:
+      # Drain3: STA MAC is parameter [3] for ap_peer_auth_req_at_idle and CFG80211_AuthHandle.
+      param_index: 3
+      logline_regex: "(?i)from\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "(?i)bss:([a-z0-9]+)"
+
+  AUTH_RESP_MLME:
+    matchers:
+      - { logline_contains: ap_peer_auth_simple_rsp_gen_and_send }
+      - { logline_contains: send auth resp to }
+    sta_mac:
+      # Drain3: peer MAC at [3]; [5] is seq (e.g. 2) — wrong slot caused bogus STA "2".
+      param_index: 3
+      logline_regex: "(?i)to\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "(?i)NOTICE\\.MLME,([a-z0-9]+),"
+
+  ASSOC_REQ:
+    matchers:
+      # Matchers in one dict are AND-ed; separate dicts are OR-ed. Require both so
+      # "send assoc resp" lines are not labeled ASSOC_REQ (they must be ASSOC_RESP).
+      - logline_contains: ap_cmm_peer_assoc_req_action
+        logline_regex: "(?i)received\\s+assoc\\s+req"
+    sta_mac:
+      # received assoc req: DA=[3] SA=[4] in Drain3; log uses SA=
+      param_index: 4
+      logline_regex: "(?i)SA=([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "(?i)ifname=([a-z0-9]+)"
+
+  ASSOC_RESP:
+    matchers:
+      - logline_contains: ap_cmm_peer_assoc_req_action
+        logline_regex: "(?i)send\\s+assoc\\s+resp\\s+to"
+    sta_mac:
+      param_index: 3
+      logline_regex: "(?i)to\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "(?i)NOTICE\\.MLME,([a-z0-9]+),"
+    wcid:
+      logline_regex: "(?i)\\(wcid\\s*=\\s*(\\d+)\\)"
+
+  SEND_HOSTAPD_4WAY:
+    matchers:
+      - { logline_contains: Send sta event to Hostapd }
+    sta_mac:
+      logline_regex: "(?i)Hostapd for\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "(?i)ifname\\s*=\\s*([a-z0-9]+)"
+    wcid:
+      logline_regex: "(?i)\\(wcid\\s*=\\s*(\\d+)\\)"
+
+  HOSTAPD_NEW_STA:
+    matchers:
+      - { logline_contains: "nl80211: New station" }
+    sta_mac:
+      logline_regex: "(?i)New station\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "(?i)received for\\s+([a-z0-9]+)"
+
+  EAPOL_SEND_M1:
+    matchers:
+      - { logline_regex: "WPA: Send EAPOL\\(version=2 secure=0 mic=0 ack=1" }
+
+  EAPOL_RX_M2:
+    matchers:
+      - { logline_regex: "WPA: Received EAPOL-Key from.*key_info=0x10a" }
+
+  EAPOL_SEND_M3:
+    matchers:
+      - { logline_regex: "WPA: Send EAPOL\\(version=2 secure=1 mic=1 ack=1 install=1" }
+
+  EAPOL_RX_M4:
+    matchers:
+      - { logline_regex: "WPA: Received EAPOL-Key from.*key_info=0x30a" }
+
+  HOSTAPD_AP_STA_CONNECTED:
+    matchers:
+      - { logline_contains: "AP-STA-CONNECTED" }
+    sta_mac:
+      logline_regex: "(?i)AP-STA-CONNECTED\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "^([a-z0-9]+):"
+
+  HOSTAPD_4WAY_COMPLETE:
+    matchers:
+      - { logline_contains: "EAPOL-4WAY-HS-COMPLETED" }
+    sta_mac:
+      logline_regex: "(?i)EAPOL-4WAY-HS-COMPLETED\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+    ifname:
+      logline_regex: "^([a-z0-9]+):"
+
+  DEAUTH:
+    matchers:
+      - { template_contains: deauth }
+      - { logline_contains: deauth }
+    sta_mac:
+      logline_regex: "(?i)([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+
+  DISCONNECTED:
+    matchers:
+      - { logline_contains: AP-STA-DISCONNECTED }
+      - { template_contains: disassoc }
+    sta_mac:
+      logline_regex: "(?i)AP-STA-DISCONNECTED\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+
+issues:
+  assoc_no_response:
+    category: association
+    severity: high
+    rca_hint: AP not responding to association (no ASSOC_RESP within window).
+    detect:
+      type: missing_followup
+      trigger: ASSOC_REQ
+      expect: ASSOC_RESP
+      group_by: [sta_mac, ifname]
+      within_sec: 5
+
+  assoc_loop:
+    category: association
+    severity: high
+    rca_hint: STA unable to associate (possible auth/config issue); repeated ASSOC_REQ.
+    detect:
+      type: burst_count
+      event: ASSOC_REQ
+      min_occurrence: 3
+      window_sec: 10
+      group_by: [sta_mac, ifname]
+
+  handshake_timeout:
+    category: auth
+    severity: high
+    rca_hint: 4-way handshake stalled (no M2 after M1).
+    detect:
+      type: missing_followup
+      trigger: EAPOL_SEND_M1
+      expect: EAPOL_RX_M2
+      group_by: [sta_mac, ifname]
+      within_sec: 3
+
+  partial_handshake:
+    category: auth
+    severity: high
+    rca_hint: Handshake incomplete (no M3 after M2).
+    detect:
+      type: missing_followup
+      trigger: EAPOL_RX_M2
+      expect: EAPOL_SEND_M3
+      group_by: [sta_mac, ifname]
+      within_sec: 5
+
+  deauth_storm:
+    category: connectivity
+    severity: high
+    rca_hint: Many deauth events in a short window.
+    detect:
+      type: burst_count
+      event: DEAUTH
+      min_occurrence: 4
+      window_sec: 30
+      group_by: [sta_mac, ifname]
+
+  assoc_success_after_retries:
+    category: association
+    severity: medium
+    rca_hint: Association succeeded after multiple attempts.
+    detect:
+      type: ordered_sequence
+      sequence: [ASSOC_REQ, ASSOC_REQ, ASSOC_RESP]
+      max_gap_sec: 30
+      group_by: [sta_mac, ifname]

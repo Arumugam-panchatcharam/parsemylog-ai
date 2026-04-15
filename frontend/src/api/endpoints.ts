@@ -1693,3 +1693,199 @@ export const utilitiesApi = {
   ouiReload: () =>
     api.post<OuiUpdateResult>("/utilities/oui-reload", {}),
 };
+
+// ---------- Analytics ----------
+export interface AnalyticsFleetSummary {
+  generation_date: string;
+  fleet_statistics: {
+    total_devices: number;
+    total_reboots: number;
+    average_reboots_per_device: number;
+  };
+  reboot_analysis: {
+    reasons_distribution: Record<string, number>;
+    most_common_reason: string;
+  };
+  firmware_analysis: {
+    version_distribution: Record<string, number>;
+    unique_versions: number;
+  };
+  error_analysis: {
+    top_templates_by_domain: Record<string, Array<{ template: string; count: number }>>;
+    total_error_instances: number;
+  };
+  device_health: {
+    high_risk_devices: Array<{
+      serial: string;
+      model: string;
+      firmware_version: string;
+      peak_memory_pct: number;
+      peak_cpu_pct: number;
+    }>;
+    high_risk_count: number;
+  };
+  module_graph_version: string;
+}
+
+export interface AnalyticsDeviceHealth {
+  device_serial: string;
+  model: string;
+  manufacturer: string;
+  firmware_version: string;
+  last_reboot_reason: string;
+  peak_memory_usage_pct: number;
+  avg_memory_usage_pct: number;
+  peak_cpu_usage_pct: number;
+  avg_cpu_usage_pct: number;
+  processing_date: string;
+}
+
+export interface AnalyticsErrorTemplate {
+  domain: string;
+  template: string;
+  occurrence_count: number;
+  first_seen: string;
+  last_seen: string;
+  module_enrichment: string;
+}
+
+export interface AnalyticsSignal {
+  timestamp: string;
+  signal_type: string;
+  signal_value: number;
+  processing_date: string;
+}
+
+export interface AnalyticsRebootAnalysis {
+  reason_distribution: Array<{
+    reason: string;
+    count: number;
+    avg_errors_before: number;
+  }>;
+  recent_reboots: Array<{
+    timestamp: string;
+    device_serial: string;
+    reason: string;
+    reboot_type: string;
+    errors_before_reboot: number;
+  }>;
+}
+
+/** Per-STA WiFi protocol issues (auth / assoc / handshake) from Polars pipeline */
+export interface AnalyticsStaIssue {
+  device_serial: string;
+  issue_key: string;
+  category: string;
+  severity: string;
+  sta_mac: string;
+  ifname: string;
+  wcid: string;
+  window_start: string;
+  window_end: string;
+  evidence: string;
+  rca_hint: string;
+  processing_date: string;
+  /** Rolled-up detector hits per device + STA + issue */
+  occurrence_count?: number;
+}
+
+/** STA entry with vendor from local OUI DB only (no online lookup). */
+export interface AnalyticsStaIssueStaEntry {
+  sta_mac: string;
+  vendor: string | null;
+}
+
+/** One device + issue type; expand for STA MAC list. */
+export interface AnalyticsStaIssueGroup {
+  device_serial: string;
+  issue_key: string;
+  category: string;
+  severity: string;
+  sta_count: number;
+  total_occurrence_count: number;
+  window_start: string;
+  window_end: string;
+  /** True when issue window intersects reboot ± margin (possible radio-down noise). */
+  may_overlap_reboot: boolean;
+  overlapping_reboot_times: string[];
+  sta_list: AnalyticsStaIssueStaEntry[];
+}
+
+export const analyticsApi = {
+  /**
+   * Backfill Polars ETL + fleet summary. Pass `force_polars_etl: true` to re-run ETL
+   * for every CPE with `*_rg.parquet` (refreshes `sta_issues` and other analytics).
+   */
+  regenerateFleet: (
+    projectId: string,
+    options?: { force_polars_etl?: boolean },
+  ) => {
+    const payload =
+      options?.force_polars_etl === true ? { force_polars_etl: true } : undefined;
+    return api.post<{
+      summary?: AnalyticsFleetSummary;
+      message?: string;
+      cpe_count?: number;
+      backfill?: { force?: boolean; backfilled_count?: number; failed_count?: number };
+    }>(`/projects/${projectId}/analytics/regenerate`, payload);
+  },
+
+  getFleetSummary: (projectId: string) =>
+    api.get<AnalyticsFleetSummary>(`/projects/${projectId}/analytics/fleet-summary`),
+  
+  getDeviceHealth: (projectId: string, options?: { limit?: number }) =>
+    api.get<AnalyticsDeviceHealth[]>(`/projects/${projectId}/analytics/device-health`, {
+      params: options,
+    }),
+  
+  getRebootAnalysis: (projectId: string, options?: { serial?: string }) =>
+    api.get<AnalyticsRebootAnalysis>(`/projects/${projectId}/analytics/reboots`, {
+      params: options,
+    }),
+  
+  getErrorTemplates: (projectId: string, options?: { domain?: string; limit?: number }) =>
+    api.get<AnalyticsErrorTemplate[]>(`/projects/${projectId}/analytics/error-templates`, {
+      params: options,
+    }),
+  
+  getSignals: (projectId: string, options?: { signal_type?: string; limit?: number }) =>
+    api.get<AnalyticsSignal[]>(`/projects/${projectId}/analytics/signals`, {
+      params: options,
+    }),
+
+  getStaIssues: (
+    projectId: string,
+    options?: { device_serial?: string; issue_key?: string; limit?: number },
+  ) =>
+    api.get<AnalyticsStaIssue[]>(`/projects/${projectId}/analytics/sta-issues`, {
+      params: options,
+    }),
+
+  getStaIssuesGrouped: (
+    projectId: string,
+    options?: { device_serial?: string; issue_key?: string; limit?: number },
+  ) =>
+    api.get<AnalyticsStaIssueGroup[]>(`/projects/${projectId}/analytics/sta-issues-grouped`, {
+      params: options,
+    }),
+
+  executeCustomQuery: (projectId: string, sql: string) =>
+    api.post<{ data: any[]; count: number }>(`/projects/${projectId}/analytics/custom-query`, {
+      sql,
+    }),
+  
+  getSchema: (projectId: string) =>
+    api.get<Record<string, Array<{ column_name: string; column_type: string; null: string }>>>(
+      `/projects/${projectId}/analytics/schema`
+    ),
+  
+  getDomains: (projectId: string) =>
+    api.get<{ domains: string[]; available_views: string[] }>(
+      `/projects/${projectId}/analytics/domains`
+    ),
+  
+  getSignalTypes: (projectId: string) =>
+    api.get<{ signal_types: string[] }>(
+      `/projects/${projectId}/analytics/signal-types`
+    ),
+};

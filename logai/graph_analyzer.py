@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+from bisect import bisect_left, bisect_right
 import os
 import re
 import shutil
@@ -455,8 +456,17 @@ def _classify_unified_rg_matches(
     compiled_map: Dict[str, Tuple[List[re.Pattern], List[re.Pattern]]],
     window_start: Optional[datetime] = None,
     window_end: Optional[datetime] = None,
+    *,
+    precomputed_ts: Optional[List[Optional[datetime]]] = None,
+    precomputed_sorted_ts_indices: Optional[List[int]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Turn one unified ``rg`` result into per-node evidence (exclusions + windows)."""
+    """Turn one unified ``rg`` result into per-node evidence (exclusions + windows).
+
+    When *precomputed_ts* / *precomputed_sorted_ts_indices* are provided (same
+    length / ordering as *matches*), timestamp parsing is skipped and windowed
+    passes use bisect on sorted times instead of scanning all matches — important
+    when *matches* is large and many reboot windows are evaluated.
+    """
     out: Dict[str, Dict[str, Any]] = {
         n["id"]: _empty_rg_evidence() for n in rg_nodes
     }
@@ -471,14 +481,36 @@ def _classify_unified_rg_matches(
             continue
         node_rows.append((nid, pats, excl))
 
-    for m in matches:
-        text = m["text"]
-        ts = _parse_ts(m["timestamp"]) if m.get("timestamp") else None
-        if window_start is not None and (ts is None or ts < window_start):
-            continue
-        if window_end is not None and (ts is None or ts > window_end):
-            continue
+    n_m = len(matches)
+    if precomputed_ts is not None and len(precomputed_ts) != n_m:
+        precomputed_ts = None
+        precomputed_sorted_ts_indices = None
 
+    if precomputed_ts is not None:
+        parsed_ts = precomputed_ts
+    else:
+        parsed_ts = [
+            _parse_ts(m["timestamp"]) if m.get("timestamp") else None
+            for m in matches
+        ]
+
+    if precomputed_sorted_ts_indices is not None:
+        sorted_ix = precomputed_sorted_ts_indices
+    else:
+        sorted_ix = sorted(
+            [i for i, t in enumerate(parsed_ts) if t is not None],
+            key=lambda i: parsed_ts[i],  # type: ignore[index]
+        )
+
+    windowed = window_start is not None or window_end is not None
+
+    def _apply_match(idx: int, ts: Optional[datetime]) -> None:
+        m = matches[idx]
+        text = m["text"]
+        if window_start is not None and (ts is None or ts < window_start):
+            return
+        if window_end is not None and (ts is None or ts > window_end):
+            return
         for nid, pats, excl in node_rows:
             if excl and any(ex.search(text) for ex in excl):
                 continue
@@ -490,6 +522,25 @@ def _classify_unified_rg_matches(
                 ev["timestamps"].append(ts.isoformat())
             if len(ev["sample_lines"]) < 5:
                 ev["sample_lines"].append(text)
+
+    if not windowed:
+        for i in range(n_m):
+            _apply_match(i, parsed_ts[i])
+        return out
+
+    if not sorted_ix:
+        return out
+
+    times_sorted = [parsed_ts[i] for i in sorted_ix]
+    lo = bisect_left(times_sorted, window_start) if window_start is not None else 0
+    hi = (
+        bisect_right(times_sorted, window_end)
+        if window_end is not None
+        else len(times_sorted)
+    )
+    for k in range(lo, hi):
+        idx = sorted_ix[k]
+        _apply_match(idx, parsed_ts[idx])
 
     return out
 
@@ -1236,7 +1287,12 @@ def analyze_cpe(
         force: When True, bypass telemetry / device-info caches and
             re-parse from raw files.
     """
-    t0 = time.time()
+    tp = time.perf_counter
+    t_start = tp()
+
+    def _ms(a: float, b: float) -> int:
+        return max(0, round((b - a) * 1000))
+
     use_rg = bool(_RG_BIN)
 
     G = build_networkx_graph(graph_def)
@@ -1245,6 +1301,8 @@ def analyze_cpe(
     compiled_map: Dict[str, Tuple[List[re.Pattern], List[re.Pattern]]] = {}
     for n in event_nodes:
         compiled_map[n["id"]] = _compile_node_patterns(n)
+
+    t_after_prep = tp()
 
     needs_parquet = (not use_rg) or any(
         _detection_uses_parquet(n) for n in event_nodes
@@ -1255,13 +1313,17 @@ def analyze_cpe(
     if parquet_events is not None and parquet_events.empty:
         parquet_events = None
 
-    # Telemetry (uses raw cache when available)
+    t_after_parquet = tp()
+
+    # Telemetry (uses raw cache when available unless force=True)
     t2_path = cpe_dir / "telemetry2_0.txt"
     dcm_path = cpe_dir / "dcmscript.log"
     tel_reports, tel_merged, tel_summary, tel_source = parse_telemetry_file(
         t2_path, dcmscript_path=dcm_path, cpe_dir=cpe_dir, force=force,
     )
-    
+
+    t_after_telemetry = tp()
+
     # Identity (uses caches when available)
     identity = _get_device_identity(cpe_dir, serial, telemetry_reports=tel_reports, force=force)
     identity["project_id"] = project_id
@@ -1276,6 +1338,8 @@ def analyze_cpe(
             reboots.append({"timestamp": ur["timestamp"], "reason": ur["reason"]})
     reboots.sort(key=lambda r: r.get("timestamp", ""))
 
+    t_after_reboot_merge = tp()
+
     all_events: Optional[pd.DataFrame] = parquet_events
 
     rg_nodes = [n for n in event_nodes if use_rg and not _detection_uses_parquet(n)]
@@ -1283,6 +1347,20 @@ def analyze_cpe(
     unified_rg_matches: List[Dict[str, Any]] = (
         _unified_rg_matches_for_nodes(cpe_dir, rg_nodes) if rg_nodes else []
     )
+
+    rg_match_ts: Optional[List[Optional[datetime]]] = None
+    rg_sorted_ts_ix: Optional[List[int]] = None
+    if unified_rg_matches and rg_nodes:
+        rg_match_ts = [
+            _parse_ts(m["timestamp"]) if m.get("timestamp") else None
+            for m in unified_rg_matches
+        ]
+        rg_sorted_ts_ix = sorted(
+            [i for i, t in enumerate(rg_match_ts) if t is not None],
+            key=lambda i: rg_match_ts[i],  # type: ignore[index]
+        )
+
+    t_after_rg = tp()
 
     # -- Global evidence (across all time) --
     global_evidence: Dict[str, Dict[str, Any]] = {}
@@ -1298,6 +1376,8 @@ def analyze_cpe(
         global_evidence.update(
             _classify_unified_rg_matches(
                 unified_rg_matches, rg_nodes, compiled_map,
+                precomputed_ts=rg_match_ts,
+                precomputed_sorted_ts_indices=rg_sorted_ts_ix,
             )
         )
 
@@ -1308,6 +1388,8 @@ def analyze_cpe(
 
     # Global graph evaluation
     global_graph_eval = _evaluate_graph(G, global_evidence)
+
+    t_after_global = tp()
 
     # -- Per-reboot windowed analysis --
     reboot_analyses = []
@@ -1341,6 +1423,8 @@ def analyze_cpe(
                 _classify_unified_rg_matches(
                     unified_rg_matches, rg_nodes, compiled_map,
                     win_start, win_end,
+                    precomputed_ts=rg_match_ts,
+                    precomputed_sorted_ts_indices=rg_sorted_ts_ix,
                 )
             )
 
@@ -1386,6 +1470,8 @@ def analyze_cpe(
             ),
         })
 
+    t_after_reboot_windows = tp()
+
     # Telemetry time-series
     telemetry_ts = _extract_telemetry_timeseries(tel_reports) if tel_reports else {}
 
@@ -1428,6 +1514,8 @@ def analyze_cpe(
 
     _apply_module_plausibility_to_chains_and_roots(chains, root_causes, G, event_nodes, global_evidence)
 
+    t_before_template_flow = tp()
+
     from logai.template_flow import build_template_flow_summary
 
     template_flow_summary = build_template_flow_summary(
@@ -1438,7 +1526,42 @@ def analyze_cpe(
         parquet_df=parquet_events,
     )
 
-    elapsed_ms = round((time.time() - t0) * 1000)
+    t_end = tp()
+    elapsed_ms = _ms(t_start, t_end)
+
+    pq_rows = (
+        int(len(parquet_events))
+        if parquet_events is not None and not parquet_events.empty
+        else 0
+    )
+    n_parquet_event_nodes = sum(
+        1 for n in event_nodes if n["id"] not in rg_node_ids
+    )
+    logger.info(
+        "[GraphAnalyzer] %s phases_ms: prep=%d parquet=%d telemetry=%d "
+        "reboot_merge=%d rg_unified=%d global_evidence=%d reboot_windows=%d "
+        "summarize=%d template_flow=%d total=%d | "
+        "parquet_rows=%d rg_hits=%d rg_event_nodes=%d parquet_event_nodes=%d "
+        "reboots=%d force=%s telemetry_source=%s",
+        serial,
+        _ms(t_start, t_after_prep),
+        _ms(t_after_prep, t_after_parquet),
+        _ms(t_after_parquet, t_after_telemetry),
+        _ms(t_after_telemetry, t_after_reboot_merge),
+        _ms(t_after_reboot_merge, t_after_rg),
+        _ms(t_after_rg, t_after_global),
+        _ms(t_after_global, t_after_reboot_windows),
+        _ms(t_after_reboot_windows, t_before_template_flow),
+        _ms(t_before_template_flow, t_end),
+        elapsed_ms,
+        pq_rows,
+        len(unified_rg_matches),
+        len(rg_nodes),
+        n_parquet_event_nodes,
+        len(reboots),
+        force,
+        tel_source,
+    )
 
     return {
         "identity": identity,
@@ -1660,11 +1783,12 @@ def generate_batch_analysis(
                 force=force,
             )
             per_cpe_records.append(record)
-            logger.info(
-                f"[GraphAnalyzer] {serial}: "
-                f"{record['total_reboots']} reboots, "
-                f"source={record['telemetry_source']}, "
-                f"{record['analysis_elapsed_ms']}ms"
+            logger.debug(
+                "[GraphAnalyzer] %s summary: reboots=%s source=%s total_ms=%s",
+                serial,
+                record["total_reboots"],
+                record["telemetry_source"],
+                record["analysis_elapsed_ms"],
             )
         except Exception as exc:
             logger.error(f"[GraphAnalyzer] Error analyzing {serial}: {exc}", exc_info=True)
