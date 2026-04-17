@@ -1727,50 +1727,6 @@ export interface AnalyticsFleetSummary {
   module_graph_version: string;
 }
 
-export interface AnalyticsDeviceHealth {
-  device_serial: string;
-  model: string;
-  manufacturer: string;
-  firmware_version: string;
-  last_reboot_reason: string;
-  peak_memory_usage_pct: number;
-  avg_memory_usage_pct: number;
-  peak_cpu_usage_pct: number;
-  avg_cpu_usage_pct: number;
-  processing_date: string;
-}
-
-export interface AnalyticsErrorTemplate {
-  domain: string;
-  template: string;
-  occurrence_count: number;
-  first_seen: string;
-  last_seen: string;
-  module_enrichment: string;
-}
-
-export interface AnalyticsSignal {
-  timestamp: string;
-  signal_type: string;
-  signal_value: number;
-  processing_date: string;
-}
-
-export interface AnalyticsRebootAnalysis {
-  reason_distribution: Array<{
-    reason: string;
-    count: number;
-    avg_errors_before: number;
-  }>;
-  recent_reboots: Array<{
-    timestamp: string;
-    device_serial: string;
-    reason: string;
-    reboot_type: string;
-    errors_before_reboot: number;
-  }>;
-}
-
 /** Per-STA WiFi protocol issues (auth / assoc / handshake) from Polars pipeline */
 export interface AnalyticsStaIssue {
   device_serial: string;
@@ -1793,6 +1749,20 @@ export interface AnalyticsStaIssue {
 export interface AnalyticsStaIssueStaEntry {
   sta_mac: string;
   vendor: string | null;
+}
+
+/** Per-CPE SelfHeal analytics row (Polars ETL + DuckDB). */
+export interface AnalyticsSelfHealInsight {
+  device_serial: string;
+  processing_date?: string;
+  severity: string;
+  tags: string[];
+  detail_lines: string[];
+  tags_json?: string;
+  detail_lines_json?: string;
+  peak_cpu_pct?: number | null;
+  sunreclaim_ratio_peak?: number | null;
+  overcommit_ratio_peak?: number | null;
 }
 
 /** One device + issue type; expand for STA MAC list. */
@@ -1832,26 +1802,6 @@ export const analyticsApi = {
 
   getFleetSummary: (projectId: string) =>
     api.get<AnalyticsFleetSummary>(`/projects/${projectId}/analytics/fleet-summary`),
-  
-  getDeviceHealth: (projectId: string, options?: { limit?: number }) =>
-    api.get<AnalyticsDeviceHealth[]>(`/projects/${projectId}/analytics/device-health`, {
-      params: options,
-    }),
-  
-  getRebootAnalysis: (projectId: string, options?: { serial?: string }) =>
-    api.get<AnalyticsRebootAnalysis>(`/projects/${projectId}/analytics/reboots`, {
-      params: options,
-    }),
-  
-  getErrorTemplates: (projectId: string, options?: { domain?: string; limit?: number }) =>
-    api.get<AnalyticsErrorTemplate[]>(`/projects/${projectId}/analytics/error-templates`, {
-      params: options,
-    }),
-  
-  getSignals: (projectId: string, options?: { signal_type?: string; limit?: number }) =>
-    api.get<AnalyticsSignal[]>(`/projects/${projectId}/analytics/signals`, {
-      params: options,
-    }),
 
   getStaIssues: (
     projectId: string,
@@ -1869,6 +1819,14 @@ export const analyticsApi = {
       params: options,
     }),
 
+  getSelfHealInsights: (
+    projectId: string,
+    options?: { device_serial?: string; limit?: number },
+  ) =>
+    api.get<AnalyticsSelfHealInsight[]>(`/projects/${projectId}/analytics/selfheal-insights`, {
+      params: options,
+    }),
+
   executeCustomQuery: (projectId: string, sql: string) =>
     api.post<{ data: any[]; count: number }>(`/projects/${projectId}/analytics/custom-query`, {
       sql,
@@ -1877,15 +1835,5 @@ export const analyticsApi = {
   getSchema: (projectId: string) =>
     api.get<Record<string, Array<{ column_name: string; column_type: string; null: string }>>>(
       `/projects/${projectId}/analytics/schema`
-    ),
-  
-  getDomains: (projectId: string) =>
-    api.get<{ domains: string[]; available_views: string[] }>(
-      `/projects/${projectId}/analytics/domains`
-    ),
-  
-  getSignalTypes: (projectId: string) =>
-    api.get<{ signal_types: string[] }>(
-      `/projects/${projectId}/analytics/signal-types`
     ),
 };

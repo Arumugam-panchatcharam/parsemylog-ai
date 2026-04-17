@@ -2,7 +2,7 @@
 Polars ETL for per-CPE analytics processing.
 
 Implements polars_etl_per_cpe function according to the plan:
-- Load: *_rg.parquet, raw_selfheal_cache.json, raw_telemetry_cache.json, device/version/reboot JSON
+- Load: *_rg.parquet, raw_selfheal_cache.parquet (JSON migrated), raw_telemetry_cache.json, device/version/reboot JSON
 - Transform: join_asof temporal alignment, module graph enrichment, compute signals
 - Generate: reboot_features.parquet, device_health.parquet, signals.parquet, error_templates.parquet
 """
@@ -18,6 +18,8 @@ from .consolidated_io import ensure_migrated_from_legacy, upsert_replace_device_
 from .data_layout import DataLayoutManager
 from .module_graph import get_module_graph
 from .wifi_protocol import run_wifi_sta_issues
+from logai.analytics.selfheal.cache_io import load_raw_selfheal_dict, migrate_json_cache_if_present
+from logai.analytics.selfheal.insights import build_selfheal_insights_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +139,19 @@ def polars_etl_per_cpe(user_id: str, project_id: str, serial: str,
             "wifi_stats": wifi_issue_stats,
         }
 
+        sh_insights = build_selfheal_insights_dataframe(
+            selfheal_data,
+            processing_date,
+            cpe_serial,
+            reboot_events=reboots,
+        )
+        sh_path = layout.consolidated_parquet_path("selfheal_insights")
+        upsert_replace_device_serial(sh_path, sh_insights, cpe_serial)
+        results["selfheal_insights"] = {
+            "path": str(sh_path),
+            "rows": sh_insights.height,
+        }
+
         logger.info(f"Successfully completed Polars ETL for CPE {serial}")
         
         return {
@@ -207,12 +222,11 @@ def _load_reboots(layout: DataLayoutManager, serial: str) -> List[Dict[str, Any]
 
 
 def _load_selfheal_data(layout: DataLayoutManager, serial: str) -> Dict[str, Any]:
-    """Load raw selfheal cache."""
-    cache_files = layout.get_cpe_cache_files(serial) 
-    if "raw_selfheal" in cache_files:
-        with open(cache_files["raw_selfheal"]) as f:
-            return json.load(f)
-    return {}
+    """Load raw selfheal cache (Parquet payload; migrate legacy JSON on disk)."""
+    cpe_dir = layout.get_cpe_source_dir(serial)
+    migrate_json_cache_if_present(cpe_dir)
+    data = load_raw_selfheal_dict(cpe_dir)
+    return data if data else {}
 
 
 def _load_telemetry_data(layout: DataLayoutManager, serial: str) -> Dict[str, Any]:

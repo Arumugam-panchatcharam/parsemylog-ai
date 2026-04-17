@@ -33,8 +33,8 @@ events:
       - logline_contains: ap_cmm_peer_assoc_req_action
         logline_regex: "(?i)received\\s+assoc\\s+req"
     sta_mac:
-      # received assoc req: DA=[3] SA=[4] in Drain3; log uses SA=
-      param_index: 4
+      # Use SA= only. Drain3 param slots vary by MTK template and often put DA (AP BSSID)
+      # at the "STA" index, which misattributes assoc_no_response to the AP (e.g. Arcadyan).
       logline_regex: "(?i)SA=([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
     ifname:
       logline_regex: "(?i)ifname=([a-z0-9]+)"
@@ -44,7 +44,7 @@ events:
       - logline_contains: ap_cmm_peer_assoc_req_action
         logline_regex: "(?i)send\\s+assoc\\s+resp\\s+to"
     sta_mac:
-      param_index: 3
+      # Prefer "to <MAC>" in the log line; Drain3 indices are not reliable across builds.
       logline_regex: "(?i)to\\s+([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
     ifname:
       logline_regex: "(?i)NOTICE\\.MLME,([a-z0-9]+),"
@@ -69,21 +69,37 @@ events:
     ifname:
       logline_regex: "(?i)received for\\s+([a-z0-9]+)"
 
+  # Vendor MLO (e.g. MediaTek): per-link STA MAC in SPA[...]; aids forward-fill for hostapd EAPOL lines.
+  ML_SPA_STA_HINT:
+    matchers:
+      - { logline_contains: "ML: SPA[" }
+    sta_mac:
+      logline_regex: "(?i)ML:\\s*SPA\\[([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})\\]"
+
   EAPOL_SEND_M1:
     matchers:
-      - { logline_regex: "WPA: Send EAPOL\\(version=2 secure=0 mic=0 ack=1" }
+      # Hostapd / vendor builds use version=0 or 2 for the same M1 (secure=0 mic=0 ack=1 install=0 pairwise=1).
+      - { logline_regex: "WPA: Send EAPOL\\(version=(?:0|2) secure=0 mic=0 ack=1 install=0 pairwise=1" }
 
   EAPOL_RX_M2:
     matchers:
-      - { logline_regex: "WPA: Received EAPOL-Key from.*key_info=0x10a" }
+      # MLO / vendor uses key_info=0x108; classic hostapd often 0x10a.
+      - { logline_regex: "WPA: Received EAPOL-Key from.*key_info=0x10[0-9a-f]" }
 
   EAPOL_SEND_M3:
     matchers:
-      - { logline_regex: "WPA: Send EAPOL\\(version=2 secure=1 mic=1 ack=1 install=1" }
+      - { logline_regex: "WPA: Send EAPOL\\(version=(?:0|2) secure=1 mic=1 ack=1 install=1" }
 
   EAPOL_RX_M4:
     matchers:
-      - { logline_regex: "WPA: Received EAPOL-Key from.*key_info=0x30a" }
+      - { logline_regex: "WPA: Received EAPOL-Key from.*key_info=0x30[0-9a-f]" }
+
+  # PMF: SA Query request/response bursts (when hostapd logs them).
+  HOSTAPD_SA_QUERY:
+    matchers:
+      - { logline_regex: "(?i)SA[-_ ]?Query" }
+    sta_mac:
+      logline_regex: "(?i)([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
 
   HOSTAPD_AP_STA_CONNECTED:
     matchers:
@@ -149,6 +165,18 @@ issues:
       group_by: [sta_mac, ifname]
       within_sec: 3
 
+  # Hostapd vendor: repeated M1 (e.g. version=0) with ML SPA / EAPOL-Key 1/4 storms before M2.
+  eapol_m1_auth_loop:
+    category: auth
+    severity: high
+    rca_hint: Repeated EAPOL 4-way message 1 bursts; STA not advancing (MLO / link or driver stall).
+    detect:
+      type: burst_count
+      event: EAPOL_SEND_M1
+      min_occurrence: 4
+      window_sec: 12
+      group_by: [sta_mac, ifname]
+
   partial_handshake:
     category: auth
     severity: high
@@ -169,6 +197,17 @@ issues:
       event: DEAUTH
       min_occurrence: 4
       window_sec: 30
+      group_by: [sta_mac, ifname]
+
+  sa_query_loop:
+    category: connectivity
+    severity: medium
+    rca_hint: Multiple SA Query frames in a short window (PMF); unstable link or probing.
+    detect:
+      type: burst_count
+      event: HOSTAPD_SA_QUERY
+      min_occurrence: 3
+      window_sec: 8
       group_by: [sta_mac, ifname]
 
   assoc_success_after_retries:

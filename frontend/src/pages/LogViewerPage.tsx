@@ -631,7 +631,7 @@ export default function LogViewerPage() {
   };
 
   return (
-    <div className="relative flex flex-col h-[calc(100vh-3rem)] overflow-hidden">
+    <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden">
       {/* ===== PROCESSING OVERLAY ===== */}
       {processingStatus && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
@@ -1029,7 +1029,7 @@ export default function LogViewerPage() {
                     setQuickDedupSelectedLine(line);
                     setQuickDedupModalOpen(true);
                   }}
-                  className="hover:bg-slate-800/50 whitespace-pre-wrap px-3 leading-relaxed transition-colors duration-500"
+                  className="hover:bg-slate-800/50 whitespace-pre-wrap px-2 sm:px-3 leading-relaxed transition-colors duration-500"
                 >
                   <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{lineNum}</span>
                   {renderLine(line)}
@@ -1069,7 +1069,7 @@ export default function LogViewerPage() {
                             setScrollToLine(m.line_number);
                           }}
                           title="Double-click to open file and jump to line"
-                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none"
+                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-2 sm:px-3 leading-relaxed select-none"
                         >
                           <span className="text-slate-500 select-none mr-2 text-[10px] truncate max-w-[120px] inline-block align-top" title={m.filename}>{m.filename}</span>
                           <span className="text-slate-600 select-none mr-2 inline-block w-10 text-right tabular-nums text-[10px]">{m.line_number}</span>
@@ -1085,7 +1085,7 @@ export default function LogViewerPage() {
                             setScrollToLine(m.line_number);
                           }}
                           title="Double-click to jump to this line"
-                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-3 leading-relaxed select-none"
+                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-2 sm:px-3 leading-relaxed select-none"
                         >
                           <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{m.line_number}</span>
                           {renderLine(m.text)}

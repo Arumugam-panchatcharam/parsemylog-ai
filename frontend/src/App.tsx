@@ -28,8 +28,6 @@ const TelemetryCsvAnalyzerPage = lazy(() => import("@/pages/TelemetryCsvAnalyzer
 const BatchJobsPage = lazy(() => import("@/pages/BatchJobsPage"));
 const BatchJobDetailPage = lazy(() => import("@/pages/BatchJobDetailPage"));
 const KnowledgeGraphPage = lazy(() => import("@/pages/KnowledgeGraphPage"));
-const IssueAnalysisPage = lazy(() => import("@/pages/IssueAnalysisPage"));
-const MLPipelinePage = lazy(() => import("@/pages/MLPipelinePage"));
 const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage"));
 
 const queryClient = new QueryClient({
@@ -126,8 +124,15 @@ function AppRoutes() {
           path="/workspace/cpe-overview"
           element={<Navigate to="/workspace/pattern-analyzer?tab=overview" replace />}
         />
-        <Route path="/workspace/issue-analysis" element={<IssueAnalysisPage />} />
-        <Route path="/workspace/ml-pipeline" element={<MLPipelinePage />} />
+        {/* Issue Analysis & ML Pipeline temporarily disabled */}
+        <Route
+          path="/workspace/issue-analysis"
+          element={<Navigate to="/dashboard" replace />}
+        />
+        <Route
+          path="/workspace/ml-pipeline"
+          element={<Navigate to="/dashboard" replace />}
+        />
         <Route path="/workspace/analytics" element={<AnalyticsPage />} />
         <Route path="/workspace/chat" element={<ChatPage />} />
       </Route>

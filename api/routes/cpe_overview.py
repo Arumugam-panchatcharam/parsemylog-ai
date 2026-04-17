@@ -7,18 +7,20 @@ for side-by-side comparison: device info, key metrics, reboot history,
 pattern summary per domain, and log file statistics.
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time as dt_time, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from flask import Blueprint, jsonify, send_file, request
@@ -36,15 +38,18 @@ logger = logging.getLogger(__name__)
 _RG_TIMEOUT_SIMPLE = max(30, int(os.environ.get("LOGAI_RG_TIMEOUT_SEC", "120")))
 _RG_TIMEOUT_ALL_CPES = max(60, int(os.environ.get("LOGAI_RG_ALL_CPES_TIMEOUT_SEC", "300")))
 _RG_TIMEOUT_FILTERED = max(60, int(os.environ.get("LOGAI_RG_FILTERED_TIMEOUT_SEC", "480")))
-_PATTERN_SCAN_MAX_WORKERS = max(
-    1, min(16, int(os.environ.get("CPE_OVERVIEW_PATTERN_SCAN_WORKERS", "4")))
+# Per-file cap for filtered-style scans (matches separate ``rg --max-count`` per pattern).
+_RG_FILTERED_MAX_RAW_MATCHES_PER_FILE = 1000
+# Spill alternation patterns to ``-f`` when many unique regexes (argv size).
+_PATTERN_SCAN_RG_FILE_THRESHOLD = max(
+    8, int(os.environ.get("CPE_OVERVIEW_PATTERN_RG_FILE_THRESHOLD", "96"))
 )
 
 cpe_overview_bp = Blueprint("cpe_overview", __name__)
 
 
 def _cpe_overview_api_enabled() -> bool:
-    """Cross-CPE overview + pattern scan are heavy (parallel rg). On by default; set CPE_OVERVIEW_ENABLED=0 to disable."""
+    """Cross-CPE overview + pattern scan can be heavy (large log trees). On by default; set CPE_OVERVIEW_ENABLED=0 to disable."""
     v = os.environ.get("CPE_OVERVIEW_ENABLED", "1").strip().lower()
     return v in ("1", "true", "yes", "on")
 
@@ -333,6 +338,32 @@ def _build_flat_metrics(
     return metrics
 
 
+def _merge_selfheal_insight_metrics(
+    insights_parquet: Path, serial: str, metrics: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Attach SelfHeal analytics flags from Polars ETL ``selfheal_insights.parquet``."""
+    if not insights_parquet.is_file():
+        return metrics
+    try:
+        import polars as pl
+
+        from logai.analytics.selfheal.insights import key_metrics_from_insights_row
+
+        df = pl.read_parquet(insights_parquet)
+        hit = df.filter(pl.col("device_serial") == serial)
+        if hit.height == 0:
+            return metrics
+        patch = key_metrics_from_insights_row(hit.to_dicts()[0])
+        return {**metrics, **patch}
+    except Exception as e:
+        logger.debug(
+            "[CPEOverview] SelfHeal insights not merged for %s: %s",
+            serial,
+            e,
+        )
+        return metrics
+
+
 def _collect_reboot_summary(project_dir: Path) -> Dict[str, Any]:
     """Collect reboot data for a CPE directory."""
     result: Dict[str, Any] = {
@@ -538,6 +569,11 @@ def get_cpe_overview(project_id):
         pattern_summary = _collect_pattern_summary(base_dir)
         log_stats = _collect_log_stats(base_dir)
 
+        sh_parquet = base_dir / "issue_analysis" / "analytics" / "selfheal_insights.parquet"
+        km = _merge_selfheal_insight_metrics(
+            sh_parquet, "default", dict(info.get("key_metrics", {}))
+        )
+
         return jsonify({
             "cpes": [{
                 "serial": "default",
@@ -545,7 +581,7 @@ def get_cpe_overview(project_id):
                 "date_from": None,
                 "date_to": None,
                 "device_info": info.get("device_info", {}),
-                "key_metrics": info.get("key_metrics", {}),
+                "key_metrics": km,
                 "summary": info.get("summary", {}),
                 "reboot_summary": reboot_summary,
                 "pattern_summary": pattern_summary,
@@ -586,7 +622,12 @@ def get_cpe_overview(project_id):
 
         # Determine processing status
         status = "parsed" if info.get("summary", {}).get("parsed_reports", 0) > 0 else "not_parsed"
-        
+
+        sh_parquet = base_dir / "issue_analysis" / "analytics" / "selfheal_insights.parquet"
+        km = _merge_selfheal_insight_metrics(
+            sh_parquet, cpe.serial, dict(info.get("key_metrics", {}))
+        )
+
         return {
             "serial": cpe.serial,
             "mac": cpe.mac or info.get("device_info", {}).get("mac", "N/A"),
@@ -594,7 +635,7 @@ def get_cpe_overview(project_id):
             "date_from": cpe.date_from,
             "date_to": cpe.date_to,
             "device_info": info.get("device_info", {}),
-            "key_metrics": info.get("key_metrics", {}),
+            "key_metrics": km,
             "summary": info.get("summary", {}),
             "reboot_summary": reboot_summary,
             "pattern_summary": pattern_summary,
@@ -673,42 +714,89 @@ _PATTERN_SCAN_CACHE = ".cpe_overview_pattern_scan.json"
 _LOG_TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
 
 
+def _pattern_line_digest(line_text: str) -> bytes:
+    """Stable fingerprint for a log line (dedupe copies across RDK-B log files)."""
+    return hashlib.sha256(line_text.encode("utf-8", errors="replace")).digest()
+
+
+def _count_if_new_duplicate_line(
+    seen_by_task_serial: DefaultDict[Tuple[str, int, str], Set[bytes]],
+    task_domain: str,
+    task_idx: int,
+    serial: str,
+    line_text: str,
+    counts_row: Dict[str, int],
+) -> None:
+    """Increment ``counts_row[serial]`` only the first time this line text counts."""
+    key = (task_domain, task_idx, serial)
+    digest = _pattern_line_digest(line_text)
+    bucket = seen_by_task_serial[key]
+    if digest in bucket:
+        return
+    bucket.add(digest)
+    counts_row[serial] = counts_row.get(serial, 0) + 1
+
+
 def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
-    """Run ``rg -c`` and return total match count across all files."""
+    """Count unique matching lines across all files (duplicate lines in user + messages, etc.)."""
+    base_str = str(search_dir.resolve())
+    seen: set[bytes] = set()
     cmd = [
         rg_binary,
-        "-c",
+        "--no-heading",
+        "--no-line-number",
         "-i",
-        "--max-filesize", "500M",
-        "--no-filename",
-        "-e", regex,
-        str(search_dir),
+        "--max-filesize",
+        "500M",
+        "-e",
+        regex,
+        base_str,
     ]
+    deadline = time.monotonic() + _RG_TIMEOUT_SIMPLE
+    proc: Optional[subprocess.Popen[str]] = None
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
-            timeout=_RG_TIMEOUT_SIMPLE,
+            errors="replace",
         )
-    except subprocess.TimeoutExpired:
-        logger.warning(f"[CPEOverview] rg -c timed out for regex: {regex[:80]}")
-        return 0
-    except Exception as e:
-        logger.warning(f"[CPEOverview] rg -c error: {e}")
-        return 0
-
-    if result.returncode not in (0, 1):
-        return 0
-
-    total = 0
-    for line in result.stdout.strip().splitlines():
-        # rg -c --no-filename outputs one count per file
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "[CPEOverview] rg (dedup count) timed out for regex: %s",
+                    regex[:80],
+                )
+                proc.kill()
+                break
+            line = raw_line.rstrip("\n")
+            if not line.startswith(base_str):
+                continue
+            rest = line[len(base_str) :].lstrip("/\\")
+            cpos = rest.find(":")
+            if cpos == -1:
+                continue
+            line_text = rest[cpos + 1 :]
+            seen.add(_pattern_line_digest(line_text))
         try:
-            total += int(line.strip())
-        except ValueError:
+            proc.stdout.close()
+        except Exception:
             pass
-    return total
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "[CPEOverview] rg (dedup count) wait timed out for regex: %s", regex[:80]
+        )
+        if proc and proc.poll() is None:
+            proc.kill()
+    except Exception as e:
+        logger.warning(f"[CPEOverview] rg (dedup count) error: {e}")
+        if proc and proc.poll() is None:
+            proc.kill()
+
+    return len(seen)
 
 
 def _run_rg_count_all_cpes(
@@ -942,6 +1030,298 @@ def _run_rg_count_all_cpes_filtered(
     return counts
 
 
+def _task_uses_filtered_rg_scan(
+    task: Dict[str, Any], reboot_window_minutes: Optional[int]
+) -> bool:
+    """Same condition as choosing ``_run_rg_count_all_cpes_filtered`` over ``-c``."""
+    return bool(
+        task.get("maintenance_window")
+        or task.get("reboot_proximity_minutes")
+        or reboot_window_minutes
+    )
+
+
+def _run_multi_cpe_pattern_scan_batched(
+    rg_binary: str,
+    base_dir: Path,
+    cpe_serials: List[str],
+    all_tasks: List[Dict[str, Any]],
+    cpe_reboots: Dict[str, List[Dict[str, str]]],
+    reboot_window_minutes: Optional[int],
+) -> Dict[str, Dict[str, int]]:
+    """
+    One ripgrep process over ``base_dir`` with all patterns as alternates (``-e`` / ``-f``),
+    then attribute matches per task in Python. Mirrors per-task filters and per-file
+    ``--max-count`` behavior from separate filtered scans.
+
+    Identical line text is counted at most once per (pattern, CPE) even if the same
+    line appears in multiple log files (typical RDK-B ``user`` / ``messages`` duplication).
+    """
+    serial_set = set(cpe_serials)
+    zero_row = {s: 0 for s in cpe_serials}
+    per_pattern_counts: Dict[str, Dict[str, int]] = {
+        f"{t['domain']}::{t['idx']}": dict(zero_row) for t in all_tasks
+    }
+
+    compiled_pairs: List[Tuple[Dict[str, Any], re.Pattern[str]]] = []
+    for t in all_tasks:
+        try:
+            compiled_pairs.append((t, re.compile(t["regex"], re.IGNORECASE)))
+        except re.error as exc:
+            logger.warning(
+                "[CPEOverview] Skip pattern %r (invalid regex): %s",
+                t.get("name", ""),
+                exc,
+            )
+
+    if not compiled_pairs:
+        return per_pattern_counts
+
+    task_ctx: List[
+        Tuple[
+            Dict[str, Any],
+            re.Pattern[str],
+            Optional[Tuple[dt_time, dt_time]],
+            Optional[timedelta],
+        ]
+    ] = []
+    for t, cre in compiled_pairs:
+        mw = t.get("maintenance_window")
+        mwt: Optional[Tuple[dt_time, dt_time]] = None
+        if mw:
+            mwt = (
+                datetime.strptime(mw["start"], "%H:%M").time(),
+                datetime.strptime(mw["end"], "%H:%M").time(),
+            )
+        rp_delta: Optional[timedelta] = None
+        rp_min = t.get("reboot_proximity_minutes")
+        if rp_min is not None:
+            try:
+                rp_delta = timedelta(minutes=int(rp_min))
+            except (TypeError, ValueError):
+                rp_delta = None
+        task_ctx.append((t, cre, mwt, rp_delta))
+
+    unique_patterns = list(dict.fromkeys(t["regex"] for t, _ in compiled_pairs))
+
+    cpe_reboot_windows: Dict[str, List[tuple]] = {}
+    if reboot_window_minutes and cpe_reboots:
+        for serial, reboots in cpe_reboots.items():
+            if reboots:
+                cpe_dir = base_dir / serial
+                if cpe_dir.exists():
+                    windows = _get_reboot_time_windows(cpe_dir, reboot_window_minutes)
+                    if windows:
+                        cpe_reboot_windows[serial] = windows
+
+    raw_hits_per_task_file: Dict[Tuple[str, int, str], int] = {}
+    line_dedup: DefaultDict[Tuple[str, int, str], Set[bytes]] = defaultdict(set)
+    pat_file: Optional[str] = None
+
+    all_tasks_filtered = all(
+        _task_uses_filtered_rg_scan(t, reboot_window_minutes) for t, _ in compiled_pairs
+    )
+    rg_max_count_prefix: List[str] = []
+    if all_tasks_filtered:
+        # Upper bound: at most this many distinct lines per file across capped patterns.
+        cap = _RG_FILTERED_MAX_RAW_MATCHES_PER_FILE * len(compiled_pairs)
+        rg_max_count_prefix = ["--max-count", str(cap)]
+
+    cmd_base: List[str]
+    try:
+        if len(unique_patterns) >= _PATTERN_SCAN_RG_FILE_THRESHOLD:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".rgpat",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                for p in unique_patterns:
+                    tmp.write(p + "\n")
+                pat_file = tmp.name
+            cmd_base = [
+                rg_binary,
+                *rg_max_count_prefix,
+                "--no-heading",
+                "--no-line-number",
+                "-i",
+                "--max-filesize",
+                "500M",
+                "-f",
+                pat_file,
+                str(base_dir),
+            ]
+        else:
+            cmd_base = [
+                rg_binary,
+                *rg_max_count_prefix,
+                "--no-heading",
+                "--no-line-number",
+                "-i",
+                "--max-filesize",
+                "500M",
+                str(base_dir),
+            ]
+            for p in unique_patterns:
+                cmd_base.extend(["-e", p])
+    except Exception as exc:
+        logger.warning("[CPEOverview] rg (batched) setup error: %s", exc)
+        if pat_file:
+            Path(pat_file).unlink(missing_ok=True)
+        return per_pattern_counts
+
+    base_str = str(base_dir)
+    deadline = time.monotonic() + _RG_TIMEOUT_FILTERED
+    proc: Optional[subprocess.Popen[str]] = None
+    scan_timed_out = False
+    try:
+        proc = subprocess.Popen(
+            cmd_base,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            errors="replace",
+        )
+        assert proc.stdout is not None
+        try:
+            for raw_line in proc.stdout:
+                if time.monotonic() > deadline:
+                    logger.warning(
+                        "[CPEOverview] rg (batched multi-pattern) timed out"
+                    )
+                    scan_timed_out = True
+                    proc.kill()
+                    break
+                line = raw_line.rstrip("\n")
+                if not line.startswith(base_str):
+                    continue
+                rest = line[len(base_str) :].lstrip("/\\")
+                cpos = rest.find(":")
+                if cpos == -1:
+                    continue
+                file_rel = rest[:cpos]
+                line_text = rest[cpos + 1 :]
+                serial = file_rel.split("/", 1)[0].split("\\", 1)[0]
+                if serial not in serial_set:
+                    continue
+
+                base_norm = base_str.rstrip("/\\")
+                full_file = f"{base_norm}/{file_rel}"
+
+                ts_match = _LOG_TS_RE.search(line)
+                ts_dt: Optional[datetime] = None
+                if ts_match:
+                    try:
+                        ts_dt = parse_timestamp(ts_match.group(1))
+                        if not ts_dt:
+                            ts_dt = datetime.fromisoformat(ts_match.group(1))
+                    except ValueError:
+                        ts_dt = None
+
+                for task, cre, mwt, rp_delta in task_ctx:
+                    if not cre.search(line_text):
+                        continue
+
+                    uses_cap = _task_uses_filtered_rg_scan(
+                        task, reboot_window_minutes
+                    )
+                    if uses_cap:
+                        cap_key = (task["domain"], task["idx"], full_file)
+                        n_raw = raw_hits_per_task_file.get(cap_key, 0)
+                        if n_raw >= _RG_FILTERED_MAX_RAW_MATCHES_PER_FILE:
+                            continue
+                        raw_hits_per_task_file[cap_key] = n_raw + 1
+
+                    key = f"{task['domain']}::{task['idx']}"
+                    counts_row = per_pattern_counts[key]
+
+                    if ts_dt is None:
+                        _count_if_new_duplicate_line(
+                            line_dedup,
+                            task["domain"],
+                            task["idx"],
+                            serial,
+                            line_text,
+                            counts_row,
+                        )
+                        continue
+
+                    if mwt is not None:
+                        mw_start, mw_end = mwt
+                        match_time = ts_dt.time()
+                        if mw_start <= mw_end:
+                            if mw_start <= match_time <= mw_end:
+                                continue
+                        else:
+                            if match_time >= mw_start or match_time <= mw_end:
+                                continue
+
+                    if rp_delta is not None and cpe_reboots:
+                        skip_rp = False
+                        for r in cpe_reboots.get(serial, []):
+                            try:
+                                rt = parse_timestamp(r["timestamp"])
+                                if not rt:
+                                    rt = datetime.fromisoformat(r["timestamp"])
+                            except (ValueError, KeyError):
+                                continue
+                            if abs(ts_dt - rt) <= rp_delta:
+                                skip_rp = True
+                                break
+                        if skip_rp:
+                            continue
+
+                    if reboot_window_minutes and cpe_reboot_windows:
+                        windows = cpe_reboot_windows.get(serial, [])
+                        if windows:
+                            if not _timestamp_in_windows(ts_dt, windows):
+                                continue
+                        else:
+                            continue
+
+                    _count_if_new_duplicate_line(
+                        line_dedup,
+                        task["domain"],
+                        task["idx"],
+                        serial,
+                        line_text,
+                        counts_row,
+                    )
+        finally:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "[CPEOverview] rg (batched multi-pattern) wait timed out"
+            )
+            proc.kill()
+            proc.wait(timeout=30)
+    except Exception as exc:
+        logger.warning("[CPEOverview] rg (batched multi-pattern) error: %s", exc)
+        if proc and proc.poll() is None:
+            proc.kill()
+    finally:
+        if pat_file:
+            Path(pat_file).unlink(missing_ok=True)
+
+    if scan_timed_out:
+        return per_pattern_counts
+
+    if proc is None or proc.returncode not in (0, 1):
+        if proc is not None:
+            logger.warning(
+                "[CPEOverview] rg (batched multi-pattern) exit %s",
+                proc.returncode,
+            )
+        return per_pattern_counts
+
+    return per_pattern_counts
+
+
 @cpe_overview_bp.route("/<project_id>/cpe-overview/pattern-scan", methods=["GET"])
 @jwt_required()
 def get_pattern_scan_cache(project_id):
@@ -1014,8 +1394,11 @@ def run_pattern_scan(project_id):
     """
     Run the project's regex patterns against every CPE and cache the result.
 
-    For each domain / pattern / CPE the endpoint runs ``rg -c`` (count-only)
-    which is very fast.  Results are written to
+    Multi-CPE projects run a single ``rg`` over the upload tree with all enabled
+    patterns as alternates, then attribute counts per pattern/CPE (same semantics
+    as the previous per-pattern scans). Identical log lines are counted once per
+    pattern and CPE even when duplicated across files (e.g. RDK-B ``user`` vs
+    ``messages``). Results are written to
     ``<project_dir>/.cpe_overview_pattern_scan.json`` so subsequent page
     loads can use the GET endpoint above.
     
@@ -1104,7 +1487,7 @@ def run_pattern_scan(project_id):
 
     start_time = time.perf_counter()
 
-    # Collect all (domain, pattern_index, pattern) tuples for parallel dispatch
+    # Collect all (domain, pattern_index, pattern) tuples for the batched rg scan
     all_tasks: List[Dict[str, Any]] = []
     result_domains: Dict[str, Any] = {}
 
@@ -1135,12 +1518,6 @@ def run_pattern_scan(project_id):
                 task["reboot_proximity_minutes"] = pat["reboot_proximity_minutes"]
             all_tasks.append(task)
 
-    # Check if any task needs timestamp-level filtering or reboot window filter is active
-    any_needs_filtering = any(
-        t.get("maintenance_window") or t.get("reboot_proximity_minutes")
-        for t in all_tasks
-    ) or reboot_window_minutes is not None
-
     # Pre-load per-CPE reboots if any pattern uses reboot proximity or reboot window filter
     any_needs_reboots = any(t.get("reboot_proximity_minutes") for t in all_tasks) or reboot_window_minutes is not None
     cpe_reboots: Dict[str, List[Dict[str, str]]] = {}
@@ -1157,35 +1534,16 @@ def run_pattern_scan(project_id):
                 cpe_reboots[cpe_info["serial"]] = []
 
     if is_multi_cpe and len(cpe_dirs) > 1:
-        # Fast path: one rg call per pattern over the whole project dir,
-        # then split counts by CPE serial from file paths.
-        per_pattern_counts: Dict[str, Dict[str, int]] = {}
-
-        def _scan_pattern(task: Dict[str, Any]) -> tuple:
-            key = f"{task['domain']}::{task['idx']}"
-            mw = task.get("maintenance_window")
-            rp = task.get("reboot_proximity_minutes")
-            # Use filtered scan if any filter is active (including reboot window)
-            if mw or rp or reboot_window_minutes:
-                counts = _run_rg_count_all_cpes_filtered(
-                    rg_binary, task["regex"], base_dir, cpe_serials,
-                    maintenance_window=mw,
-                    reboot_proximity_minutes=rp,
-                    cpe_reboots=cpe_reboots if (rp or reboot_window_minutes) else None,
-                    reboot_window_minutes=reboot_window_minutes,
-                )
-            else:
-                counts = _run_rg_count_all_cpes(
-                    rg_binary, task["regex"], base_dir, cpe_serials,
-                )
-            return key, counts
-
-        scan_workers = max(1, min(_PATTERN_SCAN_MAX_WORKERS, len(all_tasks)))
-        with ThreadPoolExecutor(max_workers=scan_workers) as pool:
-            futures = {pool.submit(_scan_pattern, t): t for t in all_tasks}
-            for future in as_completed(futures):
-                key, counts = future.result()
-                per_pattern_counts[key] = counts
+        # Single ripgrep over the project tree (all patterns as alternates), then
+        # attribute counts per pattern/CPE in Python — avoids N parallel rg processes.
+        per_pattern_counts = _run_multi_cpe_pattern_scan_batched(
+            rg_binary,
+            base_dir,
+            cpe_serials,
+            all_tasks,
+            cpe_reboots,
+            reboot_window_minutes,
+        )
 
         for domain_name, dom_data in result_domains.items():
             n_patterns = len(dom_data["patterns"])

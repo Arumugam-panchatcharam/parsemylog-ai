@@ -134,6 +134,32 @@ def enrich_correlation_columns(
     return out
 
 
+def scrub_sta_mac_matching_expected_bssid(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Clear ``sta_mac`` when it equals this BSS's BSSID (AP MAC wrongly taken from DA=, etc.).
+    Expects ``expected_bssid`` from interface map join (may be absent).
+    """
+    if df.height == 0 or "sta_mac" not in df.columns:
+        return df
+    if "expected_bssid" not in df.columns:
+        return df
+
+    stas = df["sta_mac"].to_list()
+    exps = df["expected_bssid"].to_list()
+    cleaned: List[str] = []
+    for s, e in zip(stas, exps):
+        raw_s = str(s or "").strip()
+        raw_e = str(e or "").strip()
+        ns = normalize_mac(raw_s)
+        ne = normalize_mac(raw_e)
+        if ns and ne and ns == ne:
+            cleaned.append("")
+        else:
+            cleaned.append(raw_s)
+
+    return df.with_columns(pl.Series("sta_mac", cleaned))
+
+
 def forward_fill_sta_mac_by_partition(out: pl.DataFrame) -> pl.DataFrame:
     """Help EAPOL Send lines that omit MAC: forward-fill within source_file."""
     if out.height == 0:

@@ -24,6 +24,13 @@ from flask_jwt_extended import jwt_required
 from api.app import dbm
 from api.auth import get_user_id
 from logai.utils.constants import UPLOAD_DIRECTORY
+from logai.analytics.selfheal.cache_io import (
+    RAW_SELFHEAL_JSON_LEGACY,
+    RAW_SELFHEAL_PARQUET_NAME,
+    load_raw_selfheal_dict,
+    raw_selfheal_cache_mtime,
+    save_raw_selfheal_dict,
+)
 from logai.selfheal_parser import (
     extract_summary,
     parse_selfheal_file,
@@ -248,7 +255,11 @@ def _cross_cpe_fingerprint(cpe_paths: List[Path]) -> str:
     parts: List[str] = []
     for p in sorted(cpe_paths, key=lambda x: x.name):
         m = 0.0
-        for rel in ("selfheal/response.json", "raw_selfheal_cache.json"):
+        for rel in (
+            "selfheal/response.json",
+            RAW_SELFHEAL_PARQUET_NAME,
+            RAW_SELFHEAL_JSON_LEGACY,
+        ):
             f = p / rel
             if f.is_file():
                 m = max(m, f.stat().st_mtime)
@@ -328,39 +339,26 @@ def _find_selfheal_file(cpe_dir: Path) -> Optional[Path]:
 
 
 def _raw_cache_is_fresh(cpe_dir: Path) -> bool:
-    """Check if raw cache is newer than source file."""
-    cache_path = cpe_dir / "raw_selfheal_cache.json"
-    if not cache_path.exists():
+    """Check if raw Parquet/legacy JSON cache is newer than SelfHeal.txt."""
+    cache_mtime = raw_selfheal_cache_mtime(cpe_dir)
+    if cache_mtime <= 0:
         return False
 
     source_path = _find_selfheal_file(cpe_dir)
     if not source_path:
         return False
 
-    cache_mtime = cache_path.stat().st_mtime
-    source_mtime = source_path.stat().st_mtime
-
-    return cache_mtime > source_mtime
+    return cache_mtime > source_path.stat().st_mtime
 
 
 def _load_raw_selfheal_cache(cpe_dir: Path) -> Optional[Dict[str, Any]]:
-    """Load raw cache if available."""
-    cache_path = cpe_dir / "raw_selfheal_cache.json"
-    if cache_path.exists():
-        try:
-            return json.loads(cache_path.read_text())
-        except Exception as e:
-            logger.warning(f"Failed to load raw selfheal cache: {e}")
-    return None
+    """Load raw cache (Parquet payload, migrating legacy JSON when needed)."""
+    return load_raw_selfheal_dict(cpe_dir)
 
 
 def _save_raw_selfheal_cache(cpe_dir: Path, data: Dict[str, Any]) -> None:
-    """Save raw cache."""
-    cache_path = cpe_dir / "raw_selfheal_cache.json"
-    try:
-        cache_path.write_text(_json_dumps_cache(data))
-    except Exception as e:
-        logger.error(f"Failed to save raw selfheal cache: {e}")
+    """Save raw cache as Parquet-backed payload."""
+    save_raw_selfheal_dict(cpe_dir, data)
 
 
 def _invalidate_api_response_cache(cpe_dir: Path) -> None:
@@ -408,7 +406,7 @@ def _finalize_selfheal_parse_response(
     Call after _build_selfheal_response / _parse_and_build so summary matches trends.
 
     When *skip_trend_realign* is True (fresh parse in the same request), skip
-    reloading raw_selfheal_cache.json and a redundant extract_summary — the
+    reloading raw SelfHeal cache (Parquet) and a redundant extract_summary — the
     response already matches the parsed snapshots and filters.
     """
     if skip_trend_realign:
@@ -1195,7 +1193,7 @@ def _parse_and_build(
 
     Returns:
         (api_response_dict, raw_data_dict) — *raw_data* is the parsed payload
-        (same as written to raw_selfheal_cache.json) for callers that finalize
+        (same as written to raw_selfheal_cache.parquet) for callers that finalize
         in the same request without re-reading disk.
 
     Args:

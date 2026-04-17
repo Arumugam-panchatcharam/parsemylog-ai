@@ -29,7 +29,7 @@ function AppLayoutInner() {
           <main
             id="main-content"
             tabIndex={-1}
-            className="min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
             <ErrorBoundary fallbackTitle="This page failed to render">
               <Outlet />

@@ -1024,12 +1024,13 @@ def extract_device_info_from_paths(
             raw = bt_path.read_text(encoding="utf-8", errors="ignore")
             bt_info = parse_boottime_log(raw)
             reboots: List[Dict[str, str]] = []
-            for cycle in bt_info.get("reboot_history", []):
+            history = bt_info.get("reboot_history", [])
+            for cycle in history[:-1]:
                 ts = cycle.get("timestamp", "")
                 reason = cycle.get("reason", "unknown")
                 if ts:
                     reboots.append({"timestamp": ts, "reason": reason})
-            device_info["reboots"] = reboots
+            device_info["reboots"] = _cluster_reboot_events_by_proximity(reboots)
         except OSError as e:
             logger.warning(f"[InfoExtractor] Error reading BootTime {bt_path}: {e}")
 
@@ -1067,10 +1068,96 @@ def extract_device_info_from_paths(
 _BOOTTIME_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
 _BOOTTIME_UPTIME_RE = re.compile(r"\[BootUpTime\]\s+(\w+)=(\d+)")
 _REBOOT_REASON_RE = re.compile(r"Received reboot_reason as:(.+)$")
-
+# Self-heal / multi-upload merges interleave the same boot snapshot repeatedly.
+_BOOTTIME_MERGE_MARKER_RE = re.compile(
+    r"^\*{10,}\s*LOG_MERGE_MARKER:", re.IGNORECASE
+)
 
 _NTP_JUMP_THRESHOLD_SECONDS = 86400  # 24 hours — any forward jump bigger than
                                       # this indicates NTP sync corrected the clock
+
+# Reboots from merged BootTime.log often repeat the same power-on within seconds;
+# one physical reboot should surface as one timeline event.
+REBOOT_CLUSTER_WINDOW_SECONDS = 120
+
+
+def _reboot_reason_rank(reason: str) -> int:
+    r = (reason or "").strip()
+    if not r:
+        return 0
+    if r.lower() == "unknown":
+        return 1
+    return 2
+
+
+def _reboot_reason_row_sort_key(row: Dict[str, Any]) -> tuple:
+    """
+    Higher tuple compares greater: prefer non-unknown reasons, then power-loss
+    hints when merged snapshots disagree.
+    """
+    reason = str(row.get("reason", ""))
+    rank = _reboot_reason_rank(reason)
+    rl = reason.lower()
+    power_pref = 1 if "powerloss" in rl or "power-on" in rl else 0
+    return (rank, power_pref, reason)
+
+
+def _finalize_boot_cycle_timestamps(cycle: Dict[str, Any]) -> None:
+    """Set ``timestamp`` from collected ``_timestamps``; mutates *cycle* in place."""
+    ts_list = cycle.pop("_timestamps", [])
+    cycle["timestamp"] = _pick_ntp_timestamp(ts_list)
+
+
+def _cluster_reboot_events_by_proximity(
+    reboots: List[Dict[str, Any]],
+    *,
+    window_seconds: int = REBOOT_CLUSTER_WINDOW_SECONDS,
+) -> List[Dict[str, Any]]:
+    """
+    Merge reboot rows that fall within *window_seconds* of each other.
+
+    Merged row keeps the earliest timestamp and the highest-priority reason in the
+    cluster. Intended for merged BootTime logs that list the same boot many times.
+    """
+    if not reboots:
+        return []
+
+    from datetime import datetime as _dt
+
+    sorted_rows = sorted(reboots, key=lambda r: r.get("timestamp", ""))
+    clusters: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = [sorted_rows[0]]
+
+    for row in sorted_rows[1:]:
+        try:
+            t_prev = _dt.fromisoformat(current[0]["timestamp"])
+            t_cur = _dt.fromisoformat(row["timestamp"])
+        except (ValueError, KeyError, TypeError):
+            current.append(row)
+            continue
+        if (t_cur - t_prev).total_seconds() <= window_seconds:
+            current.append(row)
+        else:
+            clusters.append(current)
+            current = [row]
+    clusters.append(current)
+
+    merged: List[Dict[str, Any]] = []
+    for group in clusters:
+        if len(group) == 1:
+            merged.append(dict(group[0]))
+            continue
+        earliest = min(group, key=lambda r: r["timestamp"])
+        best_reason_row = max(group, key=_reboot_reason_row_sort_key)
+        reason = (
+            (best_reason_row.get("reason") or "").strip()
+            or (earliest.get("reason") or "").strip()
+            or "unknown"
+        )
+        base = dict(earliest)
+        base["reason"] = reason
+        merged.append(base)
+    return merged
 
 
 def _pick_ntp_timestamp(timestamps: List[str]) -> str:
@@ -1117,6 +1204,9 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
     Each boot cycle starts with a ``Lan_init_start`` line.  We detect
     cycles by looking for ``Lan_init_start`` entries.
 
+    Lines matching ``LOG_MERGE_MARKER`` (self-heal merged logs) end the current
+    cycle so unrelated chunks are not stitched into one bogus boot.
+
     **Timestamp selection**: Early log lines in each boot cycle carry
     the firmware build timestamp (pre-NTP).  After NTP syncs the clock
     jumps to the real time.  We detect that jump and record the first
@@ -1139,10 +1229,19 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
     # Split into boot cycles (each starts with Lan_init_start)
     cycles: List[Dict[str, Any]] = []
     current_cycle: Optional[Dict[str, Any]] = None
+    pending_reason: str = ""
 
     for line in lines:
         line = line.strip()
         if not line:
+            continue
+
+        if _BOOTTIME_MERGE_MARKER_RE.match(line):
+            if current_cycle is not None:
+                _finalize_boot_cycle_timestamps(current_cycle)
+                if current_cycle.get("timestamp"):
+                    cycles.append(current_cycle)
+                current_cycle = None
             continue
 
         ts_match = _BOOTTIME_TS_RE.match(line)
@@ -1152,18 +1251,27 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
         if uptime_match and uptime_match.group(1) == "Lan_init_start":
             # Save previous cycle if exists
             if current_cycle is not None:
-                # Resolve the real timestamp (post-NTP) before saving
-                current_cycle["timestamp"] = _pick_ntp_timestamp(
-                    current_cycle.pop("_timestamps")
-                )
-                cycles.append(current_cycle)
+                _finalize_boot_cycle_timestamps(current_cycle)
+                if current_cycle.get("timestamp"):
+                    cycles.append(current_cycle)
             # Start new cycle — collect ALL timestamps to detect NTP jump later
+            init_reason = pending_reason
+            pending_reason = ""
             current_cycle = {
                 "_timestamps": [ts_match.group(1)] if ts_match else [],
                 "timestamp": "",
-                "reason": "",
+                "reason": init_reason,
                 "uptimes": {"Lan_init_start": int(uptime_match.group(2))},
             }
+            continue
+
+        reason_match = _REBOOT_REASON_RE.search(line)
+        if reason_match:
+            rtxt = reason_match.group(1).strip()
+            if current_cycle is not None:
+                current_cycle["reason"] = rtxt
+            else:
+                pending_reason = rtxt
             continue
 
         if current_cycle is None:
@@ -1173,12 +1281,6 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
         if ts_match:
             current_cycle["_timestamps"].append(ts_match.group(1))
 
-        # Check for reboot reason
-        reason_match = _REBOOT_REASON_RE.search(line)
-        if reason_match:
-            current_cycle["reason"] = reason_match.group(1).strip()
-            continue
-
         # Check for uptime entries
         if uptime_match:
             key = uptime_match.group(1)
@@ -1187,10 +1289,9 @@ def parse_boottime_log(content: str) -> Dict[str, Any]:
 
     # Don't forget the last cycle
     if current_cycle is not None:
-        current_cycle["timestamp"] = _pick_ntp_timestamp(
-            current_cycle.pop("_timestamps")
-        )
-        cycles.append(current_cycle)
+        _finalize_boot_cycle_timestamps(current_cycle)
+        if current_cycle.get("timestamp"):
+            cycles.append(current_cycle)
 
     if not cycles:
         return {}
@@ -1275,7 +1376,7 @@ def parse_consolelog_for_soft_reboots(content: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 # Cache version - increment when reboot parsing logic changes
-REBOOTS_CACHE_VERSION = 2
+REBOOTS_CACHE_VERSION = 4
 
 
 def _reboots_cache_is_fresh(
@@ -1374,7 +1475,9 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
         try:
             content = bt_path.read_text(encoding="utf-8", errors="ignore")
             bt_info = parse_boottime_log(content)
-            for cycle in bt_info.get("reboot_history", []):
+            # Last entry is the current boot session (no completed reboot yet).
+            history = bt_info.get("reboot_history", [])
+            for cycle in history[:-1]:
                 ts = cycle.get("timestamp", "")
                 reason = cycle.get("reason", "unknown")
                 if ts:
@@ -1422,6 +1525,8 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                 )
         except Exception as e:
             logger.warning(f"[InfoExtractor] Error parsing {p_start_path}: {e}")
+
+    reboots = _cluster_reboot_events_by_proximity(reboots)
 
     # --- Cross-reference with Consolelog.txt for soft reboot detection ---
     soft_reboot_timestamps: List[str] = []

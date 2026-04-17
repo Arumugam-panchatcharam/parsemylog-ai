@@ -14,7 +14,11 @@ from logai.analytics.data_layout import DataLayoutManager
 from .config_paths import wifi_auth_assoc_event_map_path
 from .drain3_params import add_parameter_list_column
 from .event_map import with_event_code_column
-from .extractors import enrich_correlation_columns, forward_fill_sta_mac_by_partition
+from .extractors import (
+    enrich_correlation_columns,
+    forward_fill_sta_mac_by_partition,
+    scrub_sta_mac_matching_expected_bssid,
+)
 from .interface_map import build_interface_table, load_interface_map_yaml, model_matches_device
 from .sequence_rules import run_issue_detectors
 from .sta_aggregate import aggregate_sta_issues_by_mac
@@ -106,7 +110,6 @@ def run_wifi_sta_issues(
     df = with_event_code_column(df, events)
     df = add_parameter_list_column(df, cpe_dir, domain="wireless")
     df = enrich_correlation_columns(df, events)
-    df = forward_fill_sta_mac_by_partition(df)
 
     iface_yaml = load_interface_map_yaml()
     if model_matches_device(iface_yaml, device_info):
@@ -123,6 +126,8 @@ def run_wifi_sta_issues(
             on="ifname",
             how="left",
         )
+    df = scrub_sta_mac_matching_expected_bssid(df)
+    df = forward_fill_sta_mac_by_partition(df)
 
     labeled_for_detect = df.filter(pl.col("event_code").is_not_null())
     raw_issues = run_issue_detectors(

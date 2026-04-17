@@ -60,7 +60,8 @@ class DataLayoutManager:
         """
         Path to a consolidated dataset (name without .parquet).
 
-        name: reboot_features | device_health | signals | error_templates | sta_issues | wifi_labeled_events
+        name: reboot_features | device_health | signals | error_templates | sta_issues
+            | selfheal_insights | wifi_labeled_events
         """
         return self.get_consolidated_analytics_dir() / f"{name}.parquet"
 
@@ -124,11 +125,24 @@ class DataLayoutManager:
             ("device_info", ".device_info_cache.json"),
             ("version", ".version_cache.json"),
             ("reboots", ".reboots_cache.json"),
-            ("raw_selfheal", "raw_selfheal_cache.json"),
+            ("raw_selfheal", None),  # resolved below (Parquet preferred)
             ("raw_telemetry", "raw_telemetry_cache.json"),
         ]
 
         for cache_type, filename in cache_types:
+            if cache_type == "raw_selfheal":
+                from logai.analytics.selfheal.cache_io import (
+                    RAW_SELFHEAL_JSON_LEGACY,
+                    RAW_SELFHEAL_PARQUET_NAME,
+                )
+
+                pq = cpe_dir / RAW_SELFHEAL_PARQUET_NAME
+                js = cpe_dir / RAW_SELFHEAL_JSON_LEGACY
+                if pq.is_file():
+                    cache_files[cache_type] = pq
+                elif js.is_file():
+                    cache_files[cache_type] = js
+                continue
             cache_path = cpe_dir / filename
             if cache_path.exists():
                 cache_files[cache_type] = cache_path

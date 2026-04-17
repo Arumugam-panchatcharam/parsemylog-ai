@@ -18,6 +18,7 @@ import ErrorIcon from "@mui/icons-material/Error";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import SearchIcon from "@mui/icons-material/Search";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import TroubleshootIcon from "@mui/icons-material/Troubleshoot";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import { CrossCPEGraphs } from "@/components/CrossCPEGraphs";
@@ -334,6 +335,25 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
       icon: RestartAltIcon,
       format: (_km: Record<string, unknown>, cpe?: CPESummary) => String(cpe?.reboot_summary.total ?? 0),
       getValue: (_km: Record<string, unknown>, cpe?: CPESummary) => cpe?.reboot_summary.total ?? 0,
+      higher_is_better: false,
+    },
+    {
+      key: "selfheal",
+      label: "SelfHeal signals",
+      icon: TroubleshootIcon,
+      format: (km) => {
+        const sev = km.selfheal_signal_severity;
+        const tags = km.selfheal_signal_tags;
+        if (!sev && (!Array.isArray(tags) || tags.length === 0)) return "—";
+        const tagStr = Array.isArray(tags)
+          ? tags.map((t) => String(t).replace(/_/g, " ")).join(" · ")
+          : "";
+        return sev ? `${String(sev)} · ${tagStr}` : tagStr || "—";
+      },
+      getValue: (km) => {
+        const n = Number(km.selfheal_signal_tag_count);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      },
       higher_is_better: false,
     },
   ];

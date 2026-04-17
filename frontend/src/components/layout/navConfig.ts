@@ -7,8 +7,6 @@ import MemoryIcon from "@mui/icons-material/Memory";
 import ArticleIcon from "@mui/icons-material/Article";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
-import AccountTreeIcon from "@mui/icons-material/AccountTree";
-import ModelTrainingIcon from "@mui/icons-material/ModelTraining";
 import HubIcon from "@mui/icons-material/Hub";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import WifiIcon from "@mui/icons-material/Wifi";
@@ -32,8 +30,7 @@ export const workspaceNav: readonly WorkspaceNavItem[] = [
   { to: "/workspace/syslog", icon: ArticleIcon, label: "Syslog" },
   { to: "/workspace/selfheal", icon: MemoryIcon, label: "SelfHeal" },
   { to: "/workspace/ai", icon: PsychologyIcon, label: "Semantic Search" },
-  { to: "/workspace/issue-analysis", icon: AccountTreeIcon, label: "Issue Analysis" },
-  { to: "/workspace/ml-pipeline", icon: ModelTrainingIcon, label: "ML Pipeline" },
+  // Temporarily hidden: issue-analysis, ml-pipeline (see App.tsx routes)
   { to: "/workspace/analytics", icon: AssessmentIcon, label: "Analytics" },
 ] as const;
 

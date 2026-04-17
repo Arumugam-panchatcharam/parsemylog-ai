@@ -242,6 +242,12 @@ def process_application_key(command: str) -> Optional[str]:
     if not parts:
         return None
 
+    # Periodic SelfHeal memory dump (`busybox top -mbn1`, etc.): not an application.
+    if len(parts) >= 2:
+        b0 = PurePosixPath(parts[0]).name.lower()
+        if b0 == "busybox" and parts[1].lower() == "top":
+            return None
+
     first = parts[0]
     if _ZOMBIE_COMM_RE.match(first):
         return None
@@ -774,7 +780,7 @@ def _snapshot_from_dict(s: Dict[str, Any]) -> Snapshot:
 
 
 def _coerce_snapshots_for_summary(snapshots: List[Any]) -> List[Snapshot]:
-    """Accept dataclass snapshots or dicts from ``raw_selfheal_cache.json``."""
+    """Accept dataclass snapshots or dicts from the raw SelfHeal cache (Parquet/JSON)."""
     if not snapshots:
         return []
     first = snapshots[0]

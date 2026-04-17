@@ -86,6 +86,7 @@ class DuckDBQueryEngine:
             "signals",
             "error_templates",
             "sta_issues",
+            "selfheal_insights",
         ]
         analytics_dir = self.layout.get_consolidated_analytics_dir()
         used_consolidated = False
@@ -302,231 +303,6 @@ def get_fleet_summary(user_id: str, project_id: str) -> Dict[str, Any]:
         return _merge_live_project_counts(
             _fleet_summary_from_flat_parquet_row(row), user_id, project_id
         )
-
-
-def _pending_device_health_row(serial: str) -> Dict[str, Any]:
-    """Placeholder row for a project CPE that has no issue_analysis/device_health yet."""
-    return {
-        "device_serial": serial,
-        "model": "—",
-        "manufacturer": "—",
-        "firmware_version": "—",
-        "last_reboot_reason": "",
-        "peak_memory_usage_pct": None,
-        "avg_memory_usage_pct": None,
-        "peak_cpu_usage_pct": None,
-        "avg_cpu_usage_pct": None,
-        "processing_date": "",
-        "analytics_status": "pending",
-    }
-
-
-def get_device_health_summary(user_id: str, project_id: str, 
-                             limit: int = 100) -> List[Dict[str, Any]]:
-    """
-    Get device health summary data.
-    
-    Includes every CPE folder in the project; devices without analytics Parquet
-    appear as rows with analytics_status=pending so the UI matches fleet size.
-    
-    Args:
-        user_id: User ID
-        project_id: Project ID
-        limit: Maximum number of devices to return
-        
-    Returns:
-        List of device health records
-    """
-    layout = DataLayoutManager(user_id, project_id)
-    fleet_serials = layout.list_cpes_with_rg_parquet()
-
-    result: List[Dict[str, Any]] = []
-    with DuckDBQueryEngine(user_id, project_id) as db:
-        views = db.get_available_views()
-        
-        if "device_health_view" in views:
-            result = db.query(f"""
-                SELECT 
-                    device_serial,
-                    model,
-                    manufacturer,
-                    firmware_version,
-                    last_reboot_reason,
-                    peak_memory_usage_pct,
-                    avg_memory_usage_pct,
-                    peak_cpu_usage_pct,
-                    avg_cpu_usage_pct,
-                    processing_date
-                FROM device_health_view
-            """)
-            # Blank device_serial breaks folder matching and React keys (duplicate "").
-            result = [
-                r
-                for r in result
-                if str(r.get("device_serial") or "").strip() != ""
-            ]
-            for row in result:
-                row["analytics_status"] = "ready"
-
-    seen = {str(r.get("device_serial") or "").strip() for r in result}
-    for serial in fleet_serials:
-        if serial not in seen:
-            result.append(_pending_device_health_row(serial))
-
-    def _sort_key(row: Dict[str, Any]) -> tuple:
-        pending = row.get("analytics_status") == "pending"
-        peak_mem = row.get("peak_memory_usage_pct")
-        try:
-            pm = float(peak_mem) if peak_mem is not None else 0.0
-        except (TypeError, ValueError):
-            pm = 0.0
-        peak_cpu = row.get("peak_cpu_usage_pct")
-        try:
-            pc = float(peak_cpu) if peak_cpu is not None else 0.0
-        except (TypeError, ValueError):
-            pc = 0.0
-        # Pending first so they are visible even when slicing; then by risk metrics.
-        return (0 if pending else 1, -pm, -pc)
-
-    result.sort(key=_sort_key)
-    cap = max(limit, len(fleet_serials)) if fleet_serials else limit
-    return result[:cap]
-
-
-def get_reboot_analysis(user_id: str, project_id: str, 
-                       serial: str = None) -> Dict[str, Any]:
-    """
-    Get reboot analysis data.
-    
-    Args:
-        user_id: User ID
-        project_id: Project ID
-        serial: Optional specific device serial
-        
-    Returns:
-        Reboot analysis data
-    """
-    with DuckDBQueryEngine(user_id, project_id) as db:
-        views = db.get_available_views()
-        
-        if "reboot_features_view" not in views:
-            return {"error": "No reboot data available"}
-        
-        where_clause = ""
-        if serial:
-            safe = "".join(c for c in serial if c.isalnum() or c in "-_")
-            if safe:
-                where_clause = f"WHERE device_serial = '{safe}'"
-        
-        # Reboot counts by reason
-        reason_counts = db.query(f"""
-            SELECT 
-                reason,
-                COUNT(*) as count,
-                AVG(errors_before_reboot) as avg_errors_before
-            FROM reboot_features_view
-            {where_clause}
-            GROUP BY reason
-            ORDER BY count DESC
-        """)
-        
-        # Recent reboots
-        recent_reboots = db.query(f"""
-            SELECT 
-                timestamp,
-                device_serial,
-                reason,
-                reboot_type,
-                errors_before_reboot
-            FROM reboot_features_view
-            {where_clause}
-            ORDER BY timestamp DESC
-            LIMIT 20
-        """)
-        
-        return {
-            "reason_distribution": reason_counts,
-            "recent_reboots": recent_reboots
-        }
-
-
-def get_error_templates_analysis(user_id: str, project_id: str,
-                               domain: str = None, 
-                               limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    Get error templates analysis.
-    
-    Args:
-        user_id: User ID
-        project_id: Project ID
-        domain: Optional domain filter
-        limit: Maximum number of templates to return
-        
-    Returns:
-        List of error templates with counts
-    """
-    with DuckDBQueryEngine(user_id, project_id) as db:
-        views = db.get_available_views()
-        
-        if "error_templates_view" not in views:
-            return []
-        
-        where_clause = f"WHERE domain = '{domain}'" if domain else ""
-        
-        result = db.query(f"""
-            SELECT 
-                domain,
-                template,
-                COUNT(*) as occurrence_count,
-                MIN(timestamp) as first_seen,
-                MAX(timestamp) as last_seen,
-                module_enrichment
-            FROM error_templates_view
-            {where_clause}
-            GROUP BY domain, template, module_enrichment
-            ORDER BY occurrence_count DESC
-            LIMIT {limit}
-        """)
-        
-        return result
-
-
-def get_signals_analysis(user_id: str, project_id: str,
-                        signal_type: str = None,
-                        limit: int = 1000) -> List[Dict[str, Any]]:
-    """
-    Get signals analysis data.
-    
-    Args:
-        user_id: User ID
-        project_id: Project ID
-        signal_type: Optional signal type filter
-        limit: Maximum number of signal records to return
-        
-    Returns:
-        List of signal records
-    """
-    with DuckDBQueryEngine(user_id, project_id) as db:
-        views = db.get_available_views()
-        
-        if "signals_view" not in views:
-            return []
-        
-        where_clause = f"WHERE signal_type = '{signal_type}'" if signal_type else ""
-        
-        result = db.query(f"""
-            SELECT 
-                timestamp,
-                signal_type,
-                signal_value,
-                processing_date
-            FROM signals_view
-            {where_clause}
-            ORDER BY timestamp DESC
-            LIMIT {limit}
-        """)
-        
-        return result
 
 
 def get_sta_issues_analysis(
@@ -764,6 +540,59 @@ def get_sta_issues_grouped_analysis(
 
         group_cap = max(1, min(int(limit), 2000))
         return out[:group_cap]
+
+
+def get_selfheal_insights_analysis(
+    user_id: str,
+    project_id: str,
+    device_serial: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """
+    SelfHeal-derived per-CPE signals (CPU, process restarts, RSS trend, slab/overcommit).
+
+    Rows come from consolidated ``selfheal_insights.parquet`` (Polars ETL). JSON columns
+    are expanded to ``tags`` and ``detail_lines`` lists for the UI.
+    """
+    with DuckDBQueryEngine(user_id, project_id) as db:
+        views = db.get_available_views()
+        if "selfheal_insights_view" not in views:
+            return []
+
+        def esc(s: str) -> str:
+            return str(s).replace("'", "''")
+
+        filters: List[str] = []
+        if device_serial:
+            filters.append(f"device_serial = '{esc(device_serial)}'")
+        where = (" WHERE " + " AND ".join(filters)) if filters else ""
+
+        lim = max(1, min(int(limit), 2000))
+        rows = db.query(f"""
+            SELECT *
+            FROM selfheal_insights_view
+            {where}
+            ORDER BY device_serial
+            LIMIT {lim}
+        """)
+
+        out: List[Dict[str, Any]] = []
+        for r in rows or []:
+            rec = dict(r)
+            try:
+                rec["tags"] = json.loads(rec.get("tags_json") or "[]")
+            except json.JSONDecodeError:
+                rec["tags"] = []
+            if not isinstance(rec["tags"], list):
+                rec["tags"] = []
+            try:
+                rec["detail_lines"] = json.loads(rec.get("detail_lines_json") or "[]")
+            except json.JSONDecodeError:
+                rec["detail_lines"] = []
+            if not isinstance(rec["detail_lines"], list):
+                rec["detail_lines"] = []
+            out.append(rec)
+        return out
 
 
 def execute_custom_query(user_id: str, project_id: str, 

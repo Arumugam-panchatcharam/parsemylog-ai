@@ -3,9 +3,35 @@
 from __future__ import annotations
 
 import json
-from typing import Any, List
+from datetime import datetime
+from typing import Any, List, Optional
 
 import polars as pl
+
+
+def _parse_iso_datetime_opt(val: Any) -> Optional[datetime]:
+    """Parse values written with ``datetime.isoformat()``; null on empty / invalid."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _col_iso_to_datetime_us(column: str) -> pl.Expr:
+    """Avoid Polars auto format-inference (fails on mixed ISO shapes in one column)."""
+    return (
+        pl.col(column)
+        .cast(pl.Utf8)
+        .str.strip_chars()
+        .map_elements(_parse_iso_datetime_opt, return_dtype=pl.Datetime("us"))
+    )
 
 
 def _flatten_evidence_cells(cells: Any) -> str:
@@ -41,18 +67,8 @@ def aggregate_sta_issues_by_mac(sta_issues: pl.DataFrame) -> pl.DataFrame:
         if k not in sta_issues.columns:
             return sta_issues
 
-    ws = (
-        pl.when(pl.col("window_start").is_null() | (pl.col("window_start").cast(pl.Utf8) == ""))
-        .then(None)
-        .otherwise(pl.col("window_start").str.to_datetime(time_unit="us", strict=False))
-        .alias("_ws")
-    )
-    we = (
-        pl.when(pl.col("window_end").is_null() | (pl.col("window_end").cast(pl.Utf8) == ""))
-        .then(None)
-        .otherwise(pl.col("window_end").str.to_datetime(time_unit="us", strict=False))
-        .alias("_we")
-    )
+    ws = _col_iso_to_datetime_us("window_start").alias("_ws")
+    we = _col_iso_to_datetime_us("window_end").alias("_we")
     prep = sta_issues.with_columns([ws, we])
 
     agg = prep.group_by(keys, maintain_order=True).agg(
