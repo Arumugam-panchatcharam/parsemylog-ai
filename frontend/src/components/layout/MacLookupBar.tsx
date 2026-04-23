@@ -1,7 +1,4 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
-import RouterIcon from "@mui/icons-material/Router";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -20,14 +17,6 @@ function getApiErrorMessage(err: unknown): string {
 }
 
 export default function MacLookupBar() {
-  const [expanded, setExpanded] = useState(() => {
-    try {
-      return localStorage.getItem("mac-lookup-expanded") === "true";
-    } catch {
-      return false;
-    }
-  });
-
   const [inputText, setInputText] = useState("");
   const [results, setResults] = useState<MacLookupResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -38,24 +27,13 @@ export default function MacLookupBar() {
   const [updating, setUpdating] = useState(false);
   const [reloading, setReloading] = useState(false);
 
-  // Load OUI status on mount
   useEffect(() => {
-    if (expanded) {
-      utilitiesApi.ouiStatus().then(
-        (response) => setOuiStatus(response.data),
-        () => { /* ignore errors */ }
-      );
-    }
-  }, [expanded]);
-
-  const toggleExpanded = useCallback(() => {
-    setExpanded((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("mac-lookup-expanded", String(next));
-      } catch { /* ignore */ }
-      return next;
-    });
+    utilitiesApi.ouiStatus().then(
+      (response) => setOuiStatus(response.data),
+      () => {
+        /* ignore errors */
+      },
+    );
   }, []);
 
   const handleLookup = useCallback(async () => {
@@ -198,29 +176,11 @@ export default function MacLookupBar() {
 
   return (
     <div className="bg-card">
-      {/* Toggle button row */}
-      <button
-        onClick={toggleExpanded}
-        className="flex items-center gap-1.5 w-full px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-      >
-        <RouterIcon style={{ fontSize: 14 }} />
-        <span className="font-medium">MAC OUI Lookup</span>
-        {!expanded && results.length > 0 && (
-          <span className="ml-2 text-muted-foreground/70">{summaryText}</span>
-        )}
-        <span className="ml-auto">
-          {expanded ? (
-            <ExpandLessIcon style={{ fontSize: 16 }} />
-          ) : (
-            <ExpandMoreIcon style={{ fontSize: 16 }} />
-          )}
-        </span>
-      </button>
-
-      {/* Expanded panel */}
-      {expanded && (
-        <div className="px-4 pb-3 pt-1">
-          <div className="flex flex-col gap-3">
+      <div className="px-1 pb-1 pt-0">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+          MAC OUI lookup
+        </p>
+        <div className="flex flex-col gap-3">
             {/* OUI Database Status */}
             {ouiStatus && (
               <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/30 text-xs">
@@ -355,7 +315,7 @@ export default function MacLookupBar() {
                     type="checkbox"
                     checked={showLAA}
                     onChange={(e) => setShowLAA(e.target.checked)}
-                    className="h-4 w-4 rounded border-input"
+                    className="h-4 w-4 rounded border-input accent-primary"
                   />
                   <span className="text-muted-foreground">Show LAA addresses</span>
                 </label>
@@ -448,9 +408,8 @@ export default function MacLookupBar() {
                 <span>Looking up vendors (this may take a moment)...</span>
               </div>
             )}
-          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

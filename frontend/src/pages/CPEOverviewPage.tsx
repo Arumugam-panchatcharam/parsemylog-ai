@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cpeOverviewApi } from "@/api/endpoints";
 import type { PatternScanResult } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import CircularProgress from "@mui/material/CircularProgress";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
@@ -440,6 +441,7 @@ function MetricsComparison({ cpes }: { cpes: CPESummary[] }) {
 
 /** Section 3: Reboot Comparison */
 function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
+  const mergePlot = usePlotlyLayoutMerge();
   const labels = cpes.map(cpeLabel);
   const totals = cpes.map((c) => c.reboot_summary.total);
   const colors = generateCpeColors(cpes.length);
@@ -514,7 +516,7 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
                       },
                     ]
               }
-              layout={{
+              layout={mergePlot({
                 title: { text: hasSoftRebootData ? "Reboots by Type per CPE" : "Total Reboots per CPE" },
                 height: 380,
                 margin: { t: 40, b: 120, l: 50, r: 20 },
@@ -523,10 +525,7 @@ function RebootComparison({ cpes }: { cpes: CPESummary[] }) {
                 barmode: hasSoftRebootData ? ("stack" as const) : undefined,
                 showlegend: hasSoftRebootData,
                 legend: { orientation: "h" as const, y: -0.3 },
-                paper_bgcolor: "transparent",
-                plot_bgcolor: "transparent",
-                font: { color: "#888" },
-              }}
+              })}
               config={{ displayModeBar: false }}
               style={{ width: "100%" }}
             />
@@ -714,6 +713,7 @@ function truncate(s: string, max: number): string {
 /** Section 4: Pattern Analyzer Comparison */
 function PatternAnalyzerComparison({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
 
   // Auto-load cached scan results on mount
   const {
@@ -919,16 +919,14 @@ function PatternAnalyzerComparison({ projectId }: { projectId: string }) {
                       "<b>%{y}</b><br>CPE: %{x}<br>Matches: %{z}<extra></extra>",
                   } as any,
                 ]}
-                layout={{
+                layout={mergePlot({
                   height: Math.max(220, sortedPatternNames.length * 30 + 140),
                   margin: { t: 10, b: 20, l: 20, r: 80 },
                   xaxis: { side: "bottom" as const, tickangle: -45, automargin: true },
                   yaxis: { autorange: false as const, range: [-0.5, sortedPatternNames.length - 0.5], dtick: 1, automargin: true },
                   annotations,
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                  font: { color: "#888", size: 11 },
-                }}
+                  font: { size: 11 },
+                })}
                 config={{ displayModeBar: false }}
                 style={{ width: "100%" }}
               />

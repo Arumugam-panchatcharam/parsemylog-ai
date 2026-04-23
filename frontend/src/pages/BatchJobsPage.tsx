@@ -143,15 +143,15 @@ export default function BatchJobsPage() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "completed":
-        return "text-green-600 bg-green-50";
+        return "text-emerald-800 dark:text-emerald-100 bg-emerald-500/12 border border-emerald-500/35";
       case "processing":
-        return "text-blue-600 bg-blue-50";
+        return "text-sky-800 dark:text-sky-100 bg-sky-500/12 border border-sky-500/35";
       case "failed":
-        return "text-red-600 bg-red-50";
+        return "text-destructive bg-destructive/10 border border-destructive/35";
       case "cancelled":
-        return "text-gray-600 bg-gray-50";
+        return "text-muted-foreground bg-muted border border-border";
       default:
-        return "text-yellow-600 bg-yellow-50";
+        return "text-amber-900 dark:text-amber-100 bg-amber-500/12 border border-amber-500/35";
     }
   };
 
@@ -185,9 +185,9 @@ export default function BatchJobsPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="w-full min-w-0 max-w-full px-4 py-6 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Batch Jobs</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -269,17 +269,17 @@ export default function BatchJobsPage() {
             ) : (
               <div className="mb-4">
                 {/* Instructions Panel */}
-                <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="mb-4 p-4 bg-sky-500/10 border border-sky-500/30 dark:bg-sky-950/30 dark:border-sky-500/25 rounded-lg">
                   <div className="flex items-start gap-2">
-                    <InfoIcon className="text-blue-600 mt-0.5" style={{ fontSize: 16 }} />
+                    <InfoIcon className="text-sky-600 dark:text-sky-400 mt-0.5" style={{ fontSize: 16 }} />
                     <div className="flex-1">
-                      <h4 className="text-sm font-medium text-blue-900 mb-2">
+                      <h4 className="text-sm font-medium text-foreground mb-2">
                         Prepare Your CPE Logs Locally
                       </h4>
-                      <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
+                      <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
                         <li>Download the processing script using the button below</li>
                         <li>Place the script in your folder containing CPE log subdirectories</li>
-                        <li>Run: <code className="bg-blue-100 px-1 rounded">python process_cpe_logs.py --target-dir . --project-name {project?.name || "my_project"}</code></li>
+                        <li>Run: <code className="bg-muted px-1 rounded text-foreground">python process_cpe_logs.py --target-dir . --project-name {project?.name || "my_project"}</code></li>
                         <li>The script will:
                           <ul className="ml-4 mt-1 space-y-0.5 list-disc list-inside">
                             <li>Remove duplicates and create individual CPE .zip files in archive/</li>
@@ -293,7 +293,7 @@ export default function BatchJobsPage() {
                   <button
                     onClick={handleDownloadScript}
                     disabled={isUploading}
-                    className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                   >
                     <DownloadIcon style={{ fontSize: 14 }} />
                     Download process_cpe_logs.py
@@ -413,14 +413,14 @@ export default function BatchJobsPage() {
           </button>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
           {jobs.map((job: BatchJob) => (
             <div
               key={job.job_id}
-              className="bg-card border border-border rounded-xl p-4 hover:shadow-md transition-shadow"
+              className="bg-card border border-border rounded-xl p-4 hover:shadow-md transition-shadow min-w-0 flex flex-col"
             >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
+              <div className="flex items-start justify-between gap-3 flex-1 min-h-0">
+                <div className="flex-1 min-w-0">
                   {/* Status Badge */}
                   <div className="flex items-center gap-3 mb-2">
                     <span
@@ -465,7 +465,7 @@ export default function BatchJobsPage() {
                   <div className="flex flex-wrap gap-4 text-sm">
                     <div>
                       <span className="text-muted-foreground">Processed:</span>{" "}
-                      <span className="font-medium text-green-600">
+                      <span className="font-medium text-emerald-600 dark:text-emerald-400">
                         {job.processed_cpes}
                       </span>
                     </div>
@@ -495,7 +495,7 @@ export default function BatchJobsPage() {
 
                   {/* Error Message */}
                   {job.error_message && (
-                    <div className="mt-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                    <div className="mt-2 text-sm text-destructive bg-destructive/10 border border-destructive/25 px-3 py-2 rounded-lg">
                       {job.error_message}
                     </div>
                   )}
@@ -523,7 +523,7 @@ export default function BatchJobsPage() {
                           deleteJobMutation.mutate(job.job_id);
                         }
                       }}
-                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+                      className="p-2 hover:bg-destructive/10 text-destructive rounded-lg transition-colors"
                       title="Delete Job"
                     >
                       <DeleteIcon style={{ fontSize: 20 }} />

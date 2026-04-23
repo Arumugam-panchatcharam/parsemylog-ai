@@ -1,8 +1,10 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { telemetryApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import TelemetryOverviewTab from "@/pages/TelemetryOverviewTab";
 import TimelineIcon from "@mui/icons-material/Timeline";
@@ -181,6 +183,7 @@ export default function TelemetryPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
   const qc = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
   const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
   const [reparsing, setReparsing] = useState(false);
   const [showDiscovery, setShowDiscovery] = useState(false);
@@ -236,9 +239,13 @@ export default function TelemetryPage() {
 
   const stColor = (v: string) => {
     const s = v.trim().toLowerCase();
-    if (["up", "true", "enabled", "1", "good", "connected"].includes(s)) return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-900/20 dark:text-green-400";
-    if (["down", "false", "disabled", "0", "error", "bad", "poor", "disconnected"].includes(s)) return "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-400";
-    return "border-gray-300 bg-gray-50 text-gray-700 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400";
+    if (["up", "true", "enabled", "1", "good", "connected"].includes(s)) {
+      return "border-border bg-card text-foreground shadow-sm ring-1 ring-inset ring-green-500/25 dark:ring-green-400/35";
+    }
+    if (["down", "false", "disabled", "0", "error", "bad", "poor", "disconnected"].includes(s)) {
+      return "border-border bg-card text-foreground shadow-sm ring-1 ring-inset ring-red-500/30 dark:ring-red-400/40";
+    }
+    return "border-border bg-card text-foreground shadow-sm ring-1 ring-inset ring-muted-foreground/20";
   };
   const stIcon = (v: string) => {
     const s = v.trim().toLowerCase();
@@ -416,16 +423,18 @@ export default function TelemetryPage() {
                     const displayName = s.instance ? `${s.type} ${s.instance}` : s.type;
                     return (
                       <div key={idx} className={`border rounded-lg p-2.5 ${stColor(s.status)}`}>
-                        <div className="flex items-center gap-1.5 text-xs">
+                        <div className="flex items-center gap-1.5 text-xs text-foreground">
                           {stIcon(s.status)}
                           <TypeIcon style={{ fontSize: 14 }} />
                           <span className="font-semibold flex-1">{displayName}</span>
-                          <span className="text-[10px] capitalize font-bold">{s.status}</span>
+                          <span className="text-[10px] capitalize font-bold text-muted-foreground">{s.status}</span>
                         </div>
                         {Object.keys(s.meta).length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-1.5 pl-6">
                             {Object.entries(s.meta).map(([k, v]) => (
-                              <span key={k} className="text-[10px] bg-white/50 dark:bg-black/15 px-1.5 py-0.5 rounded font-medium">{k}: {v}</span>
+                              <span key={k} className="text-[10px] bg-muted/70 text-foreground px-1.5 py-0.5 rounded font-medium border border-border/60">
+                                {k}: {v}
+                              </span>
                             ))}
                           </div>
                         )}
@@ -620,19 +629,17 @@ export default function TelemetryPage() {
                             }),
                             rebootHoverTrace, // Add hover trace for reboot events
                           ]}
-                          layout={{
+                          layout={mergePlot({
                             height: 280,
                             margin: { l: 45, r: 15, t: 5, b: 35 },
                             xaxis: { title: { text: "Time" }, tickfont: { size: 10 } },
                             yaxis: { title: { text: "Value" }, tickfont: { size: 10 } },
                             hovermode: "x unified",
                             legend: { orientation: "h", y: 1.15, x: 0.5, xanchor: "center", font: { size: 10 } },
-                            paper_bgcolor: "transparent",
-                            plot_bgcolor: "transparent",
                             font: { family: "Roboto, sans-serif", size: 11 },
                             shapes: rebootShapes,
                             annotations: rebootAnnotations,
-                          }}
+                          })}
                           config={NO_TOOLBAR}
                           style={{ width: "100%" }}
                         />
@@ -779,46 +786,60 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
     label: i === 0 || i === filteredSnapshots.length - 1 ? s.time.slice(11, 16) : "",
   }));
 
-  // Recursive render for multi-hop topology
-  const renderChildren = (parentId: string, depth: number) => {
+  /** Horizontal segment from parent toward children (left → right). */
+  const hSeg = (isWifi: boolean, widthClass: string) => (
+    <div
+      className={cn(
+        "h-0 shrink-0 border-t-2 self-center",
+        widthClass,
+        isWifi ? "border-dashed border-blue-400 dark:border-blue-500" : "border-solid border-muted-foreground/45",
+      )}
+    />
+  );
+
+  const edgePill = (edge: TopoEdge) => (
+    <span className="text-[9px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0 mx-1 border border-border/50">
+      {edge.media_type.replace("IEEE ", "")} {edge.phy_rate > 0 ? `${edge.phy_rate}Mbps` : ""}
+      {edge.signal_strength ? (
+        <span className={` ml-1 font-bold ${signalColor(edge.signal_strength)}`}>{edge.signal_strength}dBm</span>
+      ) : (
+        ""
+      )}
+    </span>
+  );
+
+  /** Lay out descendants to the right of `parentId` (mesh reads left → right). */
+  const renderHorizontalFrom = (parentId: string): ReactNode => {
     const children = childMap.get(parentId) || [];
     if (children.length === 0) return null;
+
+    if (children.length === 1) {
+      const node = children[0];
+      const edge = edgeFor(node.id);
+      const isWifi = edge?.is_wifi ?? true;
+      return (
+        <div className="flex flex-row items-center shrink-0 min-w-0">
+          {hSeg(isWifi, "w-8 min-w-[2rem]")}
+          {edge ? edgePill(edge) : null}
+          <DeviceNodeCard node={node} />
+          {renderHorizontalFrom(node.id)}
+        </div>
+      );
+    }
+
     return (
-      <div className="relative flex justify-center" style={{ marginTop: depth === 1 ? 0 : 8 }}>
-        {/* Horizontal connector bar spanning all children */}
-        {children.length > 1 && (
-          <div
-            className="absolute top-0 border-t-2 border-dashed border-blue-400"
-            style={{
-              left: `calc(${100 / (2 * children.length)}% + 4px)`,
-              right: `calc(${100 / (2 * children.length)}% + 4px)`,
-            }}
-          />
-        )}
-        {/* flex-nowrap prevents children from wrapping to a second row,
-            which would break the horizontal connector bar alignment */}
-        <div className="flex flex-nowrap justify-center gap-3">
+      <div className="flex flex-row items-stretch shrink-0 min-w-0">
+        <div className="flex items-center shrink-0">{hSeg(true, "w-8 min-w-[2rem]")}</div>
+        <div className="flex flex-col gap-6 justify-center py-2 border-l-2 border-dashed border-blue-400 dark:border-blue-500 pl-0 -ml-px">
           {children.map((node) => {
             const edge = edgeFor(node.id);
             const isWifi = edge?.is_wifi ?? true;
             return (
-              <div key={node.id} className="flex flex-col items-center shrink-0 transition-all duration-200">
-                {/* Vertical drop-down line from horizontal bar */}
-                <div className={`w-0 h-5 ${isWifi ? "border-l-2 border-dashed border-blue-400" : "border-l-2 border-solid border-gray-500"}`} />
-                {/* Edge label */}
-                {edge && (
-                  <span className="text-[9px] text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded mb-1 whitespace-nowrap">
-                    {edge.media_type.replace("IEEE ", "")} {edge.phy_rate > 0 ? `${edge.phy_rate}Mbps` : ""}
-                    {edge.signal_strength ? <span className={` ml-1 font-bold ${signalColor(edge.signal_strength)}`}>{edge.signal_strength}dBm</span> : ""}
-                  </span>
-                )}
-                {/* Node card */}
+              <div key={node.id} className="flex flex-row items-center shrink-0 min-w-0 -ml-px">
+                {hSeg(isWifi, "w-6 min-w-[1.5rem]")}
+                {edge ? edgePill(edge) : null}
                 <DeviceNodeCard node={node} />
-                {/* Render this node's children (multi-hop) */}
-                {childMap.has(node.id) && (
-                  <div className="w-0 h-5 mt-1 border-l-2 border-dashed border-blue-400" />
-                )}
-                {renderChildren(node.id, depth + 1)}
+                {renderHorizontalFrom(node.id)}
               </div>
             );
           })}
@@ -833,7 +854,7 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
       <div className="px-4 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
-        <DeviceHubIcon style={{ fontSize: 16, color: "#1a73e8" }} />
+        <DeviceHubIcon className="text-primary" style={{ fontSize: 16 }} />
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
           Mesh Topology
         </h3>
@@ -917,27 +938,24 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
         </div>
       )}
 
-      {/* Topology Graph */}
-      <div className="p-4 overflow-x-auto">
-        <div className="flex flex-col items-center min-w-[400px]">
-          {/* Gateway node */}
-          {gateway && <DeviceNodeCard node={gateway} />}
-
-          {/* Vertical connector from gateway down to horizontal bar */}
-          {gateway && (childMap.get(gateway.id)?.length ?? 0) > 0 && (
-            <div className="w-0 h-4 border-l-2 border-dashed border-blue-400" />
-          )}
-
-          {/* Children of gateway */}
-          {gateway && renderChildren(gateway.id, 1)}
+      {/* Topology graph: primary flow left → right */}
+      <div className="p-4 overflow-x-auto w-full">
+        <div className="inline-flex flex-row items-center min-w-min align-top">
+          {gateway ? (
+            <>
+              <DeviceNodeCard node={gateway} />
+              {renderHorizontalFrom(gateway.id)}
+            </>
+          ) : null}
+        </div>
 
           {/* Orphan extenders (not connected by any edge) */}
           {orphans.length > 0 && (
-            <div className="mt-6 pt-4 border-t border-dashed border-gray-300 dark:border-gray-600 w-full">
-              <p className="text-[10px] text-muted-foreground text-center mb-2 uppercase tracking-wider">
+            <div className="mt-6 pt-4 border-t border-dashed border-border w-full">
+              <p className="text-[10px] text-muted-foreground text-left mb-2 uppercase tracking-wider">
                 Unconnected Devices ({orphans.length})
               </p>
-              <div className="flex flex-wrap justify-center gap-4">
+              <div className="flex flex-wrap justify-start gap-4">
                 {orphans.map((node) => (
                   <div key={node.id} className="flex flex-col items-center">
                     {/* Show available backhaul info even for orphans */}
@@ -954,7 +972,6 @@ function MeshTopologyPanel({ topology }: { topology: MeshTopology }) {
               </div>
             </div>
           )}
-        </div>
       </div>
     </div>
   );
@@ -987,10 +1004,10 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
 
   // Shape: circle for SHWLAN extenders, rounded-lg for gateway, rounded-lg for others
   const shapeClass = node.is_gateway
-    ? "rounded-xl border-2 p-2.5 min-w-[160px] max-w-[200px] shadow-sm border-blue-400 bg-blue-50/80 dark:border-blue-600 dark:bg-blue-950/30"
+    ? "rounded-xl border-2 p-2.5 min-w-[160px] max-w-[200px] shadow-sm border-blue-400/80 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-950/35 text-foreground"
     : isSHWLAN
-      ? "rounded-full border-2 p-3 w-[148px] h-[148px] flex flex-col items-center justify-center shadow-sm border-green-400 bg-green-50/60 dark:border-green-600 dark:bg-green-950/30"
-      : "rounded-xl border-2 p-2.5 min-w-[160px] max-w-[200px] shadow-sm border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-900/50";
+      ? "rounded-full border-2 p-3 w-[148px] h-[148px] flex flex-col items-center justify-center shadow-sm border-emerald-500/70 bg-emerald-500/10 dark:border-emerald-400/55 dark:bg-emerald-950/40 text-foreground"
+      : "rounded-xl border-2 p-2.5 min-w-[160px] max-w-[200px] shadow-sm border-border bg-card text-foreground";
 
   return (
     <div className="flex flex-col items-center">
@@ -1005,17 +1022,25 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
             <SettingsInputAntennaIcon style={{ fontSize: 20 }} className="text-gray-600 dark:text-gray-400" />
           )}
           <div className="flex-1 min-w-0">
-            <div className={`font-bold truncate ${isSHWLAN ? "text-[10px]" : "text-[11px]"}`}>
+            <div
+              className={`font-bold truncate text-foreground ${isSHWLAN ? "text-[10px]" : "text-[11px]"}`}
+            >
               {node.is_gateway ? "Gateway" : "Extender"}
             </div>
-            <div className={`text-muted-foreground truncate ${isSHWLAN ? "text-[9px]" : "text-[10px]"}`} title={node.model}>
+            <div
+              className={`truncate text-foreground/80 ${isSHWLAN ? "text-[9px]" : "text-[10px]"}`}
+              title={node.model}
+            >
               {node.model || node.manufacturer || "Unknown"}
             </div>
           </div>
         </div>
 
         {/* ID */}
-        <div className={`font-mono text-muted-foreground ${isSHWLAN ? "text-[8px] mb-0.5" : "text-[9px] mb-1.5"}`} title={node.id}>
+        <div
+          className={`font-mono text-foreground/75 ${isSHWLAN ? "text-[8px] mb-0.5" : "text-[9px] mb-1.5"}`}
+          title={node.id}
+        >
           {node.id.toUpperCase()}
           {!isSHWLAN && node.serial_number && <div className="text-[8px]">SN: ...{node.serial_number.slice(-6)}</div>}
         </div>
@@ -1032,7 +1057,9 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
         )}
 
         {/* Stats row */}
-        <div className={`flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap ${isSHWLAN ? "justify-center" : ""}`}>
+        <div
+          className={`flex items-center gap-2 text-[10px] text-foreground/80 flex-wrap ${isSHWLAN ? "justify-center" : ""}`}
+        >
           {totalClients > 0 && (
             <span className="flex items-center gap-0.5" title="Connected clients">
               <WifiIcon style={{ fontSize: 11 }} /> {totalClients}
@@ -1057,7 +1084,7 @@ function DeviceNodeCard({ node }: { node: TopoNode }) {
 
         {/* Software version */}
         {node.software_version && !isSHWLAN && (
-          <div className="text-[9px] text-muted-foreground mt-1 truncate" title={node.software_version}>
+          <div className="text-[9px] text-foreground/75 mt-1 truncate" title={node.software_version}>
             v{node.software_version}
           </div>
         )}

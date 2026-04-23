@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { labelForPosition } from "@/lib/drain3MaskLabels";
 import { DynamicValuesMacRichText, plainTextWithFormattedMacs } from "@/lib/macAddressDisplay";
 import { useCPE } from "@/hooks/useCPE";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -69,6 +70,7 @@ export default function PatternPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
   const navigate = useNavigate();
+  const mergePlot = usePlotlyLayoutMerge();
   const [selectedDomain, setSelectedDomain] = useState<string>("");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const [timeInterval, setTimeInterval] = useState(0);
@@ -620,13 +622,17 @@ export default function PatternPage() {
                     title={
                       d.indexed ? "Domain indexed and ready for analysis" : "Indexing in progress…"
                     }
-                    className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${
+                    className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium border border-border ${
                       d.indexed
-                        ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                        : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
+                        ? "bg-zinc-800 text-white dark:bg-zinc-950 dark:text-white"
+                        : "bg-muted text-muted-foreground dark:bg-muted/80"
                     }`}
                   >
-                    {d.indexed ? <CheckCircleIcon style={{ fontSize: 13 }} /> : <CircularProgress size={11} />}
+                    {d.indexed ? (
+                      <CheckCircleIcon style={{ fontSize: 14 }} className="text-green-500 shrink-0" />
+                    ) : (
+                      <CircularProgress size={11} className="shrink-0" />
+                    )}
                     {d.label}
                   </span>
                 );
@@ -799,14 +805,12 @@ export default function PatternPage() {
                       line: { width: 2 },
                     },
                   ]}
-                  layout={{
+                  layout={mergePlot({
                     height: 300,
                     margin: { l: 40, r: 20, t: 10, b: 30 },
                     hovermode: "closest",
-                    paper_bgcolor: "transparent",
-                    plot_bgcolor: "transparent",
                     font: { family: "Roboto, sans-serif" },
-                  }}
+                  })}
                   config={NO_TOOLBAR}
                   style={{ width: "100%" }}
                 />

@@ -10,6 +10,7 @@ import type {
 } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import RebootAnalyticsSection from "@/components/RebootAnalyticsSection";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import Accordion from "@mui/material/Accordion";
 import AccordionDetails from "@mui/material/AccordionDetails";
@@ -33,12 +34,37 @@ type SortKey = "serial" | "model" | "reboot_count" | "memory_usage_pct_peak" | "
 
 /* ---------------------------------------------------------------- Helpers */
 
-const STATUS_CFG: Record<string, { color: string; bg: string; darkBg: string; border: string; darkBorder: string; label: string; icon: React.ElementType }> = {
-  SOFT_REBOOT: { color: "#3b82f6", bg: "bg-blue-100",   darkBg: "dark:bg-blue-900/30",   border: "border-blue-200",   darkBorder: "dark:border-blue-800",   label: "SOFT REBOOT", icon: RestartAltIcon },
-  REBOOT:  { color: "#d93025", bg: "bg-red-100",    darkBg: "dark:bg-red-900/30",    border: "border-red-200",    darkBorder: "dark:border-red-800",    label: "REBOOT",  icon: RestartAltIcon },
-  LOW_MEM: { color: "#d93025", bg: "bg-red-100",    darkBg: "dark:bg-red-900/30",    border: "border-red-200",    darkBorder: "dark:border-red-800",    label: "LOW MEM", icon: ErrorIcon },
-  MEMLEAK: { color: "#e8710a", bg: "bg-orange-100", darkBg: "dark:bg-orange-900/30", border: "border-orange-200", darkBorder: "dark:border-orange-800", label: "MEMLEAK", icon: WarningAmberIcon },
-  OK:      { color: "#188038", bg: "bg-green-100",  darkBg: "dark:bg-green-900/30",  border: "border-green-200",  darkBorder: "dark:border-green-800",  label: "OK",      icon: StorageIcon },
+const STATUS_CFG: Record<string, { label: string; icon: React.ElementType; pillClass: string }> = {
+  SOFT_REBOOT: {
+    label: "SOFT REBOOT",
+    icon: RestartAltIcon,
+    pillClass:
+      "border border-blue-500/35 bg-blue-500/[0.08] text-blue-800 dark:border-blue-400/45 dark:bg-blue-500/15 dark:text-blue-200",
+  },
+  REBOOT: {
+    label: "REBOOT",
+    icon: RestartAltIcon,
+    pillClass:
+      "border border-red-500/35 bg-red-500/[0.08] text-red-800 dark:border-red-400/45 dark:bg-red-500/15 dark:text-red-200",
+  },
+  LOW_MEM: {
+    label: "LOW MEM",
+    icon: ErrorIcon,
+    pillClass:
+      "border border-red-500/35 bg-red-500/[0.08] text-red-800 dark:border-red-400/45 dark:bg-red-500/15 dark:text-red-200",
+  },
+  MEMLEAK: {
+    label: "MEMLEAK",
+    icon: WarningAmberIcon,
+    pillClass:
+      "border border-amber-500/40 bg-amber-500/[0.1] text-amber-900 dark:border-amber-400/45 dark:bg-amber-500/15 dark:text-amber-100",
+  },
+  OK: {
+    label: "OK",
+    icon: StorageIcon,
+    pillClass:
+      "border border-emerald-500/35 bg-emerald-500/[0.08] text-emerald-800 dark:border-emerald-400/45 dark:bg-emerald-500/12 dark:text-emerald-200",
+  },
 };
 
 function statusCfg(entry: CrossCpeTelemetryEntry) {
@@ -47,8 +73,12 @@ function statusCfg(entry: CrossCpeTelemetryEntry) {
 
 function severityRowClass(entry: CrossCpeTelemetryEntry): string {
   const s = entry.status ?? "OK";
-  if (s === "REBOOT" || s === "LOW_MEM") return "bg-red-50 dark:bg-red-900/15 border-red-200 dark:border-red-800";
-  if (s === "MEMLEAK") return "bg-orange-50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800";
+  if (s === "REBOOT" || s === "LOW_MEM") {
+    return "bg-destructive/[0.07] dark:bg-destructive/15 border-destructive/20 dark:border-destructive/35";
+  }
+  if (s === "MEMLEAK") {
+    return "bg-amber-500/[0.06] dark:bg-amber-500/12 border-amber-500/25 dark:border-amber-400/35";
+  }
   return "border-border";
 }
 
@@ -92,6 +122,7 @@ const MEMORY_TRACE_COLORS: Record<string, { color: string; dash?: Dash }> = {
 export default function TelemetryOverviewTab() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
 
   const [sortKey, setSortKey] = useState<SortKey>("memory_free_min");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -373,35 +404,35 @@ export default function TelemetryOverviewTab() {
           icon={<StorageIcon style={{ fontSize: 18, color: "#1a73e8" }} />}
           label="Total CPEs"
           value={fs.total}
-          bgClass="bg-blue-50 dark:bg-blue-900/20"
+          accentClass="border-l-blue-500"
         />
         <SummaryBadge
           icon={<RestartAltIcon style={{ fontSize: 18, color: "#f9ab00" }} />}
           label="With Reboots"
           value={fs.with_reboots}
           sub={fs.total > 0 ? `${Math.round((fs.with_reboots / fs.total) * 100)}%` : undefined}
-          bgClass="bg-yellow-50 dark:bg-yellow-900/20"
+          accentClass="border-l-amber-500"
         />
         <SummaryBadge
           icon={<WarningAmberIcon style={{ fontSize: 18, color: "#e8710a" }} />}
           label="Low Memory"
           value={fs.with_low_memory}
           sub={fs.total > 0 ? `${Math.round((fs.with_low_memory / fs.total) * 100)}%` : undefined}
-          bgClass="bg-orange-50 dark:bg-orange-900/20"
+          accentClass="border-l-orange-500"
         />
         <SummaryBadge
           icon={<ErrorIcon style={{ fontSize: 18, color: "#d93025" }} />}
           label="Reboots + Low Mem"
           value={fs.with_both}
           sub={fs.total > 0 ? `${Math.round((fs.with_both / fs.total) * 100)}%` : undefined}
-          bgClass="bg-red-50 dark:bg-red-900/20"
+          accentClass="border-l-red-500"
         />
         <SummaryBadge
           icon={<RestartAltIcon style={{ fontSize: 18, color: "#7b1fa2" }} />}
           label="Short Reboots"
           value={data.reboot_analytics?.short_reboots_count ?? 0}
           sub={data.reboot_analytics?.total_reboot_events ? `${Math.round(((data.reboot_analytics?.short_reboots_count ?? 0) / data.reboot_analytics.total_reboot_events) * 100)}%` : undefined}
-          bgClass="bg-purple-50 dark:bg-purple-900/20"
+          accentClass="border-l-violet-500"
         />
       </div>
 
@@ -442,7 +473,7 @@ export default function TelemetryOverviewTab() {
               </h3>
             </div>
             <div className="overflow-auto max-h-[min(72vh,720px)]">
-              <table className="text-[11px] border-collapse w-full min-w-[880px]">
+              <table className="text-[11px] border-collapse w-full min-w-[880px] [&_td]:selection:bg-primary/35 [&_td]:selection:text-foreground">
                 <thead className="sticky top-0 z-10 bg-card shadow-sm">
                   <tr className="border-b border-border bg-muted/20">
                     <ThSort col="serial" label="Serial" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} SortIcon={SortIcon} />
@@ -488,10 +519,14 @@ export default function TelemetryOverviewTab() {
                           {cpe.reboot_types && (cpe.reboot_types.soft > 0 || cpe.reboot_types.hard > 0) ? (
                             <span className="flex gap-1 flex-wrap">
                               {cpe.reboot_types.soft > 0 && (
-                                <span className="px-1 rounded bg-blue-100 dark:bg-blue-900/30">{cpe.reboot_types.soft}S</span>
+                                <span className="px-1.5 py-0.5 rounded-md text-[9px] font-semibold border border-blue-500/40 bg-blue-500/10 text-blue-800 dark:text-blue-200">
+                                  {cpe.reboot_types.soft}S
+                                </span>
                               )}
                               {cpe.reboot_types.hard > 0 && (
-                                <span className="px-1 rounded bg-red-100 dark:bg-red-900/30">{cpe.reboot_types.hard}H</span>
+                                <span className="px-1.5 py-0.5 rounded-md text-[9px] font-semibold border border-red-500/40 bg-red-500/10 text-red-800 dark:text-red-200">
+                                  {cpe.reboot_types.hard}H
+                                </span>
                               )}
                             </span>
                           ) : (
@@ -520,7 +555,7 @@ export default function TelemetryOverviewTab() {
                         </td>
                         <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">{fmtMemory(cpe.memory_total, unit)}</td>
                         <td className="px-2 py-1.5 text-center">
-                          <StatusBadge status={cpe.status ?? "OK"} cfg={cfg} />
+                          <StatusBadge cfg={cfg} />
                         </td>
                       </tr>
                     );
@@ -593,7 +628,7 @@ export default function TelemetryOverviewTab() {
                       })),
                       rebootHoverTrace,
                     ]}
-                    layout={{
+                    layout={mergePlot({
                       height: 340,
                       margin: { l: 50, r: 20, t: 16, b: 40 },
                       xaxis: {
@@ -612,10 +647,8 @@ export default function TelemetryOverviewTab() {
                       annotations: rebootAnnotations,
                       legend: { orientation: "h", y: -0.18, font: { size: 10 } },
                       hovermode: "x unified",
-                      paper_bgcolor: "transparent",
-                      plot_bgcolor: "transparent",
                       font: { family: "Roboto, sans-serif", size: 11 },
-                    }}
+                    })}
                     config={{ displayModeBar: true, modeBarButtonsToRemove: ["lasso2d", "select2d", "toImage"], displaylogo: false }}
                     useResizeHandler
                     style={{ width: "100%" }}
@@ -649,27 +682,27 @@ export default function TelemetryOverviewTab() {
                   label="WiFi channel changes"
                   value={data.wifi_fleet_summary.cpes_with_channel_changes}
                   sub={fs.total > 0 ? `${Math.round((data.wifi_fleet_summary.cpes_with_channel_changes / fs.total) * 100)}% of CPEs` : undefined}
-                  bgClass="bg-teal-50 dark:bg-teal-900/20"
+                  accentClass="border-l-teal-500"
                 />
                 <SummaryBadge
                   icon={<WifiIcon style={{ fontSize: 18, color: "#6a1b9a" }} />}
                   label="DFS hint (5 GHz)"
                   value={data.wifi_fleet_summary.cpes_with_dfs_hint_events}
                   sub="EU-indicative"
-                  bgClass="bg-violet-50 dark:bg-violet-900/20"
+                  accentClass="border-l-violet-600"
                 />
                 <SummaryBadge
                   icon={<WifiIcon style={{ fontSize: 18, color: "#e65100" }} />}
                   label="Crowded WiFi util"
                   value={data.wifi_fleet_summary.cpes_wifi_crowded}
                   sub={fs.total > 0 ? `${Math.round((data.wifi_fleet_summary.cpes_wifi_crowded / fs.total) * 100)}%` : undefined}
-                  bgClass="bg-amber-50 dark:bg-amber-900/20"
+                  accentClass="border-l-amber-600"
                 />
                 <SummaryBadge
                   icon={<WifiIcon style={{ fontSize: 18, color: "#1565c0" }} />}
                   label="Channel events (total)"
                   value={data.wifi_fleet_summary.total_channel_events}
-                  bgClass="bg-sky-50 dark:bg-sky-900/20"
+                  accentClass="border-l-sky-500"
                 />
               </div>
             </div>
@@ -1089,15 +1122,10 @@ function WifiRfDetailPanel({ serial, wifi }: { serial: string; wifi: WifiRfPaylo
   );
 }
 
-function StatusBadge({ status, cfg }: { status: string; cfg: typeof STATUS_CFG[string] }) {
+function StatusBadge({ cfg }: { cfg: (typeof STATUS_CFG)[string] }) {
   const Icon = cfg.icon;
-  const textColor = status === "OK"
-    ? "text-green-700 dark:text-green-400"
-    : status === "MEMLEAK"
-      ? "text-orange-700 dark:text-orange-400"
-      : "text-red-700 dark:text-red-400";
   return (
-    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full ${cfg.bg} ${cfg.darkBg} ${textColor} text-[9px] font-bold`}>
+    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${cfg.pillClass}`}>
       <Icon style={{ fontSize: 10 }} /> {cfg.label}
     </span>
   );
@@ -1108,19 +1136,21 @@ function SummaryBadge({
   label,
   value,
   sub,
-  bgClass,
+  accentClass,
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
   sub?: string;
-  bgClass: string;
+  accentClass: string;
 }) {
   return (
-    <div className={`${bgClass} border border-border rounded-xl p-3 flex items-center gap-3`}>
-      <div className="rounded-lg bg-white/60 dark:bg-black/20 p-2">{icon}</div>
+    <div
+      className={`bg-card border border-border rounded-xl p-3 flex items-center gap-3 border-l-4 ${accentClass}`}
+    >
+      <div className="rounded-lg bg-muted/50 p-2 ring-1 ring-border/80">{icon}</div>
       <div>
-        <div className="text-xl font-bold tabular-nums">
+        <div className="text-xl font-bold tabular-nums text-foreground">
           {value}
           {sub && <span className="text-xs font-normal text-muted-foreground ml-1">({sub})</span>}
         </div>

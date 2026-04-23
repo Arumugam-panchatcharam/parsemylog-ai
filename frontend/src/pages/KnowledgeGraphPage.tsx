@@ -29,6 +29,7 @@ import {
 
 import { ArchitectureGraphView } from "@/components/knowledge-graph/ArchitectureGraphView";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/hooks/useTheme";
 
 import CircularProgress from "@mui/material/CircularProgress";
 import AddIcon from "@mui/icons-material/Add";
@@ -237,6 +238,9 @@ function columnHeaderNodes(): Node[] {
 
 export default function KnowledgeGraphPage() {
   const qc = useQueryClient();
+  const { resolvedTheme } = useTheme();
+  const flowDotColor =
+    resolvedTheme === "dark" ? "rgba(154, 160, 166, 0.35)" : "rgba(95, 99, 104, 0.35)";
 
   // Graph list
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -699,7 +703,7 @@ export default function KnowledgeGraphPage() {
             fitView
             className="bg-background"
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={flowDotColor} />
             <Controls />
             <MiniMap
               nodeColor={(n) => {

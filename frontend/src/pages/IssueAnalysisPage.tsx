@@ -10,6 +10,7 @@ import {
   type IssueAnalysisCPEReport,
   type BatchJob,
 } from "../api/endpoints";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import CircularProgress from "@mui/material/CircularProgress";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -22,6 +23,7 @@ import AccountTreeIcon from "@mui/icons-material/AccountTree";
 export default function IssueAnalysisPage() {
   const { projectId } = useProject();
   const qc = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
 
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const [selectedGraphId, setSelectedGraphId] = useState<string>("");
@@ -275,12 +277,11 @@ export default function IssueAnalysisPage() {
                     },
                   },
                 ]}
-                layout={{
+                layout={mergePlot({
                   height: 280,
                   margin: { t: 10, b: 10, l: 10, r: 10 },
-                  paper_bgcolor: "transparent",
                   font: { size: 11 },
-                }}
+                })}
                 config={{ displayModeBar: false, responsive: true }}
                 className="w-full"
               />
@@ -339,6 +340,7 @@ function FleetOverview({
 }: {
   fleet: NonNullable<IssueAnalysisOverview["fleet_report"]>;
 }) {
+  const mergePlot = usePlotlyLayoutMerge();
   const ro = fleet.reboot_overview;
   const pa = fleet.problem_areas;
   const td = fleet.trigger_distribution;
@@ -394,12 +396,11 @@ function FleetOverview({
                 },
               },
             ]}
-            layout={{
+            layout={mergePlot({
               height: 250,
               margin: { t: 10, b: 10, l: 10, r: 10 },
-              paper_bgcolor: "transparent",
               font: { size: 11 },
-            }}
+            })}
             config={{ displayModeBar: false, responsive: true }}
             className="w-full"
           />
@@ -423,6 +424,7 @@ function FleetOverview({
 // ---------------------------------------------------------------------------
 
 function CPEDetail({ report }: { report: IssueAnalysisCPEReport }) {
+  const mergePlot = usePlotlyLayoutMerge();
   const ident = report.identity;
   const ts = report.telemetry_timeseries;
   const timestamps = ts?.timestamps ?? [];
@@ -435,20 +437,19 @@ function CPEDetail({ report }: { report: IssueAnalysisCPEReport }) {
     line: { color: "red", width: 2, dash: "dash" as const },
   }));
 
-  const chartLayout = (title: string, yTitle: string, extra: Record<string, unknown> = {}) => ({
-    height: 220,
-    margin: { t: 30, b: 30, l: 55, r: 20 },
-    title: { text: title, font: { size: 13 } },
-    shapes: rebootShapes,
-    xaxis: { type: "date" as const },
-    yaxis: { title: { text: yTitle } },
-    paper_bgcolor: "transparent",
-    plot_bgcolor: "rgba(0,0,0,0.02)",
-    font: { size: 11 },
-    showlegend: true,
-    legend: { orientation: "h" as const, y: -0.2 },
-    ...extra,
-  });
+  const chartLayout = (title: string, yTitle: string, extra: Record<string, unknown> = {}) =>
+    mergePlot({
+      height: 220,
+      margin: { t: 30, b: 30, l: 55, r: 20 },
+      title: { text: title, font: { size: 13 } },
+      shapes: rebootShapes,
+      xaxis: { type: "date" as const },
+      yaxis: { title: { text: yTitle } },
+      font: { size: 11 },
+      showlegend: true,
+      legend: { orientation: "h" as const, y: -0.2 },
+      ...extra,
+    });
 
   const plotCfg = { displayModeBar: false, responsive: true };
 

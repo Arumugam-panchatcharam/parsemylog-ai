@@ -1,14 +1,24 @@
 import { Outlet } from "react-router-dom";
-import { memo } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import Sidebar from "./Sidebar";
 import ToolsBar from "./ToolsBar";
 import { SidebarProvider } from "./sidebarContext";
-import { useGlobalAppShortcuts } from "@/hooks/useGlobalAppShortcuts";
+import { useGlobalAppShortcuts, OPEN_ABOUT_EVENT } from "@/hooks/useGlobalAppShortcuts";
+import AboutDialog from "@/components/AboutDialog";
 import { ErrorBoundary } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 function AppLayoutInner() {
   useGlobalAppShortcuts();
+  const [aboutOpen, setAboutOpen] = useState(false);
+
+  useEffect(() => {
+    const onOpenAbout = () => setAboutOpen(true);
+    window.addEventListener(OPEN_ABOUT_EVENT, onOpenAbout);
+    return () => window.removeEventListener(OPEN_ABOUT_EVENT, onOpenAbout);
+  }, []);
+
+  const handleAboutClose = useCallback(() => setAboutOpen(false), []);
 
   return (
     <SidebarProvider>
@@ -25,7 +35,7 @@ function AppLayoutInner() {
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
-          <ToolsBar />
+          <ToolsBar onOpenAbout={() => setAboutOpen(true)} />
           <main
             id="main-content"
             tabIndex={-1}
@@ -37,6 +47,7 @@ function AppLayoutInner() {
           </main>
         </div>
       </div>
+      <AboutDialog open={aboutOpen} onClose={handleAboutClose} />
     </SidebarProvider>
   );
 }

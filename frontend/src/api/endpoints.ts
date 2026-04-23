@@ -885,10 +885,15 @@ export const patternAnalyzerApi = {
   exportUrl: (projectId: string, format: "yaml" | "json") =>
     `${api.defaults.baseURL}/projects/${projectId}/regex-patterns/export?format=${format}`,
   getReboots: (projectId: string, cpeId?: string | null) =>
-    api.get<{ reboots: Array<{ timestamp: string; reason: string }> }>(
-      `/projects/${projectId}/reboots`,
-      { params: cpeId ? { cpe_id: cpeId } : undefined }
-    ),
+    api.get<{
+      reboots: Array<{
+        timestamp: string;
+        reason: string;
+        reboot_type?: string;
+        is_short_reboot?: boolean;
+        uptime_before_reboot_sec?: number;
+      }>;
+    }>(`/projects/${projectId}/reboots`, { params: cpeId ? { cpe_id: cpeId } : undefined }),
   scan: (projectId: string, data: {
     patterns: UserPattern[];
     bucket_minutes: number;
@@ -909,8 +914,15 @@ export const patternAnalyzerApi = {
   getScanResults: (projectId: string, scanId: string, cpeId?: string | null) =>
     api.get<{
       traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
-      reboots: Array<{ timestamp: string; reason: string }>;
+      reboots: Array<{
+        timestamp: string;
+        reason: string;
+        reboot_type?: string;
+        is_short_reboot?: boolean;
+        uptime_before_reboot_sec?: number;
+      }>;
       total_matches: number;
+      cpe_serial?: string | null;
     }>(`/projects/${projectId}/regex-scan/${scanId}/results`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),

@@ -1012,13 +1012,17 @@ export default function LogViewerPage() {
           <div
             ref={logContainerRef}
             className={cn(
-              "flex-1 overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll transition-opacity",
+              "flex-1 overflow-auto bg-log-pane text-log-pane-foreground log-viewer log-scroll transition-opacity",
               contentIsPlaceholder && "opacity-65",
             )}
             style={{ fontSize: `${fontSize}px` }}
           >
-            {!selectedFile && <div className="flex items-center justify-center h-full text-slate-500 text-sm">Select a file from the sidebar to view its contents</div>}
-            {contentLoading && <div className="p-4 text-slate-400 text-xs">Loading...</div>}
+            {!selectedFile && (
+              <div className="flex items-center justify-center h-full text-sm text-log-pane-foreground/55">
+                Select a file from the sidebar to view its contents
+              </div>
+            )}
+            {contentLoading && <div className="p-4 text-xs text-log-pane-foreground/55">Loading...</div>}
             {fileContent?.lines?.map((line: string, idx: number) => {
               const lineNum = fileContent.line_numbers?.[idx] ?? (fileContent.start_line || 1) + idx;
               return (
@@ -1029,9 +1033,11 @@ export default function LogViewerPage() {
                     setQuickDedupSelectedLine(line);
                     setQuickDedupModalOpen(true);
                   }}
-                  className="hover:bg-slate-800/50 whitespace-pre-wrap px-2 sm:px-3 leading-relaxed transition-colors duration-500"
+                  className="hover:bg-black/[0.06] dark:hover:bg-white/[0.06] whitespace-pre-wrap px-2 sm:px-3 leading-relaxed transition-colors duration-500"
                 >
-                  <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{lineNum}</span>
+                  <span className="select-none mr-3 inline-block w-12 text-right tabular-nums text-log-pane-foreground/55">
+                    {lineNum}
+                  </span>
                   {renderLine(line)}
                 </div>
               );
@@ -1057,7 +1063,7 @@ export default function LogViewerPage() {
                 {showSearch ? <KeyboardArrowDownIcon style={{ fontSize: 16 }} /> : <KeyboardArrowUpIcon style={{ fontSize: 16 }} />}
               </button>
               {showSearch && (
-                <div className="overflow-auto bg-slate-900 text-slate-200 log-viewer log-scroll" style={{ fontSize: `${fontSize}px`, height: `${searchPanelHeight}px` }}>
+                <div className="overflow-auto bg-log-pane text-log-pane-foreground log-viewer log-scroll" style={{ fontSize: `${fontSize}px`, height: `${searchPanelHeight}px` }}>
                   {isAllFilesSearch
                     ? (searchResults.matches as Array<{ filename: string; line_number: number; text: string; content_page?: number }>).map((m, idx) => (
                         <div
@@ -1069,10 +1075,17 @@ export default function LogViewerPage() {
                             setScrollToLine(m.line_number);
                           }}
                           title="Double-click to open file and jump to line"
-                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-2 sm:px-3 leading-relaxed select-none"
+                          className="hover:bg-black/[0.06] dark:hover:bg-white/[0.06] cursor-pointer whitespace-pre-wrap px-2 sm:px-3 leading-relaxed select-none"
                         >
-                          <span className="text-slate-500 select-none mr-2 text-[10px] truncate max-w-[120px] inline-block align-top" title={m.filename}>{m.filename}</span>
-                          <span className="text-slate-600 select-none mr-2 inline-block w-10 text-right tabular-nums text-[10px]">{m.line_number}</span>
+                          <span
+                            className="select-none mr-2 text-[10px] truncate max-w-[120px] inline-block align-top text-log-pane-foreground/55"
+                            title={m.filename}
+                          >
+                            {m.filename}
+                          </span>
+                          <span className="select-none mr-2 inline-block w-10 text-right tabular-nums text-[10px] text-log-pane-foreground/55">
+                            {m.line_number}
+                          </span>
                           {renderLine(m.text)}
                         </div>
                       ))
@@ -1085,9 +1098,11 @@ export default function LogViewerPage() {
                             setScrollToLine(m.line_number);
                           }}
                           title="Double-click to jump to this line"
-                          className="hover:bg-slate-800/50 cursor-pointer whitespace-pre-wrap px-2 sm:px-3 leading-relaxed select-none"
+                          className="hover:bg-black/[0.06] dark:hover:bg-white/[0.06] cursor-pointer whitespace-pre-wrap px-2 sm:px-3 leading-relaxed select-none"
                         >
-                          <span className="text-slate-600 select-none mr-3 inline-block w-12 text-right tabular-nums">{m.line_number}</span>
+                          <span className="select-none mr-3 inline-block w-12 text-right tabular-nums text-log-pane-foreground/55">
+                            {m.line_number}
+                          </span>
                           {renderLine(m.text)}
                         </div>
                       ))}

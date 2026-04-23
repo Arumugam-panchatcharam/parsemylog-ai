@@ -5,16 +5,11 @@ import { pcapApi } from "@/api/endpoints";
 import type { Pcap1905Overview } from "@/api/endpoints";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import CircularProgress from "@mui/material/CircularProgress";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 
 function epochToTime(epoch: number): string {
   return new Date(epoch * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
-
-const CHART_BG = {
-  paper_bgcolor: "transparent" as const,
-  plot_bgcolor: "transparent" as const,
-  font: { size: 10, color: "#9ca3af" },
-};
 
 const PLOT_CFG = { displayModeBar: false, responsive: true } as const;
 const PIE_COLORS = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f59e0b", "#10b981", "#ef4444", "#ec4899", "#6366f1", "#14b8a6", "#f97316", "#84cc16", "#0ea5e9"];
@@ -39,6 +34,7 @@ interface Props {
 }
 
 export default function Mesh1905Tab({ data: initialData, filename }: Props) {
+  const mergePlot = usePlotlyLayoutMerge();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(EMPTY_FILTERS);
 
@@ -210,13 +206,13 @@ export default function Mesh1905Tab({ data: initialData, filename }: Props) {
                 textposition: "outside" as const,
                 textfont: { size: 9 },
               }]}
-              layout={{
-                ...CHART_BG, autosize: true,
+              layout={mergePlot({
+                autosize: true,
                 margin: { l: 40, r: 10, t: 10, b: 90 },
                 xaxis: { tickangle: -45, tickfont: { size: 9 }, showgrid: false },
-                yaxis: { showgrid: true, gridcolor: "#374151", tickfont: { size: 9 } },
+                yaxis: { showgrid: true, tickfont: { size: 9 } },
                 showlegend: false,
-              }}
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />
@@ -276,13 +272,13 @@ export default function Mesh1905Tab({ data: initialData, filename }: Props) {
                   name: type, hoverinfo: "text" as const,
                 }));
               })()}
-              layout={{
-                ...CHART_BG, autosize: true,
+              layout={mergePlot({
+                autosize: true,
                 margin: { l: 80, r: 16, t: 10, b: 44 },
                 yaxis: { showgrid: false, automargin: true },
-                xaxis: { showgrid: true, gridcolor: "#374151", tickangle: -35, tickfont: { size: 9 } },
+                xaxis: { showgrid: true, tickangle: -35, tickfont: { size: 9 } },
                 showlegend: false,
-              }}
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />

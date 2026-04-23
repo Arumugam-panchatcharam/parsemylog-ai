@@ -1,7 +1,9 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useMemo, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ThemeProvider as MuiThemeProvider, createTheme } from "@mui/material/styles";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { ThemeProvider, useTheme } from "@/hooks/useTheme";
 import { ProjectProvider } from "@/hooks/useProject";
 import { CPEProvider } from "@/hooks/useCPE";
 import AppLayout from "@/components/layout/AppLayout";
@@ -71,6 +73,21 @@ function AdminRoute({ children }: { children: ReactNode }) {
   }
   if (!user?.is_admin) return <Navigate to="/dashboard" />;
   return <>{children}</>;
+}
+
+function MuiThemeBridge({ children }: { children: ReactNode }) {
+  const { resolvedTheme } = useTheme();
+  const muiTheme = useMemo(
+    () =>
+      createTheme({
+        palette: {
+          mode: resolvedTheme === "dark" ? "dark" : "light",
+          primary: { main: resolvedTheme === "dark" ? "#8ab4f8" : "#1a73e8" },
+        },
+      }),
+    [resolvedTheme],
+  );
+  return <MuiThemeProvider theme={muiTheme}>{children}</MuiThemeProvider>;
 }
 
 function AppRoutes() {
@@ -145,19 +162,23 @@ function AppRoutes() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ProjectProvider>
-          <CPEProvider>
-            <ErrorBoundary fallbackTitle="Application error">
-              <BrowserRouter>
-                <Suspense fallback={<RouteFallback />}>
-                  <AppRoutes />
-                </Suspense>
-              </BrowserRouter>
-            </ErrorBoundary>
-          </CPEProvider>
-        </ProjectProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <MuiThemeBridge>
+          <AuthProvider>
+            <ProjectProvider>
+              <CPEProvider>
+                <ErrorBoundary fallbackTitle="Application error">
+                  <BrowserRouter>
+                    <Suspense fallback={<RouteFallback />}>
+                      <AppRoutes />
+                    </Suspense>
+                  </BrowserRouter>
+                </ErrorBoundary>
+              </CPEProvider>
+            </ProjectProvider>
+          </AuthProvider>
+        </MuiThemeBridge>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

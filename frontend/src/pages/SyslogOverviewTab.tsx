@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { syslogApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import ArticleIcon from "@mui/icons-material/Article";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -270,6 +271,7 @@ function compareChannelTransitionLabelsAsc(a: string, b: string): number {
 export default function SyslogOverviewTab() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
   const [showErrorDetails, setShowErrorDetails] = useState(false);
   const [expandedCpe, setExpandedCpe] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -552,7 +554,7 @@ export default function SyslogOverviewTab() {
                 <div className="p-4">
                   <Plot
                     data={categoryBarChart}
-                    layout={{
+                    layout={mergePlot({
                       height: 300,
                       margin: { l: 60, r: 15, t: 5, b: 80 },
                       xaxis: {
@@ -564,10 +566,8 @@ export default function SyslogOverviewTab() {
                         title: { text: "Event Count" },
                         tickfont: { size: 10 },
                       },
-                      paper_bgcolor: "transparent",
-                      plot_bgcolor: "transparent",
                       font: { family: "Roboto, sans-serif", size: 11 },
-                    }}
+                    })}
                     config={NO_TOOLBAR}
                     style={{ width: "100%" }}
                   />
@@ -582,11 +582,9 @@ export default function SyslogOverviewTab() {
                 <div className="p-4">
                   <Plot
                     data={categoryPieChart}
-                    layout={{
+                    layout={mergePlot({
                       height: 300,
                       margin: { l: 15, r: 15, t: 5, b: 15 },
-                      paper_bgcolor: "transparent",
-                      plot_bgcolor: "transparent",
                       font: { family: "Roboto, sans-serif", size: 11 },
                       showlegend: true,
                       legend: {
@@ -595,7 +593,7 @@ export default function SyslogOverviewTab() {
                         y: 0.5,
                         font: { size: 10 },
                       },
-                    }}
+                    })}
                     config={NO_TOOLBAR}
                     style={{ width: "100%" }}
                   />
@@ -757,30 +755,28 @@ export default function SyslogOverviewTab() {
                   {reasonRadioPivot && reasonRadioPivot.stackTraces.length > 0 ? (
                     <Plot
                       data={reasonRadioPivot.stackTraces}
-                      layout={{
+                      layout={mergePlot({
                         height: CHANNEL_SECTION_CHART_HEIGHT_PX,
                         margin: { l: 60, r: 15, t: 5, b: 88 },
-                        barmode: 'stack',
+                        barmode: "stack",
                         xaxis: {
-                          title: { text: 'Reason' },
+                          title: { text: "Reason" },
                           tickangle: -45,
                           tickfont: { size: 10 },
                         },
                         yaxis: {
-                          title: { text: 'Count' },
+                          title: { text: "Count" },
                           tickfont: { size: 10 },
                         },
                         legend: {
-                          orientation: 'h',
+                          orientation: "h",
                           y: -0.28,
                           x: 0.5,
-                          xanchor: 'center',
+                          xanchor: "center",
                           font: { size: 10 },
                         },
-                        paper_bgcolor: 'transparent',
-                        plot_bgcolor: 'transparent',
-                        font: { family: 'Roboto, sans-serif', size: 11 },
-                      }}
+                        font: { family: "Roboto, sans-serif", size: 11 },
+                      })}
                       config={NO_TOOLBAR}
                       style={{ width: '100%', minHeight: CHANNEL_SECTION_CHART_HEIGHT_PX }}
                     />
@@ -816,21 +812,19 @@ export default function SyslogOverviewTab() {
                         },
                         hovertemplate: '<b>%{y}</b><br>Count: %{x:,}<extra></extra>',
                       }]}
-                      layout={{
+                      layout={mergePlot({
                         height: CHANNEL_SECTION_CHART_HEIGHT_PX,
                         margin: { l: 100, r: 15, t: 5, b: 40 },
                         xaxis: {
-                          title: { text: 'Count' },
+                          title: { text: "Count" },
                           tickfont: { size: 10 },
                         },
                         yaxis: {
                           tickfont: { size: 9 },
                           automargin: true,
                         },
-                        paper_bgcolor: 'transparent',
-                        plot_bgcolor: 'transparent',
-                        font: { family: 'Roboto, sans-serif', size: 10 },
-                      }}
+                        font: { family: "Roboto, sans-serif", size: 10 },
+                      })}
                       config={NO_TOOLBAR}
                       style={{ width: '100%', minHeight: CHANNEL_SECTION_CHART_HEIGHT_PX }}
                     />
@@ -998,21 +992,19 @@ export default function SyslogOverviewTab() {
                             },
                             hovertemplate: '<b>%{label}</b><br>Switches: %{value:,}<br>%{percent}<extra></extra>',
                           }]}
-                          layout={{
+                          layout={mergePlot({
                             autosize: true,
                             margin: { l: 8, r: 8, t: 8, b: 8 },
-                            paper_bgcolor: 'transparent',
-                            plot_bgcolor: 'transparent',
-                            font: { family: 'Roboto, sans-serif', size: 10 },
+                            font: { family: "Roboto, sans-serif", size: 10 },
                             showlegend: true,
                             legend: {
-                              orientation: 'h',
+                              orientation: "h",
                               y: -0.08,
                               x: 0.5,
-                              xanchor: 'center',
+                              xanchor: "center",
                               font: { size: 9 },
                             },
-                          }}
+                          })}
                           config={PLOT_CONFIG_FILL}
                           useResizeHandler
                           style={{ width: '100%', height: '100%', flex: 1, minHeight: '14rem' }}
@@ -1044,21 +1036,19 @@ export default function SyslogOverviewTab() {
                         },
                         hovertemplate: '<b>%{label}</b><br>Switches: %{value:,}<br>%{percent}<extra></extra>',
                       }]}
-                      layout={{
+                      layout={mergePlot({
                         autosize: true,
                         margin: { l: 8, r: 8, t: 8, b: 8 },
-                        paper_bgcolor: 'transparent',
-                        plot_bgcolor: 'transparent',
-                        font: { family: 'Roboto, sans-serif', size: 11 },
+                        font: { family: "Roboto, sans-serif", size: 11 },
                         showlegend: true,
                         legend: {
-                          orientation: 'h',
+                          orientation: "h",
                           y: -0.08,
                           x: 0.5,
-                          xanchor: 'center',
+                          xanchor: "center",
                           font: { size: 10 },
                         },
-                      }}
+                      })}
                       config={PLOT_CONFIG_FILL}
                       useResizeHandler
                       style={{ width: '100%', height: '100%', flex: 1, minHeight: '16rem' }}

@@ -1,22 +1,18 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { memo, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import logoImg from "@/assets/logo.png";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import InfoIcon from "@mui/icons-material/Info";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
 import { cn } from "@/lib/utils";
 import CPESelector from "@/components/CPESelector";
 import { chatApi, patternsApi } from "@/api/endpoints";
-import AboutDialog from "@/components/AboutDialog";
 import { AppNavLink } from "./AppNavLink";
 import { mainNav, workspaceNav } from "./navConfig";
-import { OPEN_ABOUT_EVENT } from "@/hooks/useGlobalAppShortcuts";
 import { useSidebar } from "@/hooks/useSidebar";
 
 function SidebarInner() {
@@ -24,11 +20,8 @@ function SidebarInner() {
   const { projectId, projectName, clearProject } = useProject();
   const { cpeId, clearCPE } = useCPE();
   const location = useLocation();
-  const navigate = useNavigate();
   const { collapsed, toggleCollapsed } = useSidebar();
-  const [aboutOpen, setAboutOpen] = useState(false);
   const isWorkspace = location.pathname.startsWith("/workspace");
-  const isProfile = location.pathname === "/profile";
 
   const [llmGate, setLlmGate] = useState({
     enabled: false,
@@ -59,14 +52,6 @@ function SidebarInner() {
     if (user?.is_admin) return available;
     return enabled && available && indexingOk;
   }, [isWorkspace, projectId, user?.is_admin, llmGate]);
-
-  useEffect(() => {
-    const onOpenAbout = () => setAboutOpen(true);
-    window.addEventListener(OPEN_ABOUT_EVENT, onOpenAbout);
-    return () => window.removeEventListener(OPEN_ABOUT_EVENT, onOpenAbout);
-  }, []);
-
-  const handleAboutClose = useCallback(() => setAboutOpen(false), []);
 
   return (
     <aside
@@ -175,63 +160,6 @@ function SidebarInner() {
           </>
         )}
       </nav>
-
-      <div className="border-t border-sidebar-border p-3">
-        <button
-          type="button"
-          onClick={() => setAboutOpen(true)}
-          title={collapsed ? "About" : undefined}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
-            "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-            collapsed && "justify-center px-2"
-          )}
-        >
-          <InfoIcon style={{ fontSize: 18 }} className="shrink-0" />
-          {!collapsed ? "About" : null}
-        </button>
-      </div>
-
-      {user ? (
-        <div className="border-t border-sidebar-border p-3">
-          <button
-            type="button"
-            onClick={() => navigate("/profile")}
-            title="Profile & Settings"
-            className={cn(
-              "flex w-full items-center gap-3 rounded-lg transition-colors",
-              collapsed ? "justify-center" : "px-2 py-1.5 hover:bg-sidebar-accent",
-              isProfile && "bg-sidebar-accent"
-            )}
-          >
-            <div
-              className={cn(
-                "flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full bg-primary/15 text-sm font-semibold uppercase text-primary",
-                isProfile && "ring-2 ring-primary"
-              )}
-            >
-              {user.username.charAt(0)}
-            </div>
-            {!collapsed ? (
-              <div className="min-w-0 text-left">
-                <p className="flex items-center gap-1 truncate text-sm font-medium text-sidebar-foreground">
-                  {user.username}
-                  {user.is_admin ? (
-                    <span title="Administrator">
-                      <AdminPanelSettingsIcon style={{ fontSize: 13, color: "#f9ab00" }} />
-                    </span>
-                  ) : null}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {user.email || "Manage account"}
-                </p>
-              </div>
-            ) : null}
-          </button>
-        </div>
-      ) : null}
-
-      <AboutDialog open={aboutOpen} onClose={handleAboutClose} />
     </aside>
   );
 }

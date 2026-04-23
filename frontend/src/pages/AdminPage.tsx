@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminApi } from "@/api/endpoints";
 import type { AdminNatco, PatternSubmission, UserPattern, DomainPatterns, MaintenanceWindow } from "@/api/endpoints";
@@ -56,7 +56,7 @@ export default function AdminPage() {
   ];
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="w-full max-w-none min-w-0 p-4 sm:p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <AdminPanelSettingsIcon style={{ fontSize: 28 }} /> Admin Panel
@@ -125,6 +125,13 @@ function UsersTab() {
     files: users.reduce((s, u) => s + u.file_count, 0),
   } : null;
 
+  const sortedUsers = useMemo(() => {
+    if (!users?.length) return users;
+    return [...users].sort((a, b) =>
+      a.username.localeCompare(b.username, undefined, { sensitivity: "base" }),
+    );
+  }, [users]);
+
   const statItems = [
     { label: "Users", value: stats?.total, icon: PeopleIcon, color: "#1a73e8" },
     { label: "Admins", value: stats?.admins, icon: AdminPanelSettingsIcon, color: "#f9ab00" },
@@ -154,12 +161,15 @@ function UsersTab() {
       )}
 
       {isLoading && <p className="text-muted-foreground">Loading...</p>}
-      <div className="space-y-2">
-        {users?.map((u) => (
-          <div key={u.id} className="bg-card border border-border rounded-2xl p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-sm flex items-center gap-1">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        {sortedUsers?.map((u) => (
+          <div
+            key={u.id}
+            className="bg-card border border-border rounded-2xl p-4 h-full flex flex-col"
+          >
+            <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <h3 className="font-semibold text-sm flex items-center gap-1 flex-wrap">
                   {u.username}
                   {u.is_admin && (
                     <span title="Administrator">
@@ -167,10 +177,14 @@ function UsersTab() {
                     </span>
                   )}
                 </h3>
-                <p className="text-xs text-muted-foreground">{u.email || "No email"} - Created: {formatDate(u.created_at)}</p>
-                <p className="text-xs text-muted-foreground mt-1">{u.project_count} projects, {u.file_count} files</p>
+                <p className="text-xs text-muted-foreground break-words">
+                  {u.email || "No email"} — Created: {formatDate(u.created_at)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {u.project_count} projects, {u.file_count} files
+                </p>
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1 shrink-0 sm:self-start">
                 <button onClick={() => setViewProjectsUserId(u.id)} className="p-1.5 rounded hover:bg-accent" title="View Projects">
                   <FolderOpenIcon style={{ fontSize: 18, color: "#1a73e8" }} />
                 </button>
@@ -750,15 +764,15 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-card border rounded-2xl shadow-lg w-full max-w-4xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border flex items-center justify-between shrink-0">
-          <div>
-            <h3 className="text-lg font-semibold flex items-center gap-2">
+        <div className="px-6 py-4 border-b border-border flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shrink-0">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
               <PublicIcon style={{ fontSize: 20 }} />
               Global Patterns {data?.natco && <span className="text-sm font-normal text-muted-foreground">- {data.natco.code}: {data.natco.name}</span>}
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">{Object.keys(domains).length} domains, {totalPatterns} patterns</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <button onClick={() => fileInputRef.current?.click()} title="Import patterns from JSON or YAML file" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-muted">
               <UploadFileIcon style={{ fontSize: 14 }} />
               Import JSON/YAML
@@ -771,6 +785,15 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
             <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} title="Save all pattern changes to database" className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
               {saveMutation.isPending ? <CircularProgress size={12} sx={{ color: "white" }} /> : <SaveIcon style={{ fontSize: 14 }} />}
               Save All
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close Global Patterns"
+              className="ml-auto sm:ml-0 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-300 bg-background text-red-600 hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/35 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-950/50 dark:hover:text-red-300"
+            >
+              <CloseIcon style={{ fontSize: 20 }} />
             </button>
           </div>
         </div>
@@ -845,7 +868,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                       <button onClick={() => removePattern(domain, idx)} title="Remove this pattern" className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20"><DeleteIcon style={{ fontSize: 14 }} /></button>
                                     </div>
                                     {filterEditTarget === fk && (
-                                      <div className="ml-8 mr-8 my-1 p-2 border border-purple-200 dark:border-purple-800 rounded-lg bg-purple-50/50 dark:bg-purple-900/10 space-y-2 text-xs">
+                                      <div className="ml-6 mr-2 my-2 p-3 border border-border rounded-lg bg-muted/50 dark:bg-muted/30 space-y-3 text-xs text-foreground">
                                         {/* Maintenance Window */}
                                         <div className="flex items-center gap-2">
                                           <ScheduleIcon style={{ fontSize: 14 }} className="text-purple-600 dark:text-purple-400 shrink-0" />
@@ -883,7 +906,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                             placeholder="min"
                                             className="px-1.5 py-0.5 rounded border border-border bg-background text-xs w-16"
                                           />
-                                          <span className="text-[10px] text-muted-foreground">minutes around reboot</span>
+                                          <span className="text-[10px] text-foreground/90">minutes around reboot</span>
                                           {hasRP && (
                                             <button onClick={() => updatePatternRP(domain, idx, null)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20" title="Clear reboot proximity">
                                               <CloseIcon style={{ fontSize: 12 }} />
@@ -902,7 +925,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                             placeholder="count"
                                             className="px-1.5 py-0.5 rounded border border-border bg-background text-xs w-20"
                                           />
-                                          <span className="text-[10px] text-muted-foreground">min frequency threshold</span>
+                                          <span className="text-[10px] text-foreground/90">min frequency threshold</span>
                                           {hasFT && (
                                             <button onClick={() => updatePatternFT(domain, idx, null)} className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20" title="Clear frequency threshold">
                                               <CloseIcon style={{ fontSize: 12 }} />
@@ -924,11 +947,6 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               </div>
             </>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 border-t border-border shrink-0">
-          <button onClick={onClose} className="w-full py-2.5 border border-border rounded-lg hover:bg-muted text-sm font-medium">Close</button>
         </div>
       </div>
     </div>
@@ -983,41 +1001,57 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
 
         return (
           <div key={idx} className="space-y-1">
-            <div className="flex items-center gap-3 px-3 py-1.5 bg-muted/30 rounded text-xs">
-              <span className={`w-4 h-4 rounded-full flex items-center justify-center ${p.enabled ? "bg-green-500" : "bg-gray-400"}`}>
+            <div className="flex items-center gap-3 px-3 py-1.5 bg-muted/40 dark:bg-muted/25 rounded-lg text-xs border border-border/60">
+              <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${p.enabled ? "bg-emerald-600 dark:bg-emerald-500" : "bg-muted-foreground/35"}`}>
                 {p.enabled ? <CheckCircleIcon style={{ fontSize: 12, color: "white" }} /> : null}
               </span>
               {p.change_type === "new" ? (
-                <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-[10px] font-bold shrink-0">NEW</span>
+                <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold shrink-0 border border-emerald-500/50 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200">
+                  NEW
+                </span>
               ) : p.change_type === "modified" ? (
-                <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold shrink-0">MODIFIED</span>
+                <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold shrink-0 border border-primary/45 bg-primary/10 text-foreground">
+                  MODIFIED
+                </span>
               ) : null}
               <span className="font-medium min-w-[120px]">{p.name}</span>
               <code className="font-mono text-[11px] text-muted-foreground flex-1 truncate">{p.regex}</code>
               {p.maintenance_window && (
-                <span className="shrink-0 px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded text-[10px]" title="Maintenance window">
-                  <ScheduleIcon style={{ fontSize: 10, marginRight: 2 }} />{p.maintenance_window.start}–{p.maintenance_window.end}
+                <span
+                  className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] border border-border bg-muted/50 text-foreground"
+                  title="Maintenance window"
+                >
+                  <ScheduleIcon style={{ fontSize: 10, marginRight: 2 }} className="text-violet-600 dark:text-violet-400 inline align-middle" />
+                  {p.maintenance_window.start}–{p.maintenance_window.end}
                 </span>
               )}
               {p.reboot_proximity_minutes != null && p.reboot_proximity_minutes > 0 && (
-                <span className="shrink-0 px-1.5 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 rounded text-[10px]" title="Reboot proximity">
-                  <RestartAltIcon style={{ fontSize: 10, marginRight: 2 }} />±{p.reboot_proximity_minutes}m
+                <span
+                  className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] border border-border bg-muted/50 text-foreground"
+                  title="Reboot proximity"
+                >
+                  <RestartAltIcon style={{ fontSize: 10, marginRight: 2 }} className="text-orange-600 dark:text-orange-400 inline align-middle" />
+                  ±{p.reboot_proximity_minutes}m
                 </span>
               )}
               {p.min_frequency_threshold != null && p.min_frequency_threshold > 0 && (
-                <span className="shrink-0 px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px]" title="Minimum frequency threshold">
-                  <FilterListIcon style={{ fontSize: 10, marginRight: 2 }} />&gt;{p.min_frequency_threshold}
+                <span
+                  className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] border border-border bg-muted/50 text-foreground"
+                  title="Minimum frequency threshold"
+                >
+                  <FilterListIcon style={{ fontSize: 10, marginRight: 2 }} className="text-sky-600 dark:text-sky-400 inline align-middle" />
+                  &gt;{p.min_frequency_threshold}
                 </span>
               )}
             </div>
             {changes.length > 0 && (
-              <div className="ml-7 px-3 py-1.5 bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded text-xs">
+              <div className="ml-4 sm:ml-6 px-3 py-2 bg-muted/40 border border-border rounded-lg text-xs">
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5">
                   {changes.map((c) => (
-                    <span key={c.label} className="text-[11px]">
+                    <span key={c.label} className="text-[11px] text-foreground/95">
                       <span className="text-muted-foreground">{c.label}:</span>{" "}
-                      <span className="line-through text-red-500 dark:text-red-400">{c.from}</span>{" → "}
-                      <span className="text-green-600 dark:text-green-400">{c.to}</span>
+                      <span className="line-through text-red-600/90 dark:text-red-400/95">{c.from}</span>{" → "}
+                      <span className="text-emerald-700 dark:text-emerald-300">{c.to}</span>
                     </span>
                   ))}
                 </div>
@@ -1063,11 +1097,17 @@ function ReviewTab() {
 
   const statusBadge = (status: string) => {
     const colors: Record<string, string> = {
-      pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-      approved: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-      rejected: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+      pending:
+        "border border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100",
+      approved:
+        "border border-emerald-500/40 bg-emerald-500/10 text-emerald-900 dark:text-emerald-100",
+      rejected: "border border-destructive/40 bg-destructive/10 text-destructive",
     };
-    return <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[status] || ""}`}>{status}</span>;
+    return (
+      <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${colors[status] || "border border-border bg-muted"}`}>
+        {status}
+      </span>
+    );
   };
 
   return (
@@ -1109,7 +1149,9 @@ function ReviewTab() {
                     {statusBadge(s.status)}
                     <span className="text-sm font-semibold">{s.domain}</span>
                     <span className="text-xs text-muted-foreground">by {s.username}</span>
-                    <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold">{s.natco_code}</span>
+                    <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold border border-primary/35 bg-primary/10 text-foreground">
+                      {s.natco_code}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">{s.patterns.length} pattern(s)</span>
@@ -1141,12 +1183,20 @@ function ReviewTab() {
                         rows={2}
                       />
                       <div className="flex gap-2">
-                        <button onClick={() => approveMutation.mutate(s.id)} disabled={approveMutation.isPending} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
-                          {approveMutation.isPending ? <CircularProgress size={14} sx={{ color: "white" }} /> : <CheckCircleIcon style={{ fontSize: 16 }} />}
+                        <button
+                          onClick={() => approveMutation.mutate(s.id)}
+                          disabled={approveMutation.isPending}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium border-2 border-emerald-600/80 bg-emerald-600/15 text-emerald-800 hover:bg-emerald-600/25 dark:text-emerald-200 dark:border-emerald-500/70 dark:hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          {approveMutation.isPending ? <CircularProgress size={14} /> : <CheckCircleIcon style={{ fontSize: 16 }} />}
                           Approve & Merge
                         </button>
-                        <button onClick={() => rejectMutation.mutate(s.id)} disabled={rejectMutation.isPending} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50">
-                          {rejectMutation.isPending ? <CircularProgress size={14} sx={{ color: "white" }} /> : <CancelIcon style={{ fontSize: 16 }} />}
+                        <button
+                          onClick={() => rejectMutation.mutate(s.id)}
+                          disabled={rejectMutation.isPending}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium border-2 border-destructive/80 bg-destructive/10 text-destructive hover:bg-destructive/20 dark:hover:bg-destructive/25 disabled:opacity-50"
+                        >
+                          {rejectMutation.isPending ? <CircularProgress size={14} /> : <CancelIcon style={{ fontSize: 16 }} />}
                           Reject
                         </button>
                       </div>

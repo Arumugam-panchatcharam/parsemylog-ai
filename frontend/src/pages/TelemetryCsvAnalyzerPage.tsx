@@ -14,12 +14,8 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CircularProgress from "@mui/material/CircularProgress";
 import Plot from "react-plotly.js";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 
-const CHART_BG = {
-  paper_bgcolor: "transparent" as const,
-  plot_bgcolor: "transparent" as const,
-  font: { size: 10, color: "#9ca3af" },
-};
 const PLOT_CFG = { displayModeBar: false, responsive: true } as const;
 
 const TYPE_COLORS = {
@@ -30,7 +26,8 @@ const TYPE_COLORS = {
 
 export default function TelemetryCsvAnalyzerPage() {
   const queryClient = useQueryClient();
-  
+  const mergePlot = usePlotlyLayoutMerge();
+
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(224);
@@ -723,16 +720,15 @@ export default function TelemetryCsvAnalyzerPage() {
                     <div className="border rounded-lg p-4 bg-background">
                       <Plot
                         data={chartData}
-                        layout={{
-                          ...CHART_BG,
+                        layout={mergePlot({
                           autosize: true,
                           height: 450,
                           margin: { l: 50, r: 20, t: 30, b: 40 },
-                          xaxis: { title: { text: xColumn ?? "" }, gridcolor: "#374151" },
-                          yaxis: { gridcolor: "#374151" },
+                          xaxis: { title: { text: xColumn ?? "" } },
+                          yaxis: {},
                           showlegend: true,
                           legend: { x: 1, xanchor: "right", y: 1 },
-                        }}
+                        })}
                         config={PLOT_CFG}
                         className="w-full"
                       />

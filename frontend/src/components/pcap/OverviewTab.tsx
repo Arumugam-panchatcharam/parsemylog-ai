@@ -1,15 +1,11 @@
 import Plot from "react-plotly.js";
 import type { PcapOverview } from "@/api/endpoints";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 
 function epochToTime(epoch: number): string {
   return new Date(epoch * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-const CHART_BG = {
-  paper_bgcolor: "transparent" as const,
-  plot_bgcolor: "transparent" as const,
-  font: { size: 10, color: "#9ca3af" },
-};
 const PLOT_CFG = { displayModeBar: false, responsive: true } as const;
 
 interface Props {
@@ -18,6 +14,7 @@ interface Props {
 }
 
 export default function OverviewTab({ data, onNavigateToClient }: Props) {
+  const mergePlot = usePlotlyLayoutMerge();
   const h = data.health;
   const ci = data.capture_info;
   const ns = data.network_summary;
@@ -139,7 +136,15 @@ export default function OverviewTab({ data, onNavigateToClient }: Props) {
                 { x: data.activity_timeline.map((b) => epochToTime(b.epoch)), y: data.activity_timeline.map((b) => b.ctrl_count), type: "bar", name: "Ctrl", marker: { color: "#f59e0b" } },
                 { x: data.activity_timeline.map((b) => epochToTime(b.epoch)), y: data.activity_timeline.map((b) => b.data_count), type: "bar", name: "Data", marker: { color: "#10b981" } },
               ]}
-              layout={{ ...CHART_BG, autosize: true, barmode: "stack" as const, margin: { l: 40, r: 10, t: 10, b: 40 }, xaxis: { tickangle: -35, tickfont: { size: 9 } }, yaxis: { tickfont: { size: 9 } }, showlegend: true, legend: { font: { size: 9 }, orientation: "h" as const, y: 1.08, x: 0 } }}
+              layout={mergePlot({
+                autosize: true,
+                barmode: "stack" as const,
+                margin: { l: 40, r: 10, t: 10, b: 40 },
+                xaxis: { tickangle: -35, tickfont: { size: 9 } },
+                yaxis: { tickfont: { size: 9 } },
+                showlegend: true,
+                legend: { font: { size: 9 }, orientation: "h" as const, y: 1.08, x: 0 },
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />
@@ -157,7 +162,14 @@ export default function OverviewTab({ data, onNavigateToClient }: Props) {
                 { x: data.channel_distribution.map((c) => `Ch ${c.channel}`), y: data.channel_distribution.map((c) => c.frame_count), type: "bar", name: "Frames", marker: { color: "#3b82f6" } },
                 { x: data.channel_distribution.map((c) => `Ch ${c.channel}`), y: data.channel_distribution.map((c) => c.retry_pct), type: "scatter", mode: "lines+markers", name: "Retry%", yaxis: "y2", line: { color: "#ef4444" }, marker: { size: 5 } },
               ]}
-              layout={{ ...CHART_BG, autosize: true, margin: { l: 40, r: 40, t: 10, b: 40 }, yaxis: { title: { text: "Frames", font: { size: 9 } }, tickfont: { size: 9 } }, yaxis2: { title: { text: "Retry%", font: { size: 9 } }, tickfont: { size: 9 }, overlaying: "y", side: "right" }, showlegend: true, legend: { font: { size: 9 }, orientation: "h" as const, y: 1.08, x: 0 } }}
+              layout={mergePlot({
+                autosize: true,
+                margin: { l: 40, r: 40, t: 10, b: 40 },
+                yaxis: { title: { text: "Frames", font: { size: 9 } }, tickfont: { size: 9 } },
+                yaxis2: { title: { text: "Retry%", font: { size: 9 } }, tickfont: { size: 9 }, overlaying: "y", side: "right" },
+                showlegend: true,
+                legend: { font: { size: 9 }, orientation: "h" as const, y: 1.08, x: 0 },
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />

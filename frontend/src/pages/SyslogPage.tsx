@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { syslogApi, telemetryApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
+import { eventIdChartColor, SCATTER_MARKER_LINE } from "@/lib/chartColors";
 import Plot from "react-plotly.js";
 import SyslogOverviewTab from "@/pages/SyslogOverviewTab";
 import ArticleIcon from "@mui/icons-material/Article";
@@ -218,15 +220,6 @@ function GroupTimeCell({ group }: { group: CollapsedEventGroup }) {
   );
 }
 
-function eventIdChartColor(id: string): string {
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) {
-    h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  }
-  const hue = h % 360;
-  return `hsl(${hue} 62% 42%)`;
-}
-
 function getSeverityColor(severity: string): string {
   switch (severity.toLowerCase()) {
     case 'error':
@@ -263,6 +256,7 @@ export default function SyslogPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
   const qc = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
   const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
   const [reparsing, setReparsing] = useState(false);
   const [filterCategory, setFilterCategory] = useState<string>("all");
@@ -470,7 +464,7 @@ export default function SyslogPage() {
         marker: {
           size: 7,
           color,
-          line: { width: 0.5, color: "rgba(255,255,255,0.35)" },
+          line: { width: 0.5, color: SCATTER_MARKER_LINE },
         },
         text: idEvents.map(
           (e) => `${e.description} · ${e.category} · ${e.severity}`
@@ -698,23 +692,21 @@ export default function SyslogPage() {
                   <div className="p-4">
                     <Plot
                       data={timelineChartData}
-                      layout={{
+                      layout={mergePlot({
                         height: timelineChartHeight,
-                        hovermode: 'closest',
-                        xaxis: { 
-                          title: { text: 'Time' },
+                        hovermode: "closest",
+                        xaxis: {
+                          title: { text: "Time" },
                           tickfont: { size: 10 },
-                          type: 'date',
+                          type: "date",
                         },
-                        yaxis: { 
-                          title: { text: 'Event ID' }, 
-                          type: 'category',
+                        yaxis: {
+                          title: { text: "Event ID" },
+                          type: "category",
                           tickfont: { size: 10 },
                           automargin: true,
                         },
                         margin: { l: 96, r: 15, t: 5, b: 50 },
-                        paper_bgcolor: "transparent",
-                        plot_bgcolor: "transparent",
                         showlegend: timelineEventIds.length <= 10,
                         legend: {
                           orientation: "h",
@@ -723,33 +715,35 @@ export default function SyslogPage() {
                           xanchor: "center",
                           font: { size: 9 },
                         },
-                        shapes: telemetryData?.map((e: any) => ({
-                          type: 'line',
-                          x0: e.time,
-                          x1: e.time,
-                          y0: 0,
-                          y1: 1,
-                          yref: 'paper',
-                          line: { color: '#d93025', width: 2, dash: 'dot' }
-                        })) || [],
-                        annotations: telemetryData?.map((e: any) => {
-                          const sourceLabel = e.label || (e.source === "boottime" ? "B" : "TR");
-                          const typeLabel = e.reboot_type === "soft" ? "S" : e.reboot_type === "hard" ? "H" : "";
-                          const fullLabel = typeLabel ? `${sourceLabel}-${typeLabel}` : sourceLabel;
-                          let fontColor = "#1a73e8";
-                          if (e.reboot_type === "soft") fontColor = "#3b82f6";
-                          else if (e.reboot_type === "hard") fontColor = "#d93025";
-                          return {
-                            x: e.time,
-                            y: 1,
+                        shapes:
+                          telemetryData?.map((e: any) => ({
+                            type: "line",
+                            x0: e.time,
+                            x1: e.time,
+                            y0: 0,
+                            y1: 1,
                             yref: "paper",
-                            text: fullLabel,
-                            showarrow: false,
-                            font: { size: 9, color: fontColor, family: "monospace" },
-                            yanchor: "bottom",
-                          };
-                        }) || []
-                      }}
+                            line: { color: "#d93025", width: 2, dash: "dot" },
+                          })) || [],
+                        annotations:
+                          telemetryData?.map((e: any) => {
+                            const sourceLabel = e.label || (e.source === "boottime" ? "B" : "TR");
+                            const typeLabel = e.reboot_type === "soft" ? "S" : e.reboot_type === "hard" ? "H" : "";
+                            const fullLabel = typeLabel ? `${sourceLabel}-${typeLabel}` : sourceLabel;
+                            let fontColor = "#1a73e8";
+                            if (e.reboot_type === "soft") fontColor = "#3b82f6";
+                            else if (e.reboot_type === "hard") fontColor = "#d93025";
+                            return {
+                              x: e.time,
+                              y: 1,
+                              yref: "paper",
+                              text: fullLabel,
+                              showarrow: false,
+                              font: { size: 9, color: fontColor, family: "monospace" },
+                              yanchor: "bottom",
+                            };
+                          }) || [],
+                      })}
                       config={NO_TOOLBAR}
                       style={{ width: '100%' }}
                     />

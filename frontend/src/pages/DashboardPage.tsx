@@ -262,8 +262,8 @@ function ProjectCard({ project: p, onOpen, onEdit, onDelete, hideNatcoChip, comp
             {p.project_type === "batch" && (
               <span
                 className={cn(
-                  "px-1 py-0.5 bg-violet-500/15 text-violet-700 dark:text-violet-300 rounded text-[9px] font-bold",
-                  !compact && "px-1.5 rounded-md text-[10px] tracking-wide",
+                  "px-1.5 py-0.5 rounded-md text-[9px] font-bold border border-violet-500/55 bg-background text-foreground dark:text-white dark:border-violet-400/70",
+                  !compact && "text-[10px] tracking-wide",
                 )}
                 title="Batch Processing Project"
               >
@@ -561,10 +561,10 @@ function NatcoProjectsPane({
         >
           <div
             className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border",
               row.jobKey === "batch"
-                ? "bg-violet-500/15 text-violet-700 dark:text-violet-300"
-                : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+                ? "border-violet-500/40 bg-violet-500/10 text-violet-800 dark:text-violet-100"
+                : "border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-100",
             )}
           >
             {row.jobKey === "batch" ? (

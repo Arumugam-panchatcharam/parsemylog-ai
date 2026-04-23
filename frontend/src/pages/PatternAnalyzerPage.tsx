@@ -5,6 +5,10 @@ import { patternAnalyzerApi, patternGovernanceApi, natcoApi, projectsApi } from 
 import type { UserPattern, DomainPatterns, DomainDiff, NatcoInfo, MaintenanceWindow } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
+import { useTheme } from "@/hooks/useTheme";
+import { mergePlotlyLayout } from "@/lib/plotlyTheme";
+import { cn } from "@/lib/utils";
+import { eventIdChartColor, SCATTER_MARKER_LINE } from "@/lib/chartColors";
 import Plot from "react-plotly.js";
 import ManageSearchIcon from "@mui/icons-material/ManageSearch";
 import AddIcon from "@mui/icons-material/Add";
@@ -34,15 +38,23 @@ import PatternOverviewTab from "@/pages/PatternOverviewTab";
 const MemoizedPlot = memo(Plot);
 
 /* ================================================================ Types */
-interface ScanResult {
-  traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
-  reboots: Array<{ timestamp: string; reason: string }>;
-  total_matches: number;
-}
-interface RebootEntry {
+interface PatternAnalyzerRebootRow {
   timestamp: string;
   reason: string;
+  reboot_type?: string;
+  is_short_reboot?: boolean;
+  uptime_before_reboot_sec?: number;
 }
+
+interface ScanResult {
+  traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
+  reboots: PatternAnalyzerRebootRow[];
+  total_matches: number;
+  /** Present on scans after server stamp; used to reject stale results after CPE switch. */
+  cpe_serial?: string | null;
+}
+
+type RebootEntry = PatternAnalyzerRebootRow;
 
 /* ================================================================ Constants */
 const BUCKET_OPTIONS = [
@@ -58,24 +70,55 @@ const BUCKET_OPTIONS = [
   { value: 1440, label: "1 day" },
 ];
 
-/**
- * Light trace colors: pastel blues / indigos / violets / cyans.
- * Avoids status-like hues (red, green, orange, brown) and their shades.
- */
-const TRACE_COLORS = [
-  "#93C5FD",
-  "#A5B4FC",
-  "#C4B5FD",
-  "#7DD3FC",
-  "#67E8F9",
-  "#D8B4FE",
-  "#99B9F1",
-  "#A8C5DA",
-  "#C9B8E8",
-  "#BFDBFE",
-];
-
 const NO_TOOLBAR = { displayModeBar: false } as const;
+
+function formatUptimeBeforeReboot(sec: number | string | undefined | null): string {
+  if (sec == null || sec === "") return "—";
+  const n = typeof sec === "string" ? Number(sec) : sec;
+  if (!Number.isFinite(n) || n < 0) return "—";
+  const s = Math.floor(n);
+  if (s >= 86400) return `${(s / 86400).toFixed(1)}d`;
+  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+  return `${Math.round(s / 60)}m`;
+}
+
+/** Soft vs hard (and plot colors) for reboot markers — matches telemetry conventions. */
+function patternRebootBoundaryAccent(r: PatternAnalyzerRebootRow): {
+  typeLabel: string;
+  reasonClass: string;
+  ringClass: string;
+  chipClass: string;
+  plotColor: string;
+} {
+  const t = (r.reboot_type || "").toLowerCase();
+  if (t === "soft") {
+    return {
+      typeLabel: "Soft",
+      reasonClass: "text-sky-600 dark:text-sky-300",
+      ringClass: "ring-sky-500/30 dark:ring-sky-400/35",
+      chipClass:
+        "border border-sky-500/45 bg-sky-500/12 text-sky-800 dark:text-sky-200 dark:bg-sky-500/15",
+      plotColor: "#3b82f6",
+    };
+  }
+  if (t === "hard") {
+    return {
+      typeLabel: "Hard",
+      reasonClass: "text-red-600 dark:text-red-300",
+      ringClass: "ring-red-500/25 dark:ring-red-400/30",
+      chipClass:
+        "border border-red-500/45 bg-red-500/12 text-red-800 dark:text-red-200 dark:bg-red-500/15",
+      plotColor: "#d93025",
+    };
+  }
+  return {
+    typeLabel: "Unknown",
+    reasonClass: "text-foreground",
+    ringClass: "ring-muted-foreground/25",
+    chipClass: "border border-border bg-muted text-muted-foreground",
+    plotColor: "#64748b",
+  };
+}
 
 /**
  * Calculate optimal bucket size based on pattern time distribution.
@@ -207,7 +250,7 @@ function NatcoBadgeOrSelector({
       <select
         value={selectedId}
         onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : "")}
-        className="text-xs px-2 py-1.5 border border-border rounded-lg bg-background focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="text-xs px-2 py-1.5 border border-border rounded-lg bg-background focus:outline-none focus:ring-1 focus:ring-ring"
       >
         <option value="">-- Select NATCO --</option>
         {natcoList?.map((n) => (
@@ -238,6 +281,9 @@ function NatcoBadgeOrSelector({
 export default function PatternAnalyzerPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
+  const cpeIdRef = useRef<string | null>(cpeId);
+  cpeIdRef.current = cpeId;
+  const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -405,9 +451,9 @@ export default function PatternAnalyzerPage() {
     }
   }, [savedDomains, patternsLoaded]);
 
-  // -- Load reboots on mount --
+  // -- Load reboots for the selected CPE (query key must include cpeId) --
   const { data: rebootsData } = useQuery({
-    queryKey: ["reboots", projectId],
+    queryKey: ["reboots", projectId, cpeId ?? ""],
     queryFn: async () => {
       const res = await patternAnalyzerApi.getReboots(projectId!, cpeId);
       return res.data.reboots;
@@ -468,9 +514,20 @@ export default function PatternAnalyzerPage() {
   // -- Scan status --
   const [scanStatus, setScanStatus] = useState<string>("");
 
+  // Scan/reboot UI is per CPE; avoid showing another device's chart or reboot list.
+  useEffect(() => {
+    setScanResult(null);
+    setScanStatus("");
+    setStartRebootIdx(null);
+    setEndRebootIdx(null);
+    setSliderValue(0);
+    setVisibleRange(null);
+  }, [projectId, cpeId]);
+
   // -- Run scan mutation (two-phase: scan → fetch results) --
   const scanMutation = useMutation({
     mutationFn: async () => {
+      const dbgCpe = cpeId;
       // Calculate effective bucket for API call
       const effectiveBucket = bucketMinutes === 0 ? calculateAutoBucket(scanResult) : bucketMinutes;
       
@@ -482,7 +539,7 @@ export default function PatternAnalyzerPage() {
         time_range: effectiveRange,
         filter_pre_ntp: filterPreNtp,
         filter_short_reboots: filterShortReboots,
-        cpe_id: cpeId,
+        cpe_id: dbgCpe,
       });
 
       const { scan_id, total_matches, trace_count, elapsed_ms } = scanRes.data;
@@ -490,12 +547,22 @@ export default function PatternAnalyzerPage() {
         `Scan complete (${total_matches.toLocaleString()} matches, ${trace_count} patterns, ${elapsed_ms}ms). Loading results...`
       );
 
-      // Phase 2: fetch full Plotly-ready data from cache
-      const resultsRes = await patternAnalyzerApi.getScanResults(projectId!, scan_id, cpeId);
-      return resultsRes.data;
+      // Phase 2: fetch full Plotly-ready data from cache (must use same CPE as phase 1; `cpeId` can change mid-flight)
+      const resultsRes = await patternAnalyzerApi.getScanResults(projectId!, scan_id, dbgCpe);
+      return { result: resultsRes.data, dbgCpe };
     },
-    onSuccess: (data) => {
-      setScanResult(data);
+    onSuccess: (payload) => {
+      const current = cpeIdRef.current;
+      const stamped = payload.result.cpe_serial ?? null;
+      const started = payload.dbgCpe ?? null;
+      const expectedKey = current ?? null;
+      const resultKey = stamped !== null && stamped !== "" ? stamped : started;
+      const applyResult = resultKey === expectedKey;
+      if (!applyResult) {
+        setScanStatus("Scan results ignored — CPE changed before load finished. Run scan again.");
+        return;
+      }
+      setScanResult(payload.result);
       setScanStatus("");
     },
     onError: () => {
@@ -821,13 +888,11 @@ export default function PatternAnalyzerPage() {
 
   // -- Build Plotly data (time series with individual log points) --
   // Memoized to prevent recalculation on every render
-  const { plotData, plotShapes, plotAnnotations, traceNames, filteredMatchCount, actualTimeRange } = useMemo(() => {
+  const { plotData, plotShapes, traceNames, filteredMatchCount, actualTimeRange } = useMemo(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const plotData: any[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const plotShapes: any[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const plotAnnotations: any[] = [];
     const traceNames: string[] = [];
     let filteredMatchCount = 0;
     let actualTimeRange: { start: string; end: string } | undefined;
@@ -865,7 +930,7 @@ export default function PatternAnalyzerPage() {
       const label = `${trace.name} (${filteredTimes.length}${bucketInfo})`;
       traceNames.push(label);
 
-      const color = TRACE_COLORS[idx % TRACE_COLORS.length];
+      const color = eventIdChartColor(String(trace.name ?? idx));
       
       let markerSize: number | number[];
       if (trace.bucketed) {
@@ -885,7 +950,7 @@ export default function PatternAnalyzerPage() {
           color,
           symbol: "circle",
           opacity: 0.8,
-          line: { width: 0.5, color: "white" },
+          line: { width: 0.5, color: SCATTER_MARKER_LINE },
         },
         text: trace.bucketed
           ? filteredTexts.map((txt: string, i: number) => {
@@ -897,12 +962,14 @@ export default function PatternAnalyzerPage() {
       });
     });
 
-    // Only show reboot lines within the effective range so they don't
-    // stretch the x-axis beyond the filtered data.
+    // Reboot vertical lines + invisible hover targets (annotations overlapped legend/y-axis).
+    const rebootsInRange: PatternAnalyzerRebootRow[] = [];
     scanResult.reboots.forEach((reboot) => {
       if (rangeStart && reboot.timestamp < rangeStart) return;
       if (rangeEnd && reboot.timestamp > rangeEnd) return;
 
+      rebootsInRange.push(reboot);
+      const accent = patternRebootBoundaryAccent(reboot);
       plotShapes.push({
         type: "line",
         x0: reboot.timestamp,
@@ -910,24 +977,31 @@ export default function PatternAnalyzerPage() {
         y0: 0,
         y1: 1,
         yref: "paper",
-        line: { color: "#d93025", width: 2, dash: "dash" },
-      });
-      plotAnnotations.push({
-        x: reboot.timestamp,
-        y: 1,
-        yref: "paper",
-        text: `Reboot: ${reboot.reason || "unknown"}`,
-        showarrow: true,
-        arrowhead: 2,
-        ax: 0,
-        ay: -30,
-        font: { size: 10, color: "#d93025" },
-        bordercolor: "#d93025",
-        borderwidth: 1,
-        borderpad: 2,
-        bgcolor: "rgba(255,255,255,0.9)",
+        line: { color: accent.plotColor, width: 2, dash: "dash" },
       });
     });
+
+    if (rebootsInRange.length > 0 && traceNames.length > 0) {
+      const yCat = traceNames[traceNames.length - 1] ?? traceNames[0];
+      plotData.push({
+        x: rebootsInRange.map((r) => r.timestamp),
+        y: rebootsInRange.map(() => yCat),
+        type: "scatter" as const,
+        mode: "markers" as const,
+        marker: { size: 16, opacity: 0, line: { width: 0 } },
+        text: rebootsInRange.map((reboot) => {
+          const accent = patternRebootBoundaryAccent(reboot);
+          const ub = formatUptimeBeforeReboot(reboot.uptime_before_reboot_sec);
+          let s = `<b>${accent.typeLabel}</b>: ${reboot.reason || "unknown"}`;
+          if (ub !== "—") s += `<br>Uptime before: ${ub}`;
+          if (reboot.is_short_reboot) s += `<br><i>Short reboot</i>`;
+          return s;
+        }),
+        hovertemplate: "%{text}<extra></extra>",
+        showlegend: false,
+        name: "Reboot",
+      });
+    }
     
     // Calculate actual data bounds when no reboot selection to fix timeline compression
     if (!effectiveRange && plotData.length > 0) {
@@ -956,7 +1030,7 @@ export default function PatternAnalyzerPage() {
     }
   }
 
-    return { plotData, plotShapes, plotAnnotations, traceNames, filteredMatchCount, actualTimeRange };
+    return { plotData, plotShapes, traceNames, filteredMatchCount, actualTimeRange };
   }, [scanResult, effectiveRange]);
 
   // Memoize Plotly layout to prevent unnecessary re-renders
@@ -979,9 +1053,10 @@ export default function PatternAnalyzerPage() {
       effectiveBucket = bucketMinutes;
     }
     
-    return {
+    return mergePlotlyLayout(resolvedTheme === "dark", {
       height: Math.max(300, traceNames.length * 60 + 100),
-      margin: { l: 180, r: 20, t: 10, b: 45 },
+      // Extra top/bottom margin: horizontal legend below plot avoids overlap with y-axis labels.
+      margin: { l: 200, r: 24, t: 16, b: 72 },
       xaxis: {
         title: { text: "Time", font: { size: 11 } },
         tickfont: { size: 10 },
@@ -1003,18 +1078,26 @@ export default function PatternAnalyzerPage() {
       hovermode: "closest" as const,
       legend: {
         orientation: "h" as const,
-        y: 1.08,
+        y: -0.22,
+        yanchor: "top" as const,
         x: 0.5,
         xanchor: "center" as const,
         font: { size: 10 },
       },
       shapes: plotShapes,
-      annotations: plotAnnotations,
-      paper_bgcolor: "transparent",
-      plot_bgcolor: "transparent",
+      annotations: [],
       font: { family: "Roboto, sans-serif", size: 11 },
-    };
-  }, [traceNames, effectiveRange, actualTimeRange, bucketMinutes, plotShapes, plotAnnotations, scanResult, visibleRange]);
+    });
+  }, [
+    traceNames,
+    effectiveRange,
+    actualTimeRange,
+    bucketMinutes,
+    plotShapes,
+    scanResult,
+    visibleRange,
+    resolvedTheme,
+  ]);
 
   const domainNames = Object.keys(domains);
 
@@ -1023,7 +1106,7 @@ export default function PatternAnalyzerPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <ManageSearchIcon style={{ fontSize: 24, color: "#1a73e8" }} />
+          <ManageSearchIcon className="text-primary" style={{ fontSize: 24 }} />
           <h2 className="text-lg font-semibold">Pattern Analyzer</h2>
         </div>
         <NatcoBadgeOrSelector
@@ -1182,7 +1265,7 @@ export default function PatternAnalyzerPage() {
               onChange={(e) => setNewDomainName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addDomain()}
               placeholder="Domain name (e.g. WLAN_Issues)"
-              className="flex-1 text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="flex-1 text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring"
               autoFocus
             />
             <button onClick={addDomain} disabled={!newDomainName.trim()} className="px-3 py-1 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">Create</button>
@@ -1236,7 +1319,7 @@ export default function PatternAnalyzerPage() {
                             if (el) el.indeterminate = isDomainPartiallyEnabled(domain);
                           }}
                           onChange={(e) => toggleDomainEnabled(domain, e.target.checked)}
-                          className="h-3.5 w-3.5 rounded accent-blue-600"
+                          className="h-3.5 w-3.5 rounded accent-primary"
                         />
                         <span className="hidden sm:inline">{isDomainFullyEnabled(domain) ? "All on" : "Toggle"}</span>
                       </label>
@@ -1289,21 +1372,21 @@ export default function PatternAnalyzerPage() {
                                     type="checkbox"
                                     checked={p.enabled}
                                     onChange={(e) => updatePattern(domain, idx, "enabled", e.target.checked)}
-                                    className="h-3.5 w-3.5 rounded border-gray-300 accent-blue-600"
+                                    className="h-3.5 w-3.5 rounded border-input accent-primary"
                                   />
                                   <input
                                     type="text"
                                     value={p.name}
                                     onChange={(e) => updatePattern(domain, idx, "name", e.target.value)}
                                     placeholder="Pattern name"
-                                    className="text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
+                                    className="text-xs px-2 py-1 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
                                   />
                                   <input
                                     type="text"
                                     value={p.regex}
                                     onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)}
                                     placeholder="Regular expression"
-                                    className="text-xs px-2 py-1 rounded border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
+                                    className="text-xs px-2 py-1 rounded border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
                                   />
                                   <button
                                     onClick={() => setMwEditTarget(mwOpen ? null : key)}
@@ -1396,7 +1479,7 @@ export default function PatternAnalyzerPage() {
                                           updatePatternRP(domain, idx, v === "" ? null : Math.max(1, Math.min(60, parseInt(v, 10) || 1)));
                                         }}
                                         placeholder="min"
-                                        className="text-xs px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 w-[56px] text-center"
+                                        className="text-xs px-1.5 py-0.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-ring w-[56px] text-center"
                                       />
                                       <span className="text-muted-foreground">min of any reboot</span>
                                       {hasRP && (
@@ -1627,7 +1710,7 @@ export default function PatternAnalyzerPage() {
                               const ftChanged = (p.min_frequency_threshold ?? null) !== (p.global_min_frequency_threshold ?? null);
                               return (
                                 <label key={key} className="flex items-start gap-3 px-4 py-2 hover:bg-muted/20 cursor-pointer">
-                                  <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-blue-600 shrink-0" />
+                                  <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-primary shrink-0" />
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2">
                                       <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-[10px] font-bold">MODIFIED</span>
@@ -1704,7 +1787,7 @@ export default function PatternAnalyzerPage() {
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         <div className="px-4 py-2 border-b border-border bg-muted/30">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-            <PlayArrowIcon style={{ fontSize: 14, color: "#188038" }} /> Scan Configuration
+            <PlayArrowIcon className="text-primary" style={{ fontSize: 14 }} /> Scan Configuration
           </h3>
         </div>
         <div className="p-4 space-y-4">
@@ -1717,7 +1800,7 @@ export default function PatternAnalyzerPage() {
               <select
                 value={bucketMinutes}
                 onChange={(e) => setBucketMinutes(Number(e.target.value))}
-                className="text-xs px-3 py-1.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="text-xs px-3 py-1.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 {BUCKET_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -1748,7 +1831,7 @@ export default function PatternAnalyzerPage() {
                 type="checkbox"
                 checked={filterPreNtp}
                 onChange={(e) => setFilterPreNtp(e.target.checked)}
-                className="h-3.5 w-3.5 rounded accent-blue-600"
+                className="h-3.5 w-3.5 rounded accent-primary"
               />
               <span className="text-xs text-muted-foreground">Filter pre-NTP logs</span>
             </label>
@@ -1758,7 +1841,7 @@ export default function PatternAnalyzerPage() {
                 type="checkbox"
                 checked={filterShortReboots}
                 onChange={(e) => setFilterShortReboots(e.target.checked)}
-                className="h-3.5 w-3.5 rounded accent-purple-600"
+                className="h-3.5 w-3.5 rounded accent-primary"
               />
               <span className="text-xs text-muted-foreground">Short reboots only</span>
             </label>
@@ -1766,7 +1849,7 @@ export default function PatternAnalyzerPage() {
             <button
               onClick={() => scanMutation.mutate()}
               disabled={scanMutation.isPending || enabledCount === 0}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {scanMutation.isPending ? (
                 <CircularProgress size={14} sx={{ color: "white" }} />
@@ -1797,18 +1880,25 @@ export default function PatternAnalyzerPage() {
                       setStartRebootIdx(val);
                       setSliderValue(0);
                     }}
-                    className="text-xs px-3 py-1.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[220px]"
+                    className="text-xs px-3 py-1.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring min-w-[220px]"
                   >
                     <option value="">-- Select --</option>
-                    {reboots.map((r, idx) => (
-                      <option
-                        key={idx}
-                        value={idx}
-                        disabled={endRebootIdx !== null && idx >= endRebootIdx}
-                      >
-                        Reboot #{idx + 1} — {r.timestamp.replace("T", " ")} ({r.reason || "unknown"})
-                      </option>
-                    ))}
+                    {reboots.map((r, idx) => {
+                      const ra = patternRebootBoundaryAccent(r);
+                      const ub = formatUptimeBeforeReboot(r.uptime_before_reboot_sec);
+                      const bits = [ra.typeLabel, ub !== "—" ? `up ${ub}` : "", r.reason || "unknown"].filter(
+                        Boolean,
+                      );
+                      return (
+                        <option
+                          key={idx}
+                          value={idx}
+                          disabled={endRebootIdx !== null && idx >= endRebootIdx}
+                        >
+                          Reboot #{idx + 1} — {r.timestamp.replace("T", " ")} — {bits.join(" · ")}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -1824,18 +1914,25 @@ export default function PatternAnalyzerPage() {
                       setEndRebootIdx(val);
                       setSliderValue(0);
                     }}
-                    className="text-xs px-3 py-1.5 rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[220px]"
+                    className="text-xs px-3 py-1.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring min-w-[220px]"
                   >
                     <option value="">-- Select --</option>
-                    {reboots.map((r, idx) => (
-                      <option
-                        key={idx}
-                        value={idx}
-                        disabled={startRebootIdx !== null && idx <= startRebootIdx}
-                      >
-                        Reboot #{idx + 1} — {r.timestamp.replace("T", " ")} ({r.reason || "unknown"})
-                      </option>
-                    ))}
+                    {reboots.map((r, idx) => {
+                      const ra = patternRebootBoundaryAccent(r);
+                      const ub = formatUptimeBeforeReboot(r.uptime_before_reboot_sec);
+                      const bits = [ra.typeLabel, ub !== "—" ? `up ${ub}` : "", r.reason || "unknown"].filter(
+                        Boolean,
+                      );
+                      return (
+                        <option
+                          key={idx}
+                          value={idx}
+                          disabled={startRebootIdx !== null && idx <= startRebootIdx}
+                        >
+                          Reboot #{idx + 1} — {r.timestamp.replace("T", " ")} — {bits.join(" · ")}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -1884,7 +1981,7 @@ export default function PatternAnalyzerPage() {
                         max={95}
                         value={sliderValue}
                         onChange={(e) => setSliderValue(Number(e.target.value))}
-                        className="flex-1 accent-blue-600"
+                        className="flex-1 accent-primary"
                       />
                       <span className="text-xs font-medium w-20 text-right">{sliderValue}%</span>
                     </div>
@@ -1919,10 +2016,21 @@ export default function PatternAnalyzerPage() {
       {/* ====== RESULTS CHART ====== */}
       {scanResult && (
         <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <div className="px-4 py-2 border-b border-border bg-muted/30 flex items-center justify-between">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              Pattern Occurrences Over Time
-            </h3>
+          <div className="px-4 py-2 border-b border-border bg-muted/30 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                Pattern Occurrences Over Time
+              </h3>
+              <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                Device:{" "}
+                <span className="text-foreground font-medium">
+                  {scanResult.cpe_serial ?? cpeId ?? "—"}
+                </span>
+                {!scanResult.cpe_serial && cpeId ? (
+                  <span className="text-muted-foreground/80"> (legacy scan — run again to stamp)</span>
+                ) : null}
+              </p>
+            </div>
             <div className="flex items-center gap-3 text-[11px]">
               <span className="font-semibold">
                 {effectiveRange
@@ -1974,20 +2082,44 @@ export default function PatternAnalyzerPage() {
                 <RestartAltIcon style={{ fontSize: 12, color: "#d93025" }} /> Reboot Boundaries
               </h4>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                {scanResult.reboots.map((r, idx) => (
-                  <div
-                    key={idx}
-                    className="border border-red-200 dark:border-red-800 rounded-lg p-2 bg-red-50/50 dark:bg-red-900/10"
-                  >
-                    <p className="text-[11px] font-semibold text-red-700 dark:text-red-400">
-                      #{idx + 1}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground font-mono">{r.timestamp}</p>
-                    <p className="text-[10px] mt-0.5 truncate" title={r.reason}>
-                      {r.reason || "unknown"}
-                    </p>
-                  </div>
-                ))}
+                {scanResult.reboots.map((r, idx) => {
+                  const accent = patternRebootBoundaryAccent(r);
+                  const ub = formatUptimeBeforeReboot(r.uptime_before_reboot_sec);
+                  return (
+                    <div
+                      key={idx}
+                      className={cn(
+                        "border border-border rounded-lg p-2 bg-muted/30 dark:bg-muted/45 ring-1 ring-inset",
+                        accent.ringClass,
+                      )}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="text-[11px] font-semibold text-foreground">#{idx + 1}</p>
+                        <span
+                          className={cn(
+                            "text-[9px] font-bold uppercase tracking-wide rounded px-1 py-px",
+                            accent.chipClass,
+                          )}
+                        >
+                          {accent.typeLabel}
+                        </span>
+                        {r.is_short_reboot ? (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-px border border-violet-500/45 bg-violet-500/12 text-violet-800 dark:text-violet-200">
+                            Short
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground font-mono mt-1">{r.timestamp}</p>
+                      <p className={cn("text-[10px] mt-1 truncate font-medium", accent.reasonClass)} title={r.reason}>
+                        {r.reason || "unknown"}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        Uptime before reboot:{" "}
+                        <span className="tabular-nums font-medium text-foreground">{ub}</span>
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

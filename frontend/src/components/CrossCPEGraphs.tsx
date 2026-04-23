@@ -10,6 +10,7 @@ import {
   getFleetAlertMessage,
   type HealthStatus,
 } from "@/utils/healthStatus";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import ErrorIcon from "@mui/icons-material/Error";
 import SignalCellularAltIcon from "@mui/icons-material/SignalCellularAlt";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -67,6 +68,7 @@ export function CrossCPEGraphs({ cpes }: { cpes: CPESummary[] }) {
   const [selectedMetric, setSelectedMetric] = useState<"memavail" | "cpu" | "sunreclaim" | "overcommit">(
     "memavail"
   );
+  const mergePlot = usePlotlyLayoutMerge();
 
   console.log("[CrossCPEGraphs] Component rendering with", cpes.length, "CPEs");
 
@@ -357,7 +359,7 @@ export function CrossCPEGraphs({ cpes }: { cpes: CPESummary[] }) {
               hovertemplate: "<b>%{x}</b><br>" + currentMetric.label + ": %{y}<extra></extra>",
             } as any,
           ]}
-          layout={{
+          layout={mergePlot({
             title: { text: currentMetric.label },
             height: 400,
             margin: { t: 40, b: 120, l: 50, r: 20 },
@@ -367,12 +369,9 @@ export function CrossCPEGraphs({ cpes }: { cpes: CPESummary[] }) {
               zeroline: true,
             },
             showlegend: false,
-            paper_bgcolor: "transparent",
-            plot_bgcolor: "transparent",
-            font: { color: "#888" },
             annotations,
             hovermode: "x unified" as const,
-          }}
+          })}
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cpeOverviewApi, cpesApi } from "@/api/endpoints";
 import type { PatternScanResult, PatternScanDomain } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import CircularProgress from "@mui/material/CircularProgress";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -82,6 +83,7 @@ function severityBadge(pct: number): string {
 export default function PatternOverviewTab() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
 
   const [sortKey, setSortKey] = useState<SortKey>("pctAffected");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -491,7 +493,7 @@ export default function PatternOverviewTab() {
                   cliponaxis: false,
                 } as any,
               ]}
-              layout={{
+              layout={mergePlot({
                 height: Math.max(200, chartData.y.length * 28 + 60),
                 margin: { l: 220, r: 50, t: 10, b: 30 },
                 xaxis: {
@@ -499,17 +501,14 @@ export default function PatternOverviewTab() {
                   range: [0, Math.min(110, Math.max(...chartData.x) + 15)],
                   ticksuffix: "%",
                   tickfont: { size: 9 },
-                  gridcolor: "rgba(128,128,128,0.15)",
                 },
                 yaxis: {
                   automargin: true,
                   tickfont: { size: 9 },
                 },
-                paper_bgcolor: "transparent",
-                plot_bgcolor: "transparent",
-                font: { color: "#888", size: 10 },
+                font: { size: 10 },
                 bargap: 0.15,
-              }}
+              })}
               config={NO_TOOLBAR}
               useResizeHandler
               style={{ width: "100%" }}

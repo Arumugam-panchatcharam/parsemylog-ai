@@ -42,6 +42,11 @@ from logai.timestamp_parser import parse_timestamp, normalize_to_date_only
 
 logger = logging.getLogger(__name__)
 
+# #region REMOVED: agent log instrumentation (verified fix 2026-04-18)
+# _AGENT_DEBUG_LOG = Path("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug-27a569.log")
+# #endregion
+
+
 regex_analyzer_bp = Blueprint("regex_analyzer", __name__)
 
 # Timestamp regex for RDK log lines (ISO-8601 prefix)
@@ -916,7 +921,8 @@ def get_reboots(project_id):
     Get reboot timestamps for a project (lightweight, no scan).
 
     Returns:
-        { "reboots": [{ "timestamp": str, "reason": str }, ...] }
+        { "reboots": [{ "timestamp": str, "reason": str, "reboot_type": "soft"|"hard",
+            "is_short_reboot": bool, "uptime_before_reboot_sec": int (optional) }, ...] }
     """
     user_id = get_user_id()
     _, err = _verify_project(project_id, user_id)
@@ -1039,6 +1045,7 @@ def run_scan(project_id):
             "traces": scan_result["traces"],
             "reboots": reboots,
             "total_matches": scan_result["total_matches"],
+            "cpe_serial": cpe_id,
         }
         cache_path = _scan_result_path(project_dir, scan_id)
         cache_path.write_text(json.dumps(full_result), encoding="utf-8")
@@ -1078,7 +1085,8 @@ def get_scan_results(project_id, scan_id):
     Returns:
         {
             "traces": [{ "name": str, "times": [str], "texts": [str], "total": int }],
-            "reboots": [{ "timestamp": str, "reason": str }],
+            "reboots": [{ "timestamp": str, "reason": str, optional "reboot_type",
+                "uptime_before_reboot_sec", "is_short_reboot" }],
             "total_matches": int
         }
     """

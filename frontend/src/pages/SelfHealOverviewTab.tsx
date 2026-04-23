@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { selfhealApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import type { Data } from "plotly.js";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -422,23 +423,11 @@ const PLOT_PAGE_FS = 10;
 const PLOT_TICK_FS = 9;
 const PLOT_CHART_TITLE_FS = 11;
 
-function basePlotLayout(title: string, darkMode: boolean): Record<string, unknown> {
-  const fg = darkMode ? "#e4e4e7" : "#18181b";
-  return {
-    title: { text: title, font: { size: PLOT_CHART_TITLE_FS, color: fg, family: "system-ui, sans-serif" } },
-    paper_bgcolor: darkMode ? "#0b0b0c" : "#ffffff",
-    plot_bgcolor: darkMode ? "#121214" : "#fafafa",
-    font: { family: "system-ui, sans-serif", size: PLOT_PAGE_FS, color: fg },
-    height: 320,
-    margin: { t: 38, b: 42, l: 46, r: 16 },
-    legend: { font: { size: PLOT_TICK_FS } },
-  };
-}
-
 /* ================================================================ Component */
 export default function SelfHealOverviewTab() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
 
   const [sortKey, setSortKey] = useState<SortKey>("min_memory_available_kb");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -446,9 +435,6 @@ export default function SelfHealOverviewTab() {
   const [fleetExecSummaryOpen, setFleetExecSummaryOpen] = useState(false);
   const [leakRowOpen, setLeakRowOpen] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-
-  const prefersDark =
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark");
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["selfheal-cross-cpe-overview", projectId],
@@ -590,17 +576,26 @@ export default function SelfHealOverviewTab() {
     );
   }
 
-  const layoutBase = basePlotLayout("", prefersDark);
-  const axisFg = prefersDark ? "#e4e4e7" : "#18181b";
   const plotAxis = (label: string, extra: Record<string, unknown> = {}) => ({
-    title: { text: label, font: { size: PLOT_PAGE_FS, color: axisFg } },
-    tickfont: { size: PLOT_TICK_FS, color: axisFg },
+    title: { text: label, font: { size: PLOT_PAGE_FS } },
+    tickfont: { size: PLOT_TICK_FS },
     ...extra,
   });
   const plotChartTitle = (text: string) => ({
     text,
-    font: { size: PLOT_CHART_TITLE_FS, color: axisFg, family: "system-ui, sans-serif" as const },
+    font: { size: PLOT_CHART_TITLE_FS, family: "system-ui, sans-serif" as const },
   });
+  const fleetHistLayout = (partial: Record<string, unknown>) =>
+    mergePlot(
+      {
+        height: 320,
+        margin: { t: 38, b: 42, l: 46, r: 16 },
+        font: { family: "system-ui, sans-serif", size: PLOT_PAGE_FS },
+        legend: { font: { size: PLOT_TICK_FS } },
+        ...partial,
+      },
+      { solid: true },
+    );
 
   return (
     <div className="space-y-3">
@@ -722,8 +717,7 @@ export default function SelfHealOverviewTab() {
                 24,
                 getMemAvailableColor,
               )}
-              layout={{
-                ...layoutBase,
+              layout={fleetHistLayout({
                 title: plotChartTitle(
                   memAvailField === "min"
                     ? "MemAvailable % (minimum per CPE)"
@@ -732,7 +726,7 @@ export default function SelfHealOverviewTab() {
                 xaxis: plotAxis("MemAvailable / MemTotal (%)"),
                 yaxis: plotAxis("# CPEs"),
                 barmode: "stack" as const,
-              }}
+              })}
               useResizeHandler
               style={{ width: "100%" }}
               config={{ displayModeBar: false }}
@@ -745,13 +739,12 @@ export default function SelfHealOverviewTab() {
                 24,
                 getCpuColor,
               )}
-              layout={{
-                ...layoutBase,
+              layout={fleetHistLayout({
                 title: plotChartTitle("Average CPU % (per CPE)"),
                 xaxis: plotAxis("Avg CPU usage %"),
                 yaxis: plotAxis("# CPEs"),
                 barmode: "stack" as const,
-              }}
+              })}
               useResizeHandler
               style={{ width: "100%" }}
               config={{ displayModeBar: false }}
@@ -766,13 +759,12 @@ export default function SelfHealOverviewTab() {
               20,
               getSUnreclaimColor,
             )}
-            layout={{
-              ...layoutBase,
+            layout={fleetHistLayout({
               title: plotChartTitle("SUnreclaim (% of Slab)"),
               xaxis: plotAxis("SUnreclaim / Slab (%)"),
               yaxis: plotAxis("# CPEs"),
               barmode: "stack" as const,
-            }}
+            })}
             useResizeHandler
             style={{ width: "100%" }}
             config={{ displayModeBar: false }}
@@ -783,8 +775,7 @@ export default function SelfHealOverviewTab() {
               20,
               getOvercommitColor,
             )}
-            layout={{
-              ...layoutBase,
+            layout={fleetHistLayout({
               title: plotChartTitle("Overcommit (Committed_AS / CommitLimit)"),
               xaxis: plotAxis("Ratio"),
               yaxis: plotAxis("# CPEs"),
@@ -801,7 +792,7 @@ export default function SelfHealOverviewTab() {
                   line: { color: "#d93025", width: 2, dash: "dash" },
                 },
               ],
-            }}
+            })}
             useResizeHandler
             style={{ width: "100%" }}
             config={{ displayModeBar: false }}
@@ -834,13 +825,16 @@ export default function SelfHealOverviewTab() {
                 hovertemplate: "%{text}<br>Slab: %{x:.2f}<br>RSS Σ: %{y:.2f}<extra></extra>",
               },
             ]}
-            layout={{
-              ...layoutBase,
-              height: 360,
-              title: plotChartTitle("Kernel slab vs userspace RSS trend"),
-              xaxis: plotAxis("Slab OLS slope (KB per snapshot step)"),
-              yaxis: plotAxis("Total process RSS OLS slope (KB/step)"),
-              shapes: [
+            layout={mergePlot(
+              {
+                height: 360,
+                margin: { t: 38, b: 42, l: 46, r: 16 },
+                font: { family: "system-ui, sans-serif", size: PLOT_PAGE_FS },
+                legend: { font: { size: PLOT_TICK_FS } },
+                title: plotChartTitle("Kernel slab vs userspace RSS trend"),
+                xaxis: plotAxis("Slab OLS slope (KB per snapshot step)"),
+                yaxis: plotAxis("Total process RSS OLS slope (KB/step)"),
+                shapes: [
                 // X-axis (vertical line at x=0)
                 {
                   type: "line",
@@ -930,7 +924,9 @@ export default function SelfHealOverviewTab() {
                   borderpad: 4,
                 },
               ],
-            }}
+              },
+              { solid: true },
+            )}
             useResizeHandler
             style={{ width: "100%" }}
             config={{ displayModeBar: false }}

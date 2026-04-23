@@ -3,16 +3,12 @@ import Plot from "react-plotly.js";
 import { pcapApi } from "@/api/endpoints";
 import type { PcapApDetail } from "@/api/endpoints";
 import CircularProgress from "@mui/material/CircularProgress";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 
 function epochToTime(epoch: number): string {
   return new Date(epoch * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-const CHART_BG = {
-  paper_bgcolor: "transparent" as const,
-  plot_bgcolor: "transparent" as const,
-  font: { size: 10, color: "#9ca3af" },
-};
 const PLOT_CFG = { displayModeBar: false, responsive: true } as const;
 const BOX_COLORS = ["#3b82f6", "#8b5cf6", "#06b6d4", "#f59e0b", "#10b981", "#ef4444", "#ec4899", "#6366f1"];
 
@@ -22,6 +18,7 @@ interface Props {
 }
 
 export default function APDetailPanel({ bssid, filename }: Props) {
+  const mergePlot = usePlotlyLayoutMerge();
   const { data, isLoading, error } = useQuery({
     queryKey: ["pcap-ap-detail", filename, bssid],
     queryFn: async () => (await pcapApi.apDetail(filename, bssid)).data,
@@ -99,13 +96,13 @@ export default function APDetailPanel({ bssid, filename }: Props) {
                 hovertemplate: "%{x}<br>Median: %{y} dBm<br>Min: %{customdata[0]} dBm<br>Max: %{customdata[1]} dBm<extra></extra>",
                 customdata: d.rssi_distribution.map((r) => [r.min, r.max]),
               }]}
-              layout={{
-                ...CHART_BG, autosize: true,
+              layout={mergePlot({
+                autosize: true,
                 margin: { l: 45, r: 10, t: 10, b: 60 },
                 xaxis: { title: { text: "Client MAC", font: { size: 9 } }, tickangle: -45, tickfont: { size: 8 } },
                 yaxis: { title: { text: "RSSI (dBm)", font: { size: 9 } }, tickfont: { size: 9 } },
                 showlegend: false,
-              }}
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />
@@ -120,13 +117,13 @@ export default function APDetailPanel({ bssid, filename }: Props) {
           <div className="rounded-lg border border-border bg-card p-2" style={{ height: 220 }}>
             <Plot
               data={[{ x: d.client_timeline.map((t) => epochToTime(t.epoch)), y: d.client_timeline.map((t) => t.connected_clients), type: "scatter", mode: "lines", line: { shape: "hv", color: "#8b5cf6" }, fill: "tozeroy" }]}
-              layout={{
-                ...CHART_BG, autosize: true,
+              layout={mergePlot({
+                autosize: true,
                 margin: { l: 40, r: 10, t: 10, b: 40 },
                 yaxis: { title: { text: "Clients", font: { size: 9 } }, tickfont: { size: 9 }, dtick, range: [0, maxConnected + 1] },
                 xaxis: { tickangle: -35, tickfont: { size: 9 } },
                 showlegend: false,
-              }}
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />

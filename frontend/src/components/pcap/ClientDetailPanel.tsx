@@ -3,16 +3,12 @@ import Plot from "react-plotly.js";
 import { pcapApi } from "@/api/endpoints";
 import type { PcapClientDetail } from "@/api/endpoints";
 import CircularProgress from "@mui/material/CircularProgress";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 
 function epochToTime(epoch: number): string {
   return new Date(epoch * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-const CHART_BG = {
-  paper_bgcolor: "transparent" as const,
-  plot_bgcolor: "transparent" as const,
-  font: { size: 10, color: "#9ca3af" },
-};
 const PLOT_CFG = { displayModeBar: false, responsive: true } as const;
 
 interface Props {
@@ -21,6 +17,7 @@ interface Props {
 }
 
 export default function ClientDetailPanel({ mac, filename }: Props) {
+  const mergePlot = usePlotlyLayoutMerge();
   const { data, isLoading, error } = useQuery({
     queryKey: ["pcap-client-detail", filename, mac],
     queryFn: async () => (await pcapApi.clientDetail(filename, mac)).data,
@@ -55,8 +52,8 @@ export default function ClientDetailPanel({ mac, filename }: Props) {
               data={[
                 { x: d.rssi_timeline.map((p) => epochToTime(p.epoch)), y: d.rssi_timeline.map((p) => p.rssi), type: "scatter", mode: "lines", line: { color: "#3b82f6", width: 1.5 }, name: "RSSI" },
               ]}
-              layout={{
-                ...CHART_BG, autosize: true,
+              layout={mergePlot({
+                autosize: true,
                 margin: { l: 40, r: 10, t: 10, b: 40 },
                 yaxis: { title: { text: "dBm", font: { size: 9 } }, tickfont: { size: 9 } },
                 xaxis: { tickangle: -35, tickfont: { size: 9 } },
@@ -66,7 +63,7 @@ export default function ClientDetailPanel({ mac, filename }: Props) {
                   { type: "rect", xref: "paper", yref: "y", x0: 0, x1: 1, y0: -75, y1: -100, fillcolor: "rgba(239,68,68,0.06)", line: { width: 0 } },
                 ],
                 showlegend: false,
-              }}
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />
@@ -81,7 +78,13 @@ export default function ClientDetailPanel({ mac, filename }: Props) {
           <div className="rounded-lg border border-border bg-card p-2" style={{ height: 180 }}>
             <Plot
               data={[{ x: d.retry_timeline.map((p) => epochToTime(p.epoch)), y: d.retry_timeline.map((p) => p.retry_pct), type: "scatter", mode: "lines", fill: "tozeroy", line: { color: "#f59e0b" }, name: "Retry %" }]}
-              layout={{ ...CHART_BG, autosize: true, margin: { l: 40, r: 10, t: 10, b: 40 }, yaxis: { title: { text: "%", font: { size: 9 } }, tickfont: { size: 9 } }, xaxis: { tickangle: -35, tickfont: { size: 9 } }, showlegend: false }}
+              layout={mergePlot({
+                autosize: true,
+                margin: { l: 40, r: 10, t: 10, b: 40 },
+                yaxis: { title: { text: "%", font: { size: 9 } }, tickfont: { size: 9 } },
+                xaxis: { tickangle: -35, tickfont: { size: 9 } },
+                showlegend: false,
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />
@@ -105,7 +108,13 @@ export default function ClientDetailPanel({ mac, filename }: Props) {
                   name: "Retry", yaxis: "y" as const,
                 }] : []),
               ]}
-              layout={{ ...CHART_BG, autosize: true, margin: { l: 40, r: 10, t: 10, b: 40 }, yaxis: { tickvals: [0, 1], ticktext: ["Active", "PS"], tickfont: { size: 9 } }, xaxis: { tickangle: -35, tickfont: { size: 9 } }, showlegend: false }}
+              layout={mergePlot({
+                autosize: true,
+                margin: { l: 40, r: 10, t: 10, b: 40 },
+                yaxis: { tickvals: [0, 1], ticktext: ["Active", "PS"], tickfont: { size: 9 } },
+                xaxis: { tickangle: -35, tickfont: { size: 9 } },
+                showlegend: false,
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />
@@ -130,7 +139,14 @@ export default function ClientDetailPanel({ mac, filename }: Props) {
                   name: `Gaps (${d.sequence_analysis.seq_gaps.length})`,
                 }] : []),
               ]}
-              layout={{ ...CHART_BG, autosize: true, margin: { l: 50, r: 10, t: 10, b: 40 }, yaxis: { title: { text: "Seq #", font: { size: 9 } }, tickfont: { size: 9 } }, xaxis: { tickangle: -35, tickfont: { size: 9 } }, showlegend: true, legend: { font: { size: 9 }, orientation: "h" as const, y: 1.08, x: 0 } }}
+              layout={mergePlot({
+                autosize: true,
+                margin: { l: 50, r: 10, t: 10, b: 40 },
+                yaxis: { title: { text: "Seq #", font: { size: 9 } }, tickfont: { size: 9 } },
+                xaxis: { tickangle: -35, tickfont: { size: 9 } },
+                showlegend: true,
+                legend: { font: { size: 9 }, orientation: "h" as const, y: 1.08, x: 0 },
+              })}
               config={PLOT_CFG}
               useResizeHandler style={{ width: "100%", height: "100%" }}
             />

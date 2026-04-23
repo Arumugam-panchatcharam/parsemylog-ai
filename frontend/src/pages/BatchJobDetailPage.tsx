@@ -76,15 +76,15 @@ export default function BatchJobDetailPage() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "completed":
-        return <CheckCircleIcon className="text-green-600" style={{ fontSize: 20 }} />;
+        return <CheckCircleIcon className="text-emerald-600 dark:text-emerald-400 shrink-0" style={{ fontSize: 20 }} />;
       case "failed":
-        return <ErrorIcon className="text-red-600" style={{ fontSize: 20 }} />;
+        return <ErrorIcon className="text-destructive shrink-0" style={{ fontSize: 20 }} />;
       case "processing":
-        return <CircularProgress size={16} className="text-blue-600" />;
+        return <CircularProgress size={16} className="text-sky-600 dark:text-sky-400 shrink-0" />;
       case "pending":
-        return <HourglassEmptyIcon className="text-yellow-600" style={{ fontSize: 20 }} />;
+        return <HourglassEmptyIcon className="text-amber-600 dark:text-amber-400 shrink-0" style={{ fontSize: 20 }} />;
       case "skipped":
-        return <PendingIcon className="text-gray-600" style={{ fontSize: 20 }} />;
+        return <PendingIcon className="text-muted-foreground shrink-0" style={{ fontSize: 20 }} />;
       default:
         return null;
     }
@@ -100,8 +100,8 @@ export default function BatchJobDetailPage() {
 
   if (!job) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
-        <p className="text-red-600">Job not found</p>
+      <div className="w-full min-w-0 px-4 py-6 sm:px-6 lg:px-8">
+        <p className="text-destructive">Job not found</p>
       </div>
     );
   }
@@ -109,9 +109,9 @@ export default function BatchJobDetailPage() {
   const failedCPEs = cpes.filter((c) => c.status === "failed");
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="w-full min-w-0 max-w-full px-4 py-6 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center mb-6">
         <button
           onClick={() => navigate(`/projects/${projectId}/batch-jobs`)}
           className="p-2 hover:bg-muted rounded-lg transition-colors"
@@ -130,7 +130,7 @@ export default function BatchJobDetailPage() {
               }
             }}
             disabled={cancelMutation.isPending}
-            className="flex items-center gap-2 px-4 py-2 border border-red-600 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-destructive text-destructive rounded-lg hover:bg-destructive/10 transition-colors"
           >
             <CancelIcon style={{ fontSize: 20 }} />
             Cancel Job
@@ -149,8 +149,8 @@ export default function BatchJobDetailPage() {
       </div>
 
       {/* Job Status Card */}
-      <div className="bg-card border border-border rounded-xl p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="bg-card border border-border rounded-xl p-6 mb-6 w-full min-w-0">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <div>
             <div className="text-sm text-muted-foreground mb-1">Status</div>
             <div className="text-2xl font-semibold capitalize">{job.status}</div>
@@ -178,10 +178,10 @@ export default function BatchJobDetailPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-border">
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-border">
           <div>
             <div className="text-sm text-muted-foreground">Completed</div>
-            <div className="text-xl font-semibold text-green-600">{job.processed_cpes}</div>
+            <div className="text-xl font-semibold text-emerald-600 dark:text-emerald-400">{job.processed_cpes}</div>
           </div>
           <div>
             <div className="text-sm text-muted-foreground">Failed</div>
@@ -200,53 +200,63 @@ export default function BatchJobDetailPage() {
         </div>
 
         {job.error_message && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
+          <div className="mt-4 p-3 bg-destructive/10 border border-destructive/25 rounded-lg text-sm text-destructive">
             <strong>Error:</strong> {job.error_message}
           </div>
         )}
       </div>
 
       {/* CPE Records */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="p-4 border-b border-border flex items-center justify-between">
+      <div className="bg-card border border-border rounded-xl overflow-hidden w-full min-w-0">
+        <div className="p-4 border-b border-border flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <h2 className="text-lg font-semibold">CPE Processing Records</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setStatusFilter(undefined)}
-              className={`px-3 py-1 rounded text-sm ${
-                !statusFilter ? "bg-primary text-primary-foreground" : "bg-muted"
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                !statusFilter
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-muted border-border text-foreground hover:bg-muted/80"
               }`}
             >
               All ({cpes.length})
             </button>
             <button
               onClick={() => setStatusFilter("pending")}
-              className={`px-3 py-1 rounded text-sm ${
-                statusFilter === "pending" ? "bg-yellow-600 text-white" : "bg-muted"
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                statusFilter === "pending"
+                  ? "bg-amber-500/20 border-amber-500/45 text-amber-900 dark:text-amber-100"
+                  : "bg-muted border-border hover:bg-muted/80"
               }`}
             >
               Pending/Queued
             </button>
             <button
               onClick={() => setStatusFilter("processing")}
-              className={`px-3 py-1 rounded text-sm ${
-                statusFilter === "processing" ? "bg-blue-600 text-white" : "bg-muted"
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                statusFilter === "processing"
+                  ? "bg-sky-500/20 border-sky-500/45 text-sky-900 dark:text-sky-100"
+                  : "bg-muted border-border hover:bg-muted/80"
               }`}
             >
               Processing
             </button>
             <button
               onClick={() => setStatusFilter("completed")}
-              className={`px-3 py-1 rounded text-sm ${
-                statusFilter === "completed" ? "bg-green-600 text-white" : "bg-muted"
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                statusFilter === "completed"
+                  ? "bg-emerald-500/20 border-emerald-500/45 text-emerald-900 dark:text-emerald-100"
+                  : "bg-muted border-border hover:bg-muted/80"
               }`}
             >
               Completed
             </button>
             <button
               onClick={() => setStatusFilter("failed")}
-              className={`px-3 py-1 rounded text-sm ${
-                statusFilter === "failed" ? "bg-red-600 text-white" : "bg-muted"
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                statusFilter === "failed"
+                  ? "bg-destructive/15 border-destructive/40 text-destructive"
+                  : "bg-muted border-border hover:bg-muted/80"
               }`}
             >
               Failed
@@ -263,40 +273,46 @@ export default function BatchJobDetailPage() {
             No CPE records found
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="text-left px-4 py-3 text-sm font-medium">Serial</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium">Status</th>
-                  <th className="text-right px-4 py-3 text-sm font-medium">Logs</th>
-                  <th className="text-right px-4 py-3 text-sm font-medium">Patterns</th>
-                  <th className="text-right px-4 py-3 text-sm font-medium">Duration</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium">Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cpes.map((cpe: CPEProcessRecord) => (
-                  <tr key={cpe.record_id} className="border-t border-border hover:bg-muted/30">
-                    <td className="px-4 py-3 font-mono text-sm">{cpe.serial}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        {getStatusIcon(cpe.status)}
-                        <span className="text-sm capitalize">{cpe.status}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-right text-sm">{cpe.logs_extracted || 0}</td>
-                    <td className="px-4 py-3 text-right text-sm">{cpe.patterns_indexed || 0}</td>
-                    <td className="px-4 py-3 text-right text-sm">
-                      {cpe.processing_time_sec ? `${cpe.processing_time_sec.toFixed(1)}s` : "-"}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-red-600 max-w-xs truncate">
-                      {cpe.error_message || "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {cpes.map((cpe: CPEProcessRecord) => (
+                <div
+                  key={cpe.record_id}
+                  className="rounded-lg border border-border bg-muted/20 p-3 min-w-0 flex flex-col gap-2 hover:bg-muted/30 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-mono text-sm text-foreground truncate" title={cpe.serial}>
+                      {cpe.serial}
+                    </span>
+                    {getStatusIcon(cpe.status)}
+                  </div>
+                  <p className="text-xs capitalize text-muted-foreground">{cpe.status}</p>
+                  <div className="grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide">Logs</span>
+                      <span className="font-medium text-foreground">{cpe.logs_extracted || 0}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide">Patterns</span>
+                      <span className="font-medium text-foreground">{cpe.patterns_indexed || 0}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase tracking-wide">Time</span>
+                      <span className="font-medium text-foreground">
+                        {cpe.processing_time_sec ? `${cpe.processing_time_sec.toFixed(1)}s` : "—"}
+                      </span>
+                    </div>
+                  </div>
+                  {cpe.error_message ? (
+                    <p className="text-xs text-destructive line-clamp-3" title={cpe.error_message}>
+                      {cpe.error_message}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">—</p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

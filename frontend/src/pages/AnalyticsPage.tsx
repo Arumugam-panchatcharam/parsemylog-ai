@@ -355,11 +355,11 @@ function AnalyticsPage() {
   }, [selfHealInsights]);
 
   const renderSignalsEtlBanner = () => (
-    <div className="border-b border-gray-200 px-6 py-4">
-      <h2 className="text-lg font-medium text-gray-900">Polars ETL &amp; signal extracts</h2>
-      <p className="text-sm text-gray-600 mt-1 max-w-4xl">
-        Refreshes <code className="text-xs bg-gray-100 px-1 rounded">sta_issues.parquet</code> and{" "}
-        <code className="text-xs bg-gray-100 px-1 rounded">selfheal_insights.parquet</code> for devices with
+    <div className="border-b border-border px-6 py-4">
+      <h2 className="text-lg font-medium text-foreground">Polars ETL &amp; signal extracts</h2>
+      <p className="text-sm text-muted-foreground mt-1 max-w-4xl">
+        Refreshes <code className="text-xs bg-muted px-1 rounded">sta_issues.parquet</code> and{" "}
+        <code className="text-xs bg-muted px-1 rounded">selfheal_insights.parquet</code> for devices with
         RG output.
       </p>
       <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
@@ -373,12 +373,12 @@ function AnalyticsPage() {
           <RefreshIcon className="w-4 h-4 mr-1" />
           {forcePolarsEtlMutation.isPending ? "Re-running ETL…" : "Re-run Polars ETL"}
         </Button>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-muted-foreground">
           Recomputes consolidated Parquet for every device with RG output.
         </span>
       </div>
       {forcePolarsEtlMutation.isError ? (
-        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+        <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {String(forcePolarsEtlMutation.error)}
         </div>
       ) : null}
@@ -388,7 +388,7 @@ function AnalyticsPage() {
       "backfill" in forcePolarsEtlMutation.data &&
       forcePolarsEtlMutation.data.backfill ? (
         <div
-          className="mt-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-950"
+          className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100"
           role="status"
         >
           Polars ETL completed:{" "}
@@ -399,7 +399,7 @@ function AnalyticsPage() {
           {Number(forcePolarsEtlMutation.data.backfill.failed_count ?? 0) > 0 ? (
             <>
               ,{" "}
-              <span className="font-medium text-red-800 tabular-nums">
+              <span className="font-medium text-destructive tabular-nums">
                 {Number(forcePolarsEtlMutation.data.backfill.failed_count)} failed
               </span>
             </>
@@ -413,11 +413,11 @@ function AnalyticsPage() {
   if (!projectId) {
     return (
       <div className={ANALYTICS_LAYOUT_CLASS}>
-        <div className="bg-white rounded-lg shadow p-8">
+        <div className="bg-card rounded-lg border border-border shadow-sm p-8">
           <div className="flex flex-col items-center justify-center py-12">
-            <AssessmentIcon className="text-6xl text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Project Selected</h3>
-            <p className="text-gray-500 text-center max-w-md">
+            <AssessmentIcon className="text-6xl text-muted-foreground/70 mb-4" />
+            <h3 className="text-lg font-medium text-foreground mb-2">No Project Selected</h3>
+            <p className="text-muted-foreground text-center max-w-md">
               Please select a project from the dashboard to view analytics data.
             </p>
           </div>
@@ -433,7 +433,7 @@ function AnalyticsPage() {
   if (fleetQuery.error) {
     return (
       <div className={ANALYTICS_LAYOUT_CLASS}>
-        <div className="text-red-600">
+        <div className="text-destructive">
           Error loading analytics data: {String(fleetQuery.error)}
         </div>
       </div>
@@ -447,11 +447,11 @@ function AnalyticsPage() {
   ) {
     return (
       <div className={ANALYTICS_LAYOUT_CLASS}>
-        <div className="bg-white rounded-lg shadow p-8">
+        <div className="bg-card rounded-lg border border-border shadow-sm p-8">
           <div className="flex flex-col items-center justify-center py-12">
-            <AssessmentIcon className="text-6xl text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Analytics Data</h3>
-            <p className="text-gray-500 text-center max-w-md">
+            <AssessmentIcon className="text-6xl text-muted-foreground/70 mb-4" />
+            <h3 className="text-lg font-medium text-foreground mb-2">No Analytics Data</h3>
+            <p className="text-muted-foreground text-center max-w-md">
               No analytics data is available for this project yet. Analytics will be generated after CPE
               processing is complete.
             </p>
@@ -488,21 +488,21 @@ function AnalyticsPage() {
         {fleetData.fleet_statistics.total_devices >
           (fleetData.fleet_statistics.devices_with_analytics ?? 0) && (
           <div
-            className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+            className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100"
             role="status"
           >
             <span className="font-medium">Partial fleet analytics.</span>{" "}
             {fleetData.fleet_statistics.devices_with_analytics ?? 0} of{" "}
             {fleetData.fleet_statistics.total_devices} devices have per-CPE analytics written under{" "}
-            <code className="rounded bg-amber-100/80 px-1">issue_analysis</code>. Use{" "}
+            <code className="rounded bg-amber-500/15 dark:bg-amber-500/20 px-1">issue_analysis</code>. Use{" "}
             <strong>Force refresh</strong> to run Polars ETL for any device that already has processed logs (
-            <code className="rounded bg-amber-100/80 px-1">*_rg.parquet</code>) but is missing analytics
+            <code className="rounded bg-amber-500/15 dark:bg-amber-500/20 px-1">*_rg.parquet</code>) but is missing analytics
             artifacts.
           </div>
         )}
 
         <div
-          className="flex flex-wrap gap-1 border-b border-gray-200"
+          className="flex flex-wrap gap-1 border-b border-border"
           role="tablist"
           aria-label="Analytics sections"
         >
@@ -522,8 +522,8 @@ function AnalyticsPage() {
               className={cn(
                 "px-4 py-2.5 text-sm font-medium rounded-t-md border border-b-0 -mb-px transition-colors",
                 activeTab === id
-                  ? "bg-white border-gray-200 text-blue-700 z-[1]"
-                  : "bg-gray-50 border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-100",
+                  ? "bg-card border-border text-primary z-[1]"
+                  : "bg-muted/40 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted",
               )}
             >
               {label}
@@ -534,13 +534,13 @@ function AnalyticsPage() {
         {activeTab === "overview" ? (
           <>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-card rounded-lg border border-border shadow-sm p-6">
             <div className="flex flex-row items-center justify-between space-y-0 pb-2">
               <h3 className="text-sm font-medium">Total Devices</h3>
-              <DevicesIcon className="h-4 w-4 text-gray-500" />
+              <DevicesIcon className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="text-2xl font-bold">{fleetData.fleet_statistics.total_devices}</div>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-muted-foreground">
               CPEs with processed logs (<code className="text-[10px]">*_rg.parquet</code>)
               {fleetData.fleet_statistics.devices_with_analytics != null ? (
                 <> · {fleetData.fleet_statistics.devices_with_analytics} with analytics Parquet</>
@@ -548,39 +548,39 @@ function AnalyticsPage() {
             </p>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-card rounded-lg border border-border shadow-sm p-6">
             <div className="flex flex-row items-center justify-between space-y-0 pb-2">
               <h3 className="text-sm font-medium">Total Reboots</h3>
-              <RestartAltIcon className="h-4 w-4 text-gray-500" />
+              <RestartAltIcon className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="text-2xl font-bold">{fleetData.fleet_statistics.total_reboots}</div>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-muted-foreground">
               Avg: {fleetData.fleet_statistics.average_reboots_per_device.toFixed(1)} per device
             </p>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-card rounded-lg border border-border shadow-sm p-6">
             <div className="flex flex-row items-center justify-between space-y-0 pb-2">
               <h3 className="text-sm font-medium">WiFi STA signals</h3>
-              <WifiTetheringIcon className="h-4 w-4 text-blue-600" />
+              <WifiTetheringIcon className="h-4 w-4 text-primary" />
             </div>
             <div className="text-2xl font-bold">{staSignalCpeCount}</div>
-            <p className="text-xs text-gray-500">CPEs with STA protocol issue groups</p>
+            <p className="text-xs text-muted-foreground">CPEs with STA protocol issue groups</p>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-card rounded-lg border border-border shadow-sm p-6">
             <div className="flex flex-row items-center justify-between space-y-0 pb-2">
               <h3 className="text-sm font-medium">SelfHeal signals</h3>
-              <TroubleshootIcon className="h-4 w-4 text-gray-600" />
+              <TroubleshootIcon className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="text-2xl font-bold">{selfHealSignalCpeCount}</div>
-            <p className="text-xs text-gray-500">CPEs with SelfHeal insight rows</p>
+            <p className="text-xs text-muted-foreground">CPEs with SelfHeal insight rows</p>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-card rounded-lg border border-border shadow-sm p-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-gray-50 rounded-lg p-6">
+            <div className="bg-muted/50 rounded-lg p-6">
               <h3 className="text-lg font-medium mb-4">Reboot Reasons Distribution</h3>
               <div className="space-y-3">
                 {Object.entries(fleetData.reboot_analysis.reasons_distribution)
@@ -590,22 +590,22 @@ function AnalyticsPage() {
                     <div key={reason} className="flex items-center justify-between">
                       <span className="text-sm font-medium">{reason || "Unknown"}</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-24 bg-gray-200 rounded-full h-2">
+                        <div className="w-24 bg-muted rounded-full h-2">
                           <div
-                            className="bg-blue-500 h-2 rounded-full"
+                            className="bg-primary h-2 rounded-full"
                             style={{
                               width: `${(count / Math.max(...Object.values(fleetData.reboot_analysis.reasons_distribution))) * 100}%`,
                             }}
                           />
                         </div>
-                        <span className="text-sm text-gray-600">{count}</span>
+                        <span className="text-sm text-muted-foreground">{count}</span>
                       </div>
                     </div>
                   ))}
               </div>
             </div>
 
-            <div className="bg-gray-50 rounded-lg p-6">
+            <div className="bg-muted/50 rounded-lg p-6">
               <h3 className="text-lg font-medium mb-4">Firmware Versions</h3>
               <div className="space-y-3">
                 {Object.entries(fleetData.firmware_analysis.version_distribution)
@@ -615,15 +615,15 @@ function AnalyticsPage() {
                     <div key={version} className="flex items-center justify-between">
                       <span className="text-sm font-mono">{version}</span>
                       <div className="flex items-center gap-2">
-                        <div className="w-24 bg-gray-200 rounded-full h-2">
+                        <div className="w-24 bg-muted rounded-full h-2">
                           <div
-                            className="bg-green-500 h-2 rounded-full"
+                            className="bg-emerald-600 dark:bg-emerald-500 h-2 rounded-full"
                             style={{
                               width: `${(count / Math.max(...Object.values(fleetData.firmware_analysis.version_distribution))) * 100}%`,
                             }}
                           />
                         </div>
-                        <span className="text-sm text-gray-600">{count}</span>
+                        <span className="text-sm text-muted-foreground">{count}</span>
                       </div>
                     </div>
                   ))}
@@ -632,14 +632,14 @@ function AnalyticsPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-card rounded-lg border border-border shadow-sm p-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-gray-50 rounded-lg p-6">
+            <div className="bg-muted/50 rounded-lg p-6">
               <h3 className="text-lg font-medium mb-2 flex items-center gap-2">
-                <WifiTetheringIcon className="h-5 w-5 text-blue-600 shrink-0" />
+                <WifiTetheringIcon className="h-5 w-5 text-primary shrink-0" />
                 WiFi STA signals (fleet)
               </h3>
-              <p className="text-xs text-gray-600 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 <span className="font-medium tabular-nums">{fleetWifiStaSummary.uniqueStaCount}</span> unique
                 STA MACs
                 {fleetWifiStaSummary.laaStaCount > 0 ? (
@@ -652,22 +652,22 @@ function AnalyticsPage() {
                 {" · "}
                 <span className="font-medium tabular-nums">{staSignalCpeCount}</span> CPEs with issue groups
                 (loaded max 2000 rows). Vendor from local{" "}
-                <code className="rounded bg-gray-100 px-1">oui.txt</code> when available.
+                <code className="rounded bg-muted px-1">oui.txt</code> when available.
               </p>
               {staIssuesGroupedQuery.isLoading ? (
-                <div className="text-center py-6 text-sm text-gray-500">Loading STA analytics…</div>
+                <div className="text-center py-6 text-sm text-muted-foreground">Loading STA analytics…</div>
               ) : staIssuesGroupedQuery.isError ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                   {String(staIssuesGroupedQuery.error)}
                 </div>
               ) : fleetWifiStaSummary.issueDistribution.length === 0 ? (
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-muted-foreground">
                   No STA protocol issues in loaded data. Use the WiFi STA tab to re-run ETL or inspect
                   per-CPE detail.
                 </p>
               ) : (
                 <>
-                  <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                     Issue type distribution (events)
                   </h4>
                   <div className="space-y-3">
@@ -676,23 +676,23 @@ function AnalyticsPage() {
                       const wMax = Math.max(1, top);
                       return (
                         <div key={issue_key} className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-medium text-gray-900 line-clamp-2">
+                          <span className="text-sm font-medium text-foreground line-clamp-2">
                             {(issue_key || "unknown").replace(/_/g, " ")}
                           </span>
                           <div className="flex items-center gap-2 shrink-0">
-                            <div className="w-24 bg-gray-200 rounded-full h-2">
+                            <div className="w-24 bg-muted rounded-full h-2">
                               <div
-                                className="bg-blue-500 h-2 rounded-full"
+                                className="bg-primary h-2 rounded-full"
                                 style={{ width: `${(count / wMax) * 100}%` }}
                               />
                             </div>
-                            <span className="text-sm text-gray-600 tabular-nums">{count}</span>
+                            <span className="text-sm text-muted-foreground tabular-nums">{count}</span>
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                  <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mt-5 mb-2">
+                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mt-5 mb-2">
                     STAs most affected (estimated events per MAC)
                   </h4>
                   <ul className="space-y-2.5 text-sm">
@@ -708,29 +708,29 @@ function AnalyticsPage() {
                       return (
                         <li
                           key={row.mac}
-                          className="border-b border-gray-200/80 pb-2 last:border-0 last:pb-0"
+                          className="border-b border-border/80 pb-2 last:border-0 last:pb-0"
                         >
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-gray-900">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-foreground">
                             <span>{row.displayMac}</span>
                             {vendorLabel ? (
-                              <span className="font-sans text-[11px] font-normal text-gray-600">
+                              <span className="font-sans text-[11px] font-normal text-muted-foreground">
                                 · {vendorLabel}
                               </span>
                             ) : (
-                              <span className="font-sans text-[11px] font-normal text-gray-400">
+                              <span className="font-sans text-[11px] font-normal text-muted-foreground/70">
                                 · unknown OUI
                               </span>
                             )}
                             {row.isLaa ? (
                               <span
-                                className="font-sans text-[10px] font-medium uppercase tracking-wide rounded border border-amber-300 bg-amber-50 text-amber-900 px-1 py-px"
+                                className="font-sans text-[10px] font-medium uppercase tracking-wide rounded px-1 py-px border border-yellow-600/40 bg-yellow-100 text-yellow-950 dark:border-yellow-200/80 dark:bg-yellow-400/18 dark:text-yellow-100"
                                 title="Locally administered address (U/L bit set)"
                               >
                                 LAA
                               </span>
                             ) : null}
                           </div>
-                          <div className="text-xs text-gray-600 mt-0.5">
+                          <div className="text-xs text-muted-foreground mt-0.5">
                             ~{row.total >= 10 ? Math.round(row.total) : row.total.toFixed(1)} events ·{" "}
                             {breakdown}
                           </div>
@@ -742,29 +742,29 @@ function AnalyticsPage() {
               )}
             </div>
 
-            <div className="bg-gray-50 rounded-lg p-6">
+            <div className="bg-muted/50 rounded-lg p-6">
               <h3 className="text-lg font-medium mb-2 flex items-center gap-2">
-                <TroubleshootIcon className="h-5 w-5 text-gray-600 shrink-0" />
+                <TroubleshootIcon className="h-5 w-5 text-muted-foreground shrink-0" />
                 SelfHeal signals (fleet)
               </h3>
-              <p className="text-xs text-gray-600 mb-4">
+              <p className="text-xs text-muted-foreground mb-4">
                 Tag counts are per insight row (a row may include multiple tags). Process lists are parsed from
                 detail lines for restart and RSS-leak signals.
               </p>
               {selfHealInsightsQuery.isLoading ? (
-                <div className="text-center py-6 text-sm text-gray-500">Loading SelfHeal analytics…</div>
+                <div className="text-center py-6 text-sm text-muted-foreground">Loading SelfHeal analytics…</div>
               ) : selfHealInsightsQuery.isError ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                   {String(selfHealInsightsQuery.error)}
                 </div>
               ) : fleetSelfHealSummary.tagDistribution.length === 0 ? (
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-muted-foreground">
                   No SelfHeal insights in loaded data. Use the SelfHeal tab to re-run ETL or inspect per-CPE
                   detail.
                 </p>
               ) : (
                 <>
-                  <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                     Tag distribution (insight rows)
                   </h4>
                   <div className="space-y-3">
@@ -774,15 +774,15 @@ function AnalyticsPage() {
                       const label = SELFHEAL_TAG_LABELS[tag] ?? tag.replace(/_/g, " ");
                       return (
                         <div key={tag} className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-medium text-gray-900 line-clamp-2">{label}</span>
+                          <span className="text-sm font-medium text-foreground line-clamp-2">{label}</span>
                           <div className="flex items-center gap-2 shrink-0">
-                            <div className="w-24 bg-gray-200 rounded-full h-2">
+                            <div className="w-24 bg-muted rounded-full h-2">
                               <div
-                                className="bg-violet-500 h-2 rounded-full"
+                                className="bg-violet-600 dark:bg-violet-400 h-2 rounded-full"
                                 style={{ width: `${(count / wMax) * 100}%` }}
                               />
                             </div>
-                            <span className="text-sm text-gray-600 tabular-nums">{count}</span>
+                            <span className="text-sm text-muted-foreground tabular-nums">{count}</span>
                           </div>
                         </div>
                       );
@@ -790,14 +790,14 @@ function AnalyticsPage() {
                   </div>
                   {fleetSelfHealSummary.restartingProcesses.length > 0 ? (
                     <div className="mt-5">
-                      <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                      <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                         Processes restarting (mentions)
                       </h4>
-                      <ul className="text-xs text-gray-800 space-y-1 font-mono">
+                      <ul className="text-xs text-foreground space-y-1 font-mono">
                         {fleetSelfHealSummary.restartingProcesses.slice(0, 6).map((p) => (
                           <li key={p.name} className="flex justify-between gap-2">
                             <span className="truncate">{p.name}</span>
-                            <span className="tabular-nums text-gray-600 shrink-0">{p.mentions}</span>
+                            <span className="tabular-nums text-muted-foreground shrink-0">{p.mentions}</span>
                           </li>
                         ))}
                       </ul>
@@ -805,14 +805,14 @@ function AnalyticsPage() {
                   ) : null}
                   {fleetSelfHealSummary.leakingProcesses.length > 0 ? (
                     <div className="mt-4">
-                      <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                      <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                         Processes leaking RSS (mentions)
                       </h4>
-                      <ul className="text-xs text-gray-800 space-y-1 font-mono">
+                      <ul className="text-xs text-foreground space-y-1 font-mono">
                         {fleetSelfHealSummary.leakingProcesses.slice(0, 6).map((p) => (
                           <li key={p.name} className="flex justify-between gap-2">
                             <span className="truncate">{p.name}</span>
-                            <span className="tabular-nums text-gray-600 shrink-0">{p.mentions}</span>
+                            <span className="tabular-nums text-muted-foreground shrink-0">{p.mentions}</span>
                           </li>
                         ))}
                       </ul>
@@ -824,37 +824,37 @@ function AnalyticsPage() {
           </div>
         </div>
 
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           Open <span className="font-medium">WiFi STA</span> or <span className="font-medium">SelfHeal</span>{" "}
           for Polars ETL, filters, and per-CPE detail.
         </p>
           </>
         ) : activeTab === "wifi-sta" ? (
-          <div className="bg-white rounded-lg shadow">
+          <div className="bg-card rounded-lg border border-border shadow-sm">
             {renderSignalsEtlBanner()}
             <div className="p-6 space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
                 <label className="flex flex-col gap-1 min-w-[14rem] flex-1 max-w-md">
-                  <span className="text-xs font-medium text-gray-600">CPE serial or STA MAC</span>
+                  <span className="text-xs font-medium text-muted-foreground">CPE serial or STA MAC</span>
                   <input
                     type="search"
                     value={fleetSignalsCpeSearch}
                     onChange={(e) => setFleetSignalsCpeSearch(e.target.value)}
                     placeholder="Substring on serial; paste STA MAC to match"
                     autoComplete="off"
-                    className="px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="px-3 py-2 border border-input rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
                     aria-label="Filter by CPE serial or STA MAC"
                   />
                 </label>
                 <label className="flex flex-col gap-1 min-w-[12rem] flex-1 max-w-md">
-                  <span className="text-xs font-medium text-gray-600">WiFi issue type</span>
+                  <span className="text-xs font-medium text-muted-foreground">WiFi issue type</span>
                   <input
                     type="search"
                     value={staIssueSearch}
                     onChange={(e) => setStaIssueSearch(e.target.value)}
                     placeholder="e.g. deauth, assoc loop…"
                     autoComplete="off"
-                    className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="px-3 py-2 border border-input rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     aria-label="Search STA issues by issue type"
                   />
                 </label>
@@ -862,21 +862,21 @@ function AnalyticsPage() {
 
               <section aria-labelledby="sta-signals-heading" className="space-y-3">
                 <h3 id="sta-signals-heading" className="text-base font-medium flex items-center gap-2">
-                  <WifiTetheringIcon className="h-5 w-5 text-blue-600" />
+                  <WifiTetheringIcon className="h-5 w-5 text-primary" />
                   WiFi STA protocol issues
                 </h3>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   <strong>Near reboot</strong> means the issue window overlaps a device reboot (± margin).
-                  Vendors from local <code className="bg-gray-100 px-1 rounded">oui.txt</code> only.
+                  Vendors from local <code className="bg-muted px-1 rounded">oui.txt</code> only.
                 </p>
                 {staIssuesGroupedQuery.isLoading ? (
-                  <div className="text-center py-8 text-gray-500">Loading STA issues…</div>
+                  <div className="text-center py-8 text-muted-foreground">Loading STA issues…</div>
                 ) : staIssuesGroupedQuery.isError ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                     {String(staIssuesGroupedQuery.error)}
                   </div>
                 ) : staIssuesGrouped && staIssuesGrouped.length > 0 && staIssuesByDevice.length === 0 ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                  <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
                     No issue groups match your search. Clear the filters or try a shorter MAC prefix (at least 6
                     hex digits).
                   </div>
@@ -890,29 +890,29 @@ function AnalyticsPage() {
                       return (
                         <div
                           key={deviceSerial}
-                          className="rounded-lg border border-gray-200 bg-white overflow-hidden"
+                          className="rounded-lg border border-border bg-card overflow-hidden"
                         >
-                          <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex flex-wrap items-baseline justify-between gap-2">
+                          <div className="px-3 py-2 bg-muted/50 border-b border-border flex flex-wrap items-baseline justify-between gap-2">
                             <div>
-                              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                                 Device
                               </span>
-                              <div className="font-mono text-sm text-gray-900">{deviceSerial}</div>
+                              <div className="font-mono text-sm text-foreground">{deviceSerial}</div>
                             </div>
-                            <span className="text-xs text-gray-600 tabular-nums">
+                            <span className="text-xs text-muted-foreground tabular-nums">
                               {issues.length} issue type{issues.length === 1 ? "" : "s"} · {deviceIssueSum}{" "}
                               event{deviceIssueSum === 1 ? "" : "s"}
                             </span>
                           </div>
-                          <ul className="divide-y divide-gray-100">
+                          <ul className="divide-y divide-border">
                             {issues.map((issue) => {
                               const sev = (issue.severity || "").toLowerCase();
                               const sevClass =
                                 sev === "high"
-                                  ? "bg-red-100 text-red-900"
+                                  ? "border border-destructive/40 bg-destructive/15 text-destructive dark:bg-destructive/30 dark:text-red-100"
                                   : sev === "medium"
-                                    ? "bg-amber-100 text-amber-900"
-                                    : "bg-gray-100 text-gray-800";
+                                    ? "border border-yellow-600/35 bg-yellow-100 text-yellow-950 dark:border-yellow-200/75 dark:bg-yellow-400/20 dark:text-yellow-100"
+                                    : "border border-border bg-muted text-foreground";
                               return (
                                 <li key={`${issue.device_serial}-${issue.issue_key}`}>
                                   <details className="group px-3 py-2">
@@ -925,15 +925,15 @@ function AnalyticsPage() {
                                       >
                                         {issue.severity || "—"}
                                       </span>
-                                      <span className="font-mono text-sm text-gray-900">
+                                      <span className="font-mono text-sm text-foreground">
                                         {issue.issue_key.replace(/_/g, " ")}
                                       </span>
-                                      <span className="text-xs text-gray-500 tabular-nums">
+                                      <span className="text-xs text-muted-foreground tabular-nums">
                                         {issue.sta_count} STA{issue.sta_count === 1 ? "" : "s"}
                                       </span>
                                       {issue.may_overlap_reboot ? (
                                         <span
-                                          className="text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                                          className="text-xs font-medium rounded px-1.5 py-0.5 border border-yellow-600/40 bg-yellow-100 text-yellow-950 dark:border-yellow-200/80 dark:bg-yellow-400/18 dark:text-yellow-100"
                                           title={
                                             issue.overlapping_reboot_times?.length
                                               ? `Reboot times (UTC): ${issue.overlapping_reboot_times.join(", ")}`
@@ -944,17 +944,17 @@ function AnalyticsPage() {
                                         </span>
                                       ) : null}
                                     </summary>
-                                    <ul className="mt-2 mb-1 pl-2 border-l-2 border-gray-200 space-y-1.5">
+                                    <ul className="mt-2 mb-1 pl-2 border-l-2 border-border space-y-1.5">
                                       {issue.sta_list.map((s) => (
                                         <li
                                           key={s.sta_mac}
-                                          className="text-xs font-mono text-gray-800 flex flex-wrap gap-x-2 gap-y-0.5"
+                                          className="text-xs font-mono text-foreground flex flex-wrap gap-x-2 gap-y-0.5"
                                         >
                                           <span>{s.sta_mac}</span>
                                           {s.vendor ? (
-                                            <span className="text-gray-600 font-sans">{s.vendor}</span>
+                                            <span className="text-muted-foreground font-sans">{s.vendor}</span>
                                           ) : (
-                                            <span className="text-gray-400 font-sans">—</span>
+                                            <span className="text-muted-foreground/70 font-sans">—</span>
                                           )}
                                         </li>
                                       ))}
@@ -967,7 +967,7 @@ function AnalyticsPage() {
                         </div>
                       );
                     })}
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-muted-foreground">
                       Showing {staIssuesByDevice.length} device
                       {staIssuesByDevice.length === 1 ? "" : "s"} (
                       {staIssuesByDevice.reduce((n, [, iss]) => n + iss.length, 0)} issue groups) from{" "}
@@ -975,10 +975,10 @@ function AnalyticsPage() {
                     </p>
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-600 space-y-4">
+                  <div className="rounded-lg border border-border bg-muted/50 px-4 py-8 text-center text-sm text-muted-foreground space-y-4">
                     <p>
                       No STA protocol issues found for this project. Run Polars ETL so{" "}
-                      <code className="text-xs bg-white px-1 rounded">sta_issues.parquet</code> is regenerated.
+                      <code className="text-xs bg-muted px-1 rounded">sta_issues.parquet</code> is regenerated.
                     </p>
                     <Button
                       type="button"
@@ -996,35 +996,35 @@ function AnalyticsPage() {
             </div>
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow">
+          <div className="bg-card rounded-lg border border-border shadow-sm">
             {renderSignalsEtlBanner()}
             <div className="p-6 space-y-4">
               <label className="flex flex-col gap-1 min-w-[14rem] max-w-md">
-                <span className="text-xs font-medium text-gray-600">CPE serial</span>
+                <span className="text-xs font-medium text-muted-foreground">CPE serial</span>
                 <input
                   type="search"
                   value={fleetSignalsCpeSearch}
                   onChange={(e) => setFleetSignalsCpeSearch(e.target.value)}
                   placeholder="Substring on device serial"
                   autoComplete="off"
-                  className="px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="px-3 py-2 border border-input rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
                   aria-label="Filter SelfHeal list by CPE serial"
                 />
               </label>
 
               <section aria-labelledby="selfheal-signals-heading" className="space-y-3">
                 <h3 id="selfheal-signals-heading" className="text-base font-medium flex items-center gap-2">
-                  <TroubleshootIcon className="h-5 w-5 text-gray-600" />
+                  <TroubleshootIcon className="h-5 w-5 text-muted-foreground" />
                   SelfHeal-based signals
                 </h3>
-                <p className="text-xs text-gray-500">
-                  From periodic <code className="bg-gray-100 px-1 rounded">top</code> and{" "}
-                  <code className="bg-gray-100 px-1 rounded">/proc/meminfo</code> captures.
+                <p className="text-xs text-muted-foreground">
+                  From periodic <code className="bg-muted px-1 rounded">top</code> and{" "}
+                  <code className="bg-muted px-1 rounded">/proc/meminfo</code> captures.
                 </p>
                 {selfHealInsightsQuery.isLoading ? (
-                  <div className="text-center py-8 text-gray-500">Loading SelfHeal insights…</div>
+                  <div className="text-center py-8 text-muted-foreground">Loading SelfHeal insights…</div>
                 ) : selfHealInsightsQuery.isError ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                     {String(selfHealInsightsQuery.error)}
                   </div>
                 ) : selfHealFiltered.length > 0 ? (
@@ -1033,21 +1033,21 @@ function AnalyticsPage() {
                       const sev = (row.severity || "").toLowerCase();
                       const sevClass =
                         sev === "high"
-                          ? "bg-red-100 text-red-900"
+                          ? "border border-destructive/40 bg-destructive/15 text-destructive dark:bg-destructive/30 dark:text-red-100"
                           : sev === "medium"
-                            ? "bg-amber-100 text-amber-900"
-                            : "bg-gray-100 text-gray-800";
+                            ? "border border-yellow-600/35 bg-yellow-100 text-yellow-950 dark:border-yellow-200/75 dark:bg-yellow-400/20 dark:text-yellow-100"
+                            : "border border-border bg-muted text-foreground";
                       const tagLine = (row.tags || [])
                         .map((t) => t.replace(/_/g, " "))
                         .join(" · ");
                       return (
                         <div
                           key={`${row.device_serial}-${row.processing_date || ""}`}
-                          className="rounded-lg border border-gray-200 bg-white overflow-hidden"
+                          className="rounded-lg border border-border bg-card overflow-hidden"
                         >
                           <details className="group">
-                            <summary className="cursor-pointer list-none px-3 py-2 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center gap-2 [&::-webkit-details-marker]:hidden">
-                              <span className="font-mono text-sm text-gray-900">{row.device_serial}</span>
+                            <summary className="cursor-pointer list-none px-3 py-2 bg-muted/50 border-b border-border flex flex-wrap items-center gap-2 [&::-webkit-details-marker]:hidden">
+                              <span className="font-mono text-sm text-foreground">{row.device_serial}</span>
                               <span
                                 className={cn(
                                   "inline-block rounded px-2 py-0.5 text-xs font-medium capitalize shrink-0",
@@ -1056,9 +1056,9 @@ function AnalyticsPage() {
                               >
                                 {row.severity || "—"}
                               </span>
-                              <span className="text-xs text-gray-700">{tagLine}</span>
+                              <span className="text-xs text-foreground/90">{tagLine}</span>
                             </summary>
-                            <ul className="px-4 py-3 text-sm text-gray-800 space-y-1.5 list-disc list-inside">
+                            <ul className="px-4 py-3 text-sm text-foreground space-y-1.5 list-disc list-inside">
                               {(row.detail_lines || []).map((line, i) => (
                                 <li key={i}>{line}</li>
                               ))}
@@ -1067,18 +1067,18 @@ function AnalyticsPage() {
                         </div>
                       );
                     })}
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-muted-foreground">
                       Showing {selfHealFiltered.length} CPE
                       {selfHealFiltered.length === 1 ? "" : "s"} with SelfHeal signals (loaded max 2000).
                     </p>
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-600">
+                  <div className="rounded-lg border border-border bg-muted/50 px-4 py-8 text-center text-sm text-muted-foreground">
                     <p>
                       No SelfHeal insights for this project yet. Ensure{" "}
-                      <code className="text-xs bg-white px-1 rounded">SelfHeal.txt</code> is parsed, then run
+                      <code className="text-xs bg-muted px-1 rounded">SelfHeal.txt</code> is parsed, then run
                       Polars ETL so{" "}
-                      <code className="text-xs bg-white px-1 rounded">selfheal_insights.parquet</code> is
+                      <code className="text-xs bg-muted px-1 rounded">selfheal_insights.parquet</code> is
                       generated.
                     </p>
                   </div>

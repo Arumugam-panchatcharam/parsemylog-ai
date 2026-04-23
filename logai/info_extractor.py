@@ -23,7 +23,7 @@ import json
 import logging
 import re
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1023,13 +1023,17 @@ def extract_device_info_from_paths(
         try:
             raw = bt_path.read_text(encoding="utf-8", errors="ignore")
             bt_info = parse_boottime_log(raw)
-            reboots: List[Dict[str, str]] = []
+            reboots: List[Dict[str, Any]] = []
             history = bt_info.get("reboot_history", [])
             for cycle in history[:-1]:
                 ts = cycle.get("timestamp", "")
                 reason = cycle.get("reason", "unknown")
                 if ts:
-                    reboots.append({"timestamp": ts, "reason": reason})
+                    entry_bt: Dict[str, Any] = {"timestamp": ts, "reason": reason}
+                    ub_bt = _uptime_before_from_boot_cycle(cycle)
+                    if ub_bt is not None:
+                        entry_bt["uptime_before_reboot_sec"] = ub_bt
+                    reboots.append(entry_bt)
             device_info["reboots"] = _cluster_reboot_events_by_proximity(reboots)
         except OSError as e:
             logger.warning(f"[InfoExtractor] Error reading BootTime {bt_path}: {e}")
@@ -1108,6 +1112,33 @@ def _finalize_boot_cycle_timestamps(cycle: Dict[str, Any]) -> None:
     cycle["timestamp"] = _pick_ntp_timestamp(ts_list)
 
 
+def _uptime_before_from_boot_cycle(cycle: Dict[str, Any]) -> Optional[int]:
+    """Best-effort session uptime (seconds) from BootTime ``uptimes`` map (max component value)."""
+    uptimes = cycle.get("uptimes")
+    if not uptimes or not isinstance(uptimes, dict):
+        return None
+    vals: List[int] = []
+    for v in uptimes.values():
+        if isinstance(v, (int, float)):
+            vals.append(int(v))
+        elif isinstance(v, str) and v.isdigit():
+            vals.append(int(v))
+    return max(vals) if vals else None
+
+
+def _max_int_field_from_reboot_rows(rows: List[Dict[str, Any]], key: str) -> Optional[int]:
+    vals: List[int] = []
+    for r in rows:
+        v = r.get(key)
+        if v is None:
+            continue
+        try:
+            vals.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return max(vals) if vals else None
+
+
 def _cluster_reboot_events_by_proximity(
     reboots: List[Dict[str, Any]],
     *,
@@ -1156,6 +1187,9 @@ def _cluster_reboot_events_by_proximity(
         )
         base = dict(earliest)
         base["reason"] = reason
+        mu = _max_int_field_from_reboot_rows(group, "uptime_before_reboot_sec")
+        if mu is not None:
+            base["uptime_before_reboot_sec"] = mu
         merged.append(base)
     return merged
 
@@ -1376,7 +1410,185 @@ def parse_consolelog_for_soft_reboots(content: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 # Cache version - increment when reboot parsing logic changes
-REBOOTS_CACHE_VERSION = 4
+REBOOTS_CACHE_VERSION = 8
+
+
+def _coerce_prev_uptime_seconds(raw: Any) -> Optional[int]:
+    """Normalize telemetry ``prev_uptime`` (TR Device.DeviceInfo.UpTime) to whole seconds."""
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str):
+            first = raw.strip().split(";")[0].strip()
+            return int(float(first))
+        if isinstance(raw, (int, float)):
+            return int(raw)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _event_datetime(ts_raw: Any) -> Optional[datetime]:
+    if ts_raw is None:
+        return None
+    s = str(ts_raw).strip()
+    if not s:
+        return None
+    dt = parse_timestamp(s)
+    if dt is not None:
+        return dt
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _timestamp_delta_seconds(a: datetime, b: datetime) -> float:
+    """Absolute delta in seconds; tolerate naive vs aware mix for reboot correlation."""
+    if a.tzinfo is None and b.tzinfo is None:
+        return abs((a - b).total_seconds())
+    if a.tzinfo is not None and b.tzinfo is not None:
+        return abs((a - b).total_seconds())
+    a_naive = a.replace(tzinfo=None) if a.tzinfo else a
+    b_naive = b.replace(tzinfo=None) if b.tzinfo else b
+    return abs((a_naive - b_naive).total_seconds())
+
+
+def _enrich_reboots_uptime_from_telemetry_cache(
+    reboots: List[Dict[str, Any]],
+    project_dir: Path,
+) -> None:
+    """
+    Align ``uptime_before_reboot_sec`` with telemetry reboot detection.
+
+    BootTime ``[BootUpTime]`` lines often reflect subsystem timers (e.g. Lan_init_start)
+    rather than TR-181 device uptime. Cached telemetry timeline stores ``prev_uptime``
+    (uptime before drop) per TR event — match by time and merge.
+    """
+    try:
+        from logai.telemetry_parser import load_telemetry_cache
+    except ImportError:
+        return
+
+    cached = load_telemetry_cache(project_dir)
+    if not cached:
+        return
+    rt = cached.get("reboot_timeline")
+    if not isinstance(rt, dict):
+        return
+    tr_events = rt.get("events") or []
+    if not tr_events:
+        return
+
+    # BootTime timestamps reflect on-device reboot time; telemetry records the
+    # next report where UpTime dropped — often tens of minutes to a few hours
+    # later. Pair in a wide window and assign one TR sample per BootTime row
+    # (greedy by smallest |Δt|) to avoid bogus 1-minute subsystem uptimes.
+    max_delta_sec = float(timedelta(hours=48).total_seconds())
+
+    candidates: List[tuple[float, int, int, int]] = []
+    for i, r in enumerate(reboots):
+        r_dt = _event_datetime(r.get("timestamp"))
+        if r_dt is None:
+            continue
+        for j, ev in enumerate(tr_events):
+            pu = _coerce_prev_uptime_seconds(ev.get("prev_uptime"))
+            if pu is None or pu <= 0:
+                continue
+            ev_dt = _event_datetime(ev.get("time") or ev.get("timestamp"))
+            if ev_dt is None:
+                continue
+            delta = _timestamp_delta_seconds(r_dt, ev_dt)
+            if delta > max_delta_sec:
+                continue
+            candidates.append((delta, i, j, pu))
+
+    candidates.sort(key=lambda t: t[0])
+    used_r: set[int] = set()
+    used_t: set[int] = set()
+    for _delta, i, j, pu in candidates:
+        if i in used_r or j in used_t:
+            continue
+        used_r.add(i)
+        used_t.add(j)
+        r = reboots[i]
+        prev_bt = r.get("uptime_before_reboot_sec")
+        try:
+            prev_bt_int = int(prev_bt) if prev_bt is not None else None
+        except (TypeError, ValueError):
+            prev_bt_int = None
+
+        merged = pu if prev_bt_int is None else max(prev_bt_int, pu)
+        r["uptime_before_reboot_sec"] = merged
+
+
+def _supplement_reboots_from_telemetry_if_incomplete(
+    reboots: List[Dict[str, Any]],
+    project_dir: Path,
+) -> None:
+    """
+    If BootTime reboots are incomplete, supplement with telemetry-only detections.
+
+    Some devices/firmware may not log all reboots to BootTime.log but telemetry
+    will detect them via UpTime drops. Add unmatched TR events as fallback reboots.
+    Uses same 48-hour window as enrichment to avoid duplicates.
+    """
+    try:
+        from logai.telemetry_parser import load_telemetry_cache
+    except ImportError:
+        return
+
+    cached = load_telemetry_cache(project_dir)
+    if not cached:
+        return
+    rt = cached.get("reboot_timeline")
+    if not isinstance(rt, dict):
+        return
+    tr_events = rt.get("events") or []
+    if not tr_events or len(tr_events) <= len(reboots):
+        # Only supplement if telemetry has MORE reboots than BootTime
+        return
+
+    # Build set of already-covered TR timestamps (same 48h window as enrichment)
+    tol_sec = float(timedelta(hours=48).total_seconds())
+    covered_tr_idx: set[int] = set()
+
+    for r in reboots:
+        r_dt = _event_datetime(r.get("timestamp"))
+        if r_dt is None:
+            continue
+        for j, ev in enumerate(tr_events):
+            ev_dt = _event_datetime(ev.get("time") or ev.get("timestamp"))
+            if ev_dt is None:
+                continue
+            delta = _timestamp_delta_seconds(r_dt, ev_dt)
+            if delta <= tol_sec:
+                covered_tr_idx.add(j)
+                break
+
+    # Add uncovered TR events as new reboots
+    for j, ev in enumerate(tr_events):
+        if j in covered_tr_idx:
+            continue
+        ev_dt = _event_datetime(ev.get("time") or ev.get("timestamp"))
+        if ev_dt is None:
+            continue
+        pu = _coerce_prev_uptime_seconds(ev.get("prev_uptime"))
+        ts_str = ev.get("time") or ev.get("timestamp")
+        if ts_str:
+            new_reboot: Dict[str, Any] = {
+                "timestamp": ts_str,
+                "reason": "unknown",  # Telemetry-only reboots don't have logged reason
+                "uptime_before_reboot_sec": pu,
+                "reboot_type": "hard",
+                "is_short_reboot": False,
+                "source": "telemetry",  # Mark as detected from telemetry (not BootTime.log)
+            }
+            reboots.append(new_reboot)
+            logger.info(
+                f"[InfoExtractor] Supplemented reboot from telemetry: {ts_str} "
+                f"(uptime={pu}s, reason=unknown, source=telemetry)"
+            )
 
 
 def _reboots_cache_is_fresh(
@@ -1434,10 +1646,10 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                      (e.g. ``UPLOAD_DIRECTORY/{user_id}/{project_id}``).
 
     Returns:
-        Sorted list of ``{"timestamp": "<ISO-datetime>", "reason": "...", "reboot_type": "soft"|"hard", "is_short_reboot": bool}``
-        dicts.  Returns an empty list when no reboot data is found.
-        
-        Note: ``is_short_reboot`` is initialized as False and should be updated by ``detect_short_reboots()``.
+        Sorted list of dicts with at least ``timestamp``, ``reason``; optional
+        ``uptime_before_reboot_sec`` (from BootTime uptimes), ``reboot_type``
+        (``"soft"`` | ``"hard"``), and ``is_short_reboot`` (bool, default False
+        until ``detect_short_reboots()`` runs).  Empty list when no reboot data.
     """
     cache_path = project_dir / ".reboots_cache.json"
     bt_path = project_dir / "BootTime.log"
@@ -1468,7 +1680,7 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
             logger.warning(f"[InfoExtractor] Bad cache file {cache_path}: {e}")
 
     # --- Parse fresh ---
-    reboots: List[Dict[str, str]] = []
+    reboots: List[Dict[str, Any]] = []
 
     # --- Try BootTime.log first ---
     if bt_path.exists() and bt_path.is_file():
@@ -1481,7 +1693,11 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
                 ts = cycle.get("timestamp", "")
                 reason = cycle.get("reason", "unknown")
                 if ts:
-                    reboots.append({"timestamp": ts, "reason": reason})
+                    entry: Dict[str, Any] = {"timestamp": ts, "reason": reason}
+                    ub = _uptime_before_from_boot_cycle(cycle)
+                    if ub is not None:
+                        entry["uptime_before_reboot_sec"] = ub
+                    reboots.append(entry)
             if reboots:
                 logger.info(
                     f"[InfoExtractor] Found {len(reboots)} reboots "
@@ -1527,6 +1743,8 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
             logger.warning(f"[InfoExtractor] Error parsing {p_start_path}: {e}")
 
     reboots = _cluster_reboot_events_by_proximity(reboots)
+    _enrich_reboots_uptime_from_telemetry_cache(reboots, project_dir)
+    _supplement_reboots_from_telemetry_if_incomplete(reboots, project_dir)
 
     # --- Cross-reference with Consolelog.txt for soft reboot detection ---
     soft_reboot_timestamps: List[str] = []

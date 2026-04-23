@@ -4,6 +4,7 @@ import { selfhealApi, telemetryApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import SelfHealOverviewTab from "@/pages/SelfHealOverviewTab";
+import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
 import Autocomplete from "@mui/material/Autocomplete";
 import TextField from "@mui/material/TextField";
@@ -307,6 +308,7 @@ export default function SelfHealPage() {
   const { projectId } = useProject();
   const { cpeId } = useCPE();
   const queryClient = useQueryClient();
+  const mergePlot = usePlotlyLayoutMerge();
   const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
   const [activeSection, setActiveSection] = useState<ActiveSection>("cpu");
   const [reparsing, setReparsing] = useState(false);
@@ -779,7 +781,7 @@ export default function SelfHealPage() {
                 name: trace.label,
                 line: { width: 2 },
               }))}
-              layout={{
+              layout={mergePlot({
                 title: { text: cpuChart.group },
                 hovermode: "x unified",
                 xaxis: { title: { text: "Time" }, tickformat: PLOT_XAXIS_TICKFORMAT },
@@ -815,7 +817,7 @@ export default function SelfHealPage() {
                     yanchor: "bottom",
                   };
                 }),
-              }}
+              })}
               useResizeHandler
               style={{ width: "100%" }}
             />
@@ -888,7 +890,7 @@ export default function SelfHealPage() {
                             marker: { color: "#2563eb" },
                           },
                         ]}
-                        layout={{
+                        layout={mergePlot({
                           margin: {
                             l: Math.min(220, 8 + maxLabelLen * 6),
                             r: 16,
@@ -903,7 +905,7 @@ export default function SelfHealPage() {
                           yaxis: { automargin: true, title: { text: "" } },
                           height: barHeight,
                           showlegend: false,
-                        }}
+                        })}
                         useResizeHandler
                         style={{ width: "100%" }}
                       />
@@ -1116,7 +1118,7 @@ export default function SelfHealPage() {
                     hovertemplate:
                       "%{fullData.name}<br>%{x}<br>%{y:,.2f} MiB<extra></extra>",
                   }))}
-                  layout={{
+                  layout={mergePlot({
                     hovermode: "x unified",
                     xaxis: { title: { text: "Time" }, tickformat: PLOT_XAXIS_TICKFORMAT },
                     yaxis: {
@@ -1153,7 +1155,7 @@ export default function SelfHealPage() {
                         yanchor: "bottom",
                       };
                     }),
-                  }}
+                  })}
                   useResizeHandler
                   style={{ width: "100%" }}
                 />
@@ -1183,7 +1185,7 @@ export default function SelfHealPage() {
                         : "%{fullData.name}<br>%{x}<br>%{y:,.2f} MiB<extra></extra>",
                     };
                   })}
-                  layout={{
+                  layout={mergePlot({
                     hovermode: "x unified",
                     xaxis: { title: { text: "Time" }, tickformat: PLOT_XAXIS_TICKFORMAT },
                     yaxis: {
@@ -1227,7 +1229,7 @@ export default function SelfHealPage() {
                         yanchor: "bottom",
                       };
                     }),
-                  }}
+                  })}
                   useResizeHandler
                   style={{ width: "100%" }}
                 />

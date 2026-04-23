@@ -153,43 +153,30 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
   const timeGroups = groupDevicesByTimeProximity(sortedTimeDevices);
   const uptimeGroups = groupDevicesByTimeProximity(sortedUptimeDevices);
 
-  // Helper function to get color based on percentage
-  const getColorClass = (percentage: number) => {
-    if (percentage === 0) return "bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700";
-    if (percentage < 10) return "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700";
-    if (percentage < 25) return "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700";
-    if (percentage < 40) return "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-700";
-    if (percentage < 60) return "bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700";
-    return "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700";
+  /** Bucket cards: theme-neutral surface + colored left accent (readable in dark mode). */
+  const getBucketCardClass = (percentage: number) => {
+    const base =
+      "bg-card border border-border text-left hover:bg-muted/40 border-l-4 transition-colors text-foreground";
+    if (percentage === 0) return `${base} border-l-muted-foreground/40`;
+    if (percentage < 10) return `${base} border-l-emerald-500 dark:border-l-emerald-400`;
+    if (percentage < 25) return `${base} border-l-blue-500 dark:border-l-blue-400`;
+    if (percentage < 40) return `${base} border-l-amber-500 dark:border-l-amber-400`;
+    if (percentage < 60) return `${base} border-l-orange-500 dark:border-l-orange-400`;
+    return `${base} border-l-red-500 dark:border-l-red-400`;
   };
 
-  const getTextColorClass = (percentage: number) => {
-    if (percentage === 0) return "text-gray-700 dark:text-gray-300";
-    if (percentage < 10) return "text-green-700 dark:text-green-300";
-    if (percentage < 25) return "text-blue-700 dark:text-blue-300";
-    if (percentage < 40) return "text-yellow-700 dark:text-yellow-300";
-    if (percentage < 60) return "text-orange-700 dark:text-orange-300";
-    return "text-red-700 dark:text-red-300";
-  };
-
-  // Helper function to get background color for grouped rows with alternating shades
   const getGroupRowBgClass = (groupSize: number, groupIdx: number): string => {
     if (groupSize === 1) {
-      // Alternate light shade for single devices
-      return groupIdx % 2 === 0 ? "" : "bg-slate-100 dark:bg-slate-800";
+      return groupIdx % 2 === 0 ? "" : "bg-muted/20";
     }
-    if (groupSize === 2) {
-      // Alternate yellow shades for 2-device groups
-      return groupIdx % 2 === 0 ? "bg-yellow-100 dark:bg-yellow-900" : "bg-yellow-50 dark:bg-yellow-950";
-    }
-    // Alternate orange shades for 3+ device groups
-    return groupIdx % 2 === 0 ? "bg-orange-100 dark:bg-orange-900" : "bg-orange-50 dark:bg-orange-950";
+    const stripe = groupIdx % 2 === 0 ? "bg-muted/15" : "bg-muted/30";
+    return stripe;
   };
 
   const getGroupBorderClass = (groupSize: number): string => {
-    if (groupSize === 1) return "border-l-0";
-    if (groupSize === 2) return "border-l-2 border-l-yellow-400 dark:border-l-yellow-500";
-    return "border-l-4 border-l-orange-500 dark:border-l-orange-400";
+    if (groupSize === 1) return "";
+    if (groupSize === 2) return "border-l-[3px] border-l-amber-500/90 dark:border-l-amber-400";
+    return "border-l-[4px] border-l-orange-500/90 dark:border-l-orange-400";
   };
   
   return (
@@ -226,19 +213,19 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
               <button
                 key={bucketId}
                 onClick={() => setSelectedTimeBucket(selectedTimeBucket === bucketId ? null : bucketId)}
-                className={`p-3 rounded-lg border transition-all text-left ${getColorClass(data.percentage)} ${
+                className={`p-3 rounded-lg transition-all ${getBucketCardClass(data.percentage)} ${
                   selectedTimeBucket === bucketId
-                    ? "ring-2 ring-yellow-400 dark:ring-yellow-500"
-                    : "hover:border-muted-foreground/50"
+                    ? "ring-2 ring-primary/50 ring-offset-2 ring-offset-background"
+                    : ""
                 }`}
               >
-                <div className={`text-[11px] font-bold mb-1 ${getTextColorClass(data.percentage)}`}>
+                <div className="text-[11px] font-bold mb-1 text-foreground">
                   {data.label}
                 </div>
-                <div className={`text-xl font-bold ${getTextColorClass(data.percentage)}`}>
+                <div className="text-xl font-bold text-foreground">
                   {data.count}
                 </div>
-                <div className={`text-[10px] font-semibold ${getTextColorClass(data.percentage)}`}>
+                <div className="text-[10px] font-semibold text-muted-foreground">
                   {data.percentage}%
                 </div>
               </button>
@@ -264,19 +251,19 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
                 <button
                   key={bucketId}
                   onClick={() => setSelectedUptimeBucket(selectedUptimeBucket === bucketId ? null : bucketId)}
-                  className={`p-3 rounded-lg border transition-all text-left ${getColorClass(data.percentage)} ${
+                  className={`p-3 rounded-lg transition-all ${getBucketCardClass(data.percentage)} ${
                     selectedUptimeBucket === bucketId
-                      ? "ring-2 ring-orange-400 dark:ring-orange-500"
-                      : "hover:border-muted-foreground/50"
+                      ? "ring-2 ring-primary/50 ring-offset-2 ring-offset-background"
+                      : ""
                   }`}
                 >
-                  <div className={`text-[11px] font-bold mb-1 ${getTextColorClass(data.percentage)}`}>
+                  <div className="text-[11px] font-bold mb-1 text-foreground">
                     {data.label}
                   </div>
-                  <div className={`text-xl font-bold ${getTextColorClass(data.percentage)}`}>
+                  <div className="text-xl font-bold text-foreground">
                     {data.count}
                   </div>
-                  <div className={`text-[10px] font-semibold ${getTextColorClass(data.percentage)}`}>
+                  <div className="text-[10px] font-semibold text-muted-foreground">
                     {data.percentage}%
                   </div>
                 </button>
@@ -297,7 +284,7 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
               </div>
             </div>
             <div className={`${sortedTimeDevices.length > 10 ? 'overflow-y-auto' : ''}`} style={{ maxHeight: sortedTimeDevices.length > 10 ? `${Math.min(sortedTimeDevices.length * 24 + 40, 600)}px` : 'auto' }}>
-              <table className="text-[11px] border-collapse w-full">
+              <table className="text-[11px] border-collapse w-full [&_td]:selection:bg-primary/35 [&_td]:selection:text-foreground">
                 <colgroup>
                   <col style={{ width: "140px" }} />
                   <col style={{ width: "100px" }} />
@@ -364,7 +351,7 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
                                 {device.serial}
                               </td>
                               <td className="px-2 py-1 text-muted-foreground">{device.model || "N/A"}</td>
-                              <td className="px-2 py-1 text-muted-foreground text-[10px]">
+                              <td className="px-2 py-1 text-foreground/90 text-[10px] font-mono">
                                 {device.timestamp ? new Date(device.timestamp).toLocaleString() : "N/A"}
                               </td>
                             </tr>
@@ -393,7 +380,7 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
               </div>
             </div>
             <div className={`${sortedUptimeDevices.length > 10 ? 'overflow-y-auto' : ''}`} style={{ maxHeight: sortedUptimeDevices.length > 10 ? `${Math.min(sortedUptimeDevices.length * 24 + 40, 600)}px` : 'auto' }}>
-              <table className="text-[11px] border-collapse w-full">
+              <table className="text-[11px] border-collapse w-full [&_td]:selection:bg-primary/35 [&_td]:selection:text-foreground">
                 <colgroup>
                   <col style={{ width: "140px" }} />
                   <col style={{ width: "100px" }} />
@@ -450,7 +437,7 @@ export default function RebootAnalyticsSection({ analytics }: RebootAnalyticsSec
                                 {device.serial}
                               </td>
                               <td className="px-2 py-1 text-muted-foreground">{device.model || "N/A"}</td>
-                              <td className="px-2 py-1 text-muted-foreground text-[10px]">
+                              <td className="px-2 py-1 text-foreground/90 text-[10px] tabular-nums">
                                 {device.uptime_seconds ? formatDuration(device.uptime_seconds) : "N/A"}
                               </td>
                             </tr>
