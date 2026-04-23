@@ -610,35 +610,39 @@ export default function PatternPage() {
           </div>
         ) : null}
 
-        <div className="rounded-xl border border-border bg-card p-3">
-          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Index status</p>
-          <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto custom-scrollbar pr-0.5">
-            {indexStatus?.domains &&
-              Object.entries(indexStatus.domains).map(([key, val]: [string, unknown]) => {
-                const d = val as { indexed: boolean; label: string };
-                return (
-                  <span
-                    key={key}
-                    title={
-                      d.indexed ? "Domain indexed and ready for analysis" : "Indexing in progress…"
-                    }
-                    className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium border border-border ${
-                      d.indexed
-                        ? "bg-zinc-800 text-white dark:bg-zinc-950 dark:text-white"
-                        : "bg-muted text-muted-foreground dark:bg-muted/80"
-                    }`}
-                  >
-                    {d.indexed ? (
-                      <CheckCircleIcon style={{ fontSize: 14 }} className="text-green-500 shrink-0" />
-                    ) : (
-                      <CircularProgress size={11} className="shrink-0" />
-                    )}
-                    {d.label}
-                  </span>
-                );
-              })}
+        {!indexStatus?.all_done && (
+          <div className="rounded-xl border border-border bg-card p-3">
+            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Index status
+            </p>
+            <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto custom-scrollbar pr-0.5">
+              {indexStatus?.domains &&
+                Object.entries(indexStatus.domains).map(([key, val]: [string, unknown]) => {
+                  const d = val as { indexed: boolean; label: string };
+                  return (
+                    <span
+                      key={key}
+                      title={
+                        d.indexed ? "Domain indexed and ready for analysis" : "Indexing in progress…"
+                      }
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium border border-border ${
+                        d.indexed
+                          ? "bg-zinc-800 text-white dark:bg-zinc-950 dark:text-white"
+                          : "bg-muted text-muted-foreground dark:bg-muted/80"
+                      }`}
+                    >
+                      {d.indexed ? (
+                        <CheckCircleIcon style={{ fontSize: 14 }} className="text-green-500 shrink-0" />
+                      ) : (
+                        <CircularProgress size={11} className="shrink-0" />
+                      )}
+                      {d.label}
+                    </span>
+                  );
+                })}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Templates table (sorted by frequency descending, optional search) */}

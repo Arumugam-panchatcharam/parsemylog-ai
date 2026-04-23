@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDropzone } from "react-dropzone";
 import { authApi, filesApi, patternsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
@@ -9,6 +9,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn, convertLogTimestamp, TZ_OPTIONS } from "@/lib/utils";
 import { highlightLogLine } from "@/lib/logHighlighter";
 import { QuickDedupModal } from "@/components/QuickDedupModal";
+import { VirtualLogList } from "@/components/log-viewer/VirtualLogList";
+import { useVirtualLogFeed } from "@/components/log-viewer/useVirtualLogFeed";
+import { useLogFollowTail } from "@/components/log-viewer/useLogStream";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DescriptionIcon from "@mui/icons-material/Description";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -134,7 +137,6 @@ export default function LogViewerPage() {
   const [dedupFormEnabled, setDedupFormEnabled] = useState(true);
   const [quickDedupModalOpen, setQuickDedupModalOpen] = useState(false);
   const [quickDedupSelectedLine, setQuickDedupSelectedLine] = useState<string>("");
-  const logContainerRef = useRef<HTMLDivElement>(null);
   const quickSearchConfigRef = useRef<HTMLDivElement>(null);
   const dedupConfigRef = useRef<HTMLDivElement>(null);
   const dedupPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -161,12 +163,30 @@ export default function LogViewerPage() {
   
   const dedupApply = dedupActive && dedupPatternsForCurrentFile.some((p) => p.enabled);
 
-  const { data: fileContent, isLoading: contentLoading, isPlaceholderData: contentIsPlaceholder } = useQuery({
-    queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage, dedupApply],
-    queryFn: async () =>
-      (await filesApi.getContent(projectId!, selectedFile!, currentPage, linesPerPage, cpeId, dedupApply)).data,
-    enabled: !!projectId && !!selectedFile,
-    placeholderData: keepPreviousData,
+  const dedupFingerprint = useMemo(
+    () =>
+      JSON.stringify({
+        apply: dedupApply,
+        patterns: dedupPatternsForCurrentFile.map((p) => ({
+          id: p.id,
+          e: p.enabled,
+          r: p.regex,
+        })),
+      }),
+    [dedupPatternsForCurrentFile, dedupApply],
+  );
+
+  const { isFollowing, onAtBottomStateChange } = useLogFollowTail(true);
+
+  const logFeed = useVirtualLogFeed({
+    projectId: projectId ?? null,
+    filename: selectedFile,
+    cpeId,
+    linesPerPage,
+    dedupApply,
+    currentPage,
+    dedupFingerprint,
+    isFollowing,
   });
   const searchMutation = useMutation({
     mutationFn: (args: { pattern: string; dedup: boolean }) =>
@@ -235,32 +255,35 @@ export default function LogViewerPage() {
   });
   const isIndexing = indexStatus?.is_indexing ?? false;
 
-  // After content loads, scroll to the target line
+  // If jump-to-line is outside the loaded window, load the page that contains it.
   useEffect(() => {
-    if (scrollToLine === null || !fileContent || !logContainerRef.current) return;
-
-    const nums = fileContent.line_numbers;
-    let onPage = false;
-    if (nums?.length) {
-      onPage = nums.includes(scrollToLine);
-    } else {
-      const startLine = fileContent.start_line || 1;
-      const endLine = startLine + (fileContent.lines?.length || 0) - 1;
-      onPage = scrollToLine >= startLine && scrollToLine <= endLine;
+    if (scrollToLine === null || !selectedFile || logFeed.totalLines <= 0) return;
+    if (logFeed.contentLoading && logFeed.rows.length === 0) return;
+    if (
+      logFeed.rows.length > 0 &&
+      scrollToLine >= logFeed.loadedStartLine &&
+      scrollToLine <= logFeed.loadedEndLine
+    ) {
+      return;
     }
+    const target = Math.min(logFeed.totalPages, Math.max(1, Math.ceil(scrollToLine / linesPerPage)));
+    if (target !== currentPage) setCurrentPage(target);
+  }, [
+    scrollToLine,
+    selectedFile,
+    logFeed.contentLoading,
+    logFeed.totalLines,
+    logFeed.rows.length,
+    logFeed.loadedStartLine,
+    logFeed.loadedEndLine,
+    logFeed.totalPages,
+    linesPerPage,
+    currentPage,
+  ]);
 
-    if (onPage) {
-      requestAnimationFrame(() => {
-        const el = logContainerRef.current?.querySelector(`[data-line="${scrollToLine}"]`);
-        if (el) {
-          el.scrollIntoView({ behavior: "auto", block: "center" });
-          el.classList.add("bg-amber-700/40");
-          setTimeout(() => el.classList.remove("bg-amber-700/40"), 2000);
-        }
-        setScrollToLine(null);
-      });
-    }
-  }, [scrollToLine, fileContent]);
+  const onScrollToLineDone = useCallback(() => {
+    setScrollToLine(null);
+  }, []);
 
   const pollProcessingStatus = useCallback(async (pid: string) => {
     // Poll every 2s until processing completes or errors
@@ -398,7 +421,6 @@ export default function LogViewerPage() {
       const res = await filesApi.saveLogViewerDedupPatterns(projectId, next);
       const saved = res.data as { dedup_active: boolean; patterns: LogViewerDedupPattern[] };
       qc.setQueryData(["logViewerDedupPatterns", projectId], saved);
-      await qc.invalidateQueries({ queryKey: ["fileContent", projectId] });
       return true;
     } catch (e: unknown) {
       let msg = "Save failed. Check network and try again.";
@@ -426,7 +448,6 @@ export default function LogViewerPage() {
       const res = await filesApi.saveLogViewerDedupPatterns(projectId, latest);
       const saved = res.data as { dedup_active: boolean; patterns: LogViewerDedupPattern[] };
       qc.setQueryData(["logViewerDedupPatterns", projectId], saved);
-      await qc.invalidateQueries({ queryKey: ["fileContent", projectId] });
     } catch (e: unknown) {
       let msg = "Save failed. Check network and try again.";
       if (e && typeof e === "object" && "response" in e) {
@@ -622,8 +643,6 @@ export default function LogViewerPage() {
       // Invalidate queries to refresh the data
       // Invalidate dedup patterns to get the updated config
       qc.invalidateQueries({ queryKey: ["logViewerDedupPatterns", projectId] });
-      // Invalidate file content query to re-fetch with new dedup patterns applied
-      qc.invalidateQueries({ queryKey: ["fileContent", projectId, cpeId, selectedFile, currentPage, linesPerPage] });
     } catch (error) {
       console.error("Failed to save dedup pattern:", error);
       throw error;
@@ -986,34 +1005,33 @@ export default function LogViewerPage() {
             <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-muted/30 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-xs font-medium truncate" title={selectedFile}>{selectedFile}</span>
-                {fileContent && (
+                {!logFeed.contentLoading && logFeed.loadedStartLine > 0 && (
                   <span className="text-[10px] text-muted-foreground shrink-0">
-                    L{fileContent.start_line}–{fileContent.end_line} of {fileContent.total_lines}
-                    {fileContent.dedup_applied && fileContent.total_lines_raw != null && (
-                      <span title="Raw line count before deduplication"> ({fileContent.total_lines_raw} raw)</span>
+                    L{logFeed.loadedStartLine}–{logFeed.loadedEndLine} loaded · {logFeed.totalLines} total
+                    {logFeed.dedupApplied && logFeed.totalLinesRaw != null && (
+                      <span title="Raw line count before deduplication"> ({logFeed.totalLinesRaw} raw)</span>
                     )}
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button onClick={() => { if (projectId && selectedFile) downloadFile(projectId, selectedFile, cpeId); }} className="p-0.5 rounded hover:bg-muted" title="Download"><DownloadIcon style={{ fontSize: 16 }} className="text-muted-foreground" /></button>
-                {fileContent && fileContent.total_pages > 1 && (<>
+                {logFeed.totalPages > 1 && (<>
                   <div className="w-px h-4 bg-border mx-1" />
                   <button onClick={() => setCurrentPage(1)} disabled={currentPage <= 1} title="Go to first page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><FirstPageIcon style={{ fontSize: 16 }} /></button>
                   <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage <= 1} title="Go to previous page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronLeftIcon style={{ fontSize: 16 }} /></button>
-                  <span className="text-[10px] px-1">{currentPage}/{fileContent.total_pages}</span>
-                  <button onClick={() => setCurrentPage((p) => Math.min(fileContent.total_pages, p + 1))} disabled={currentPage >= fileContent.total_pages} title="Go to next page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronRightIcon style={{ fontSize: 16 }} /></button>
-                  <button onClick={() => setCurrentPage(fileContent.total_pages)} disabled={currentPage >= fileContent.total_pages} title="Go to last page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><LastPageIcon style={{ fontSize: 16 }} /></button>
+                  <span className="text-[10px] px-1">{currentPage}/{logFeed.totalPages}</span>
+                  <button onClick={() => setCurrentPage((p) => Math.min(logFeed.totalPages, p + 1))} disabled={currentPage >= logFeed.totalPages} title="Go to next page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><ChevronRightIcon style={{ fontSize: 16 }} /></button>
+                  <button onClick={() => setCurrentPage(logFeed.totalPages)} disabled={currentPage >= logFeed.totalPages} title="Go to last page" className="p-0.5 rounded hover:bg-muted disabled:opacity-30"><LastPageIcon style={{ fontSize: 16 }} /></button>
                 </>)}
               </div>
             </div>
           )}
 
           <div
-            ref={logContainerRef}
             className={cn(
-              "flex-1 overflow-auto bg-log-pane text-log-pane-foreground log-viewer log-scroll transition-opacity",
-              contentIsPlaceholder && "opacity-65",
+              "flex flex-1 min-h-0 flex-col bg-log-pane text-log-pane-foreground log-viewer log-scroll transition-opacity",
+              (logFeed.loadingNext || logFeed.loadingPrev) && "opacity-95",
             )}
             style={{ fontSize: `${fontSize}px` }}
           >
@@ -1022,26 +1040,33 @@ export default function LogViewerPage() {
                 Select a file from the sidebar to view its contents
               </div>
             )}
-            {contentLoading && <div className="p-4 text-xs text-log-pane-foreground/55">Loading...</div>}
-            {fileContent?.lines?.map((line: string, idx: number) => {
-              const lineNum = fileContent.line_numbers?.[idx] ?? (fileContent.start_line || 1) + idx;
-              return (
-                <div
-                  key={`${lineNum}-${idx}`}
-                  data-line={lineNum}
-                  onDoubleClick={() => {
-                    setQuickDedupSelectedLine(line);
-                    setQuickDedupModalOpen(true);
-                  }}
-                  className="hover:bg-black/[0.06] dark:hover:bg-white/[0.06] whitespace-pre-wrap px-2 sm:px-3 leading-relaxed transition-colors duration-500"
-                >
-                  <span className="select-none mr-3 inline-block w-12 text-right tabular-nums text-log-pane-foreground/55">
-                    {lineNum}
-                  </span>
-                  {renderLine(line)}
-                </div>
-              );
-            })}
+            {selectedFile && logFeed.contentLoading && logFeed.rows.length === 0 && (
+              <div className="p-4 text-xs text-log-pane-foreground/55">Loading...</div>
+            )}
+            {selectedFile && !(logFeed.contentLoading && logFeed.rows.length === 0) && (
+              <VirtualLogList
+                listKey={`${selectedFile}-${currentPage}-${linesPerPage}-${dedupFingerprint}`}
+                rows={logFeed.rows}
+                firstItemIndex={logFeed.firstItemIndex}
+                scheduleLoadNext={logFeed.scheduleLoadNext}
+                scheduleLoadPrev={logFeed.scheduleLoadPrev}
+                hasMoreNext={logFeed.hasMoreNext}
+                hasMorePrev={logFeed.hasMorePrev}
+                loadingNext={logFeed.loadingNext}
+                loadingPrev={logFeed.loadingPrev}
+                followOutput={isFollowing ? "auto" : false}
+                onAtBottomStateChange={onAtBottomStateChange}
+                syntaxHL={syntaxHL}
+                activeHighlight={activeHighlight}
+                logTimezone={logTimezone}
+                scrollToLineNumber={scrollToLine}
+                onScrollToLineDone={onScrollToLineDone}
+                onLineDoubleClick={(line) => {
+                  setQuickDedupSelectedLine(line);
+                  setQuickDedupModalOpen(true);
+                }}
+              />
+            )}
           </div>
 
           {searchResults && (

@@ -84,7 +84,10 @@ function getModuleColor(name: string): string {
    ================================================================ */
 interface Segment { text: string; type: string | null; }
 
-function segmentLine(line: string): Segment[] {
+const SEGMENT_LRU_MAX = 5000;
+const segmentLru = new Map<string, Segment[]>();
+
+function computeSegmentsForLine(line: string): Segment[] {
   // Collect all non-overlapping matches, first-pattern-wins
   const matches: Array<{ start: number; end: number; text: string; type: string }> = [];
 
@@ -117,6 +120,23 @@ function segmentLine(line: string): Segment[] {
   }
   if (last < line.length) segments.push({ text: line.slice(last), type: null });
   return segments;
+}
+
+/** Memoized segment split — avoids re-running many regex passes on repeated lines. */
+function segmentLine(line: string): Segment[] {
+  const hit = segmentLru.get(line);
+  if (hit) {
+    segmentLru.delete(line);
+    segmentLru.set(line, hit);
+    return hit;
+  }
+  const segs = computeSegmentsForLine(line);
+  if (segmentLru.size >= SEGMENT_LRU_MAX) {
+    const oldest = segmentLru.keys().next().value as string;
+    segmentLru.delete(oldest);
+  }
+  segmentLru.set(line, segs);
+  return segs;
 }
 
 /* ================================================================
