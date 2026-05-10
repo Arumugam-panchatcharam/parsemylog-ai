@@ -25,7 +25,7 @@ import re
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from logai.timestamp_parser import parse_timestamp
 
@@ -1042,8 +1042,7 @@ def extract_device_info_from_paths(
         try:
             from datetime import datetime, timedelta
 
-            raw = console_path.read_text(encoding="utf-8", errors="ignore")
-            soft_ts = parse_consolelog_for_soft_reboots(raw)
+            soft_ts = parse_consolelog_for_soft_reboots_from_path(console_path)
             tolerance = timedelta(minutes=30)
             for r in device_info.get("reboots", []):
                 r["reboot_type"] = "hard"
@@ -1369,6 +1368,22 @@ _CONSOLELOG_BACKUP_RE = re.compile(
 )
 
 
+def _collect_soft_reboots_from_console_lines(lines: Iterable[str]) -> List[str]:
+    soft_reboot_times: List[str] = []
+    seen_timestamps: set = set()
+
+    for raw_line in lines:
+        m = _CONSOLELOG_BACKUP_RE.match(raw_line.rstrip("\r\n"))
+        if m:
+            timestamp = m.group(1)
+            # Deduplicate (both indicators may appear for same reboot)
+            if timestamp not in seen_timestamps:
+                soft_reboot_times.append(timestamp)
+                seen_timestamps.add(timestamp)
+
+    return soft_reboot_times
+
+
 def parse_consolelog_for_soft_reboots(content: str) -> List[str]:
     """
     Parse Consolelog.txt to detect software-initiated reboots.
@@ -1386,21 +1401,35 @@ def parse_consolelog_for_soft_reboots(content: str) -> List[str]:
     if not content or not content.strip():
         return []
 
-    soft_reboot_times: List[str] = []
-    seen_timestamps: set = set()
-
-    for line in content.splitlines():
-        m = _CONSOLELOG_BACKUP_RE.match(line)
-        if m:
-            timestamp = m.group(1)
-            # Deduplicate (both indicators may appear for same reboot)
-            if timestamp not in seen_timestamps:
-                soft_reboot_times.append(timestamp)
-                seen_timestamps.add(timestamp)
-
+    soft_reboot_times = _collect_soft_reboots_from_console_lines(content.splitlines())
     logger.info(
         f"[InfoExtractor] Found {len(soft_reboot_times)} soft reboot "
         f"indicators in Consolelog.txt"
+    )
+    return soft_reboot_times
+
+
+def parse_consolelog_for_soft_reboots_from_path(console_path: Path) -> List[str]:
+    """
+    Stream Consolelog.txt line-by-line for soft-reboot detection.
+
+    Avoids ``read_text`` + ``splitlines()`` on multi-gigabyte console dumps,
+    which can stall the Pattern Analyzer scan during reboot extraction.
+    """
+    if not console_path.exists() or not console_path.is_file():
+        return []
+
+    soft_reboot_times: List[str] = []
+    try:
+        with console_path.open(encoding="utf-8", errors="ignore") as handle:
+            soft_reboot_times = _collect_soft_reboots_from_console_lines(handle)
+    except OSError as exc:
+        logger.warning(f"[InfoExtractor] Error reading {console_path}: {exc}")
+        return []
+
+    logger.info(
+        f"[InfoExtractor] Found {len(soft_reboot_times)} soft reboot "
+        f"indicators in {console_path.name}"
     )
     return soft_reboot_times
 
@@ -1750,8 +1779,9 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
     soft_reboot_timestamps: List[str] = []
     if console_path.exists() and console_path.is_file():
         try:
-            console_content = console_path.read_text(encoding="utf-8", errors="ignore")
-            soft_reboot_timestamps = parse_consolelog_for_soft_reboots(console_content)
+            soft_reboot_timestamps = parse_consolelog_for_soft_reboots_from_path(
+                console_path
+            )
         except Exception as e:
             logger.warning(f"[InfoExtractor] Error parsing {console_path}: {e}")
 

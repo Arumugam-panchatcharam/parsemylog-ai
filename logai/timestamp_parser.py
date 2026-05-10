@@ -7,7 +7,7 @@ Supports multiple formats including ISO, RFC, Unix timestamps, and device-specif
 
 Timestamp Patterns Supported:
 1. Unix epoch: 1234567890.123 (milliseconds/microseconds)
-2. ISO format: 2025-11-13T08:06:53 or 2025-11-13T08:06:53Z
+2. ISO format: 2025-11-13T08:06:53, 2026-03-27T00:00 (minute precision), or with Z / offset
 3. Dash-separated: 2025-11-13-08-06-53
 4. Custom format 1: 200000-12:34:56.789 (device uptime)
 5. RFC short: Mon 1 12:34:56 (weekday) or syslog-style Mar 19 22:31:31 (month + day)
@@ -28,8 +28,8 @@ _TIMESTAMP_PATTERNS = {
     # Unix epoch timestamp: 1234567890.123 or 1234567890
     "unix_epoch": re.compile(r"^\d{10,}(?:\.\d+)?$"),
     
-    # ISO format: 2025-11-13T08:06:53 or 2025-11-13T08:06:53Z
-    "iso_format": re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"),
+    # ISO-like: YYYY-MM-DDTHH:MM[:SS[.fraction]][offset|Z]; seconds optional (HTML datetime-local, APIs)
+    "iso_format": re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"),
     
     # YYYY-MM-DD-HH-MM-SS: 2025-11-13-08-06-53
     "dash_separated": re.compile(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}"),
@@ -112,13 +112,19 @@ def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
 
 
 def _parse_iso_format(ts: str) -> Optional[datetime]:
-    """Parse ISO format: 2025-11-13T08:06:53 or 2025-11-13T08:06:53Z"""
+    """Parse ISO-like calendar datetimes (RFC 3339 subset via ``datetime.fromisoformat``).
+
+    Supports optional seconds and sub-second fraction, optional ``Z``, and minute-only
+    times such as ``2026-03-27T00:00``.
+    """
     if not _TIMESTAMP_PATTERNS["iso_format"].match(ts):
         return None
-    
-    # Remove 'Z' timezone indicator if present
+
     ts_clean = ts.replace("Z", "+00:00")
-    return datetime.fromisoformat(ts_clean)
+    try:
+        return datetime.fromisoformat(ts_clean)
+    except ValueError:
+        return None
 
 
 def _parse_space_separated(ts: str) -> Optional[datetime]:
@@ -270,6 +276,7 @@ if __name__ == "__main__":
         "2026-03-26 23:03:05.041582",    # Space-separated + microseconds
         "2025-11-13T08:06:53Z",          # ISO format
         "2025-11-13T08:06:53",           # ISO format (no Z)
+        "2026-03-27T00:00",              # ISO minute precision (no seconds)
         "2025-11-13-08-06-53",           # Dash-separated
         "2024-11-07 05:37:07",           # Another space-separated
         "Wed Nov 13 08:06:53 UTC 2025",  # RFC full

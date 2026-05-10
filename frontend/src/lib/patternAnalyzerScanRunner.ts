@@ -1,6 +1,7 @@
 import api from "@/api/client";
 import type {
   PatternAnalyzerScanResult,
+  RegexScanAcceptedResponse,
   RegexScanProgressPayload,
   UserPattern,
 } from "@/api/endpoints";
@@ -47,7 +48,7 @@ export async function runPatternAnalyzerScan(
 
   let postRes;
   try {
-    postRes = await api.post<{ scan_id: string }>(`${base}/regex-scan`, body, { params: q });
+    postRes = await api.post<RegexScanAcceptedResponse>(`${base}/regex-scan`, body, { params: q });
   } catch (e: unknown) {
     throw new Error(axiosErrorMessage(e));
   }
@@ -59,7 +60,18 @@ export async function runPatternAnalyzerScan(
 
   const scan_id = postRes.data.scan_id;
   const pollInterval = 380;
-  const maxPolls = 900;
+  const nPat = Math.max(1, params.patterns.length);
+  const rgTimeoutSec =
+    typeof postRes.data.rg_timeout_sec === "number" && postRes.data.rg_timeout_sec > 0
+      ? postRes.data.rg_timeout_sec
+      : 1800;
+  // Per pattern: server runs rg with timeout=rgTimeoutSec, then parses stdout (up to 50k lines).
+  // Extra slack for reboot extraction on multi‑GB trees (can run minutes before first rg).
+  const budgetSec = nPat * (rgTimeoutSec + 240) + 3600;
+  const maxPolls = Math.min(
+    300000,
+    Math.ceil((budgetSec * 1000) / pollInterval) + 800,
+  );
 
   await sleep(80);
 

@@ -884,6 +884,8 @@ export interface RegexScanAcceptedResponse {
   scan_id: string;
   accepted: boolean;
   total_patterns: number;
+  /** Ripgrep subprocess timeout per pattern (seconds); echoes LOGAI_PATTERN_ANALYZER_RG_TIMEOUT_SEC (default 1800). */
+  rg_timeout_sec?: number;
 }
 
 export interface RegexScanProgressPayload {

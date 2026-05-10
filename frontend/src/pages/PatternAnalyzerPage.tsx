@@ -1124,7 +1124,7 @@ export default function PatternAnalyzerPage() {
       });
     });
 
-    // Reboot vertical lines + invisible hover targets (annotations overlapped legend/y-axis).
+    // Reboot vertical lines + invisible hover targets at bottom row (avoid y-axis clutter).
     const rebootsInRange: PatternAnalyzerRebootRow[] = [];
     scanResult.reboots.forEach((reboot) => {
       if (chartLo && cmpPatternAnalyzerTs(reboot.timestamp, chartLo) < 0) return;
@@ -1218,8 +1218,8 @@ export default function PatternAnalyzerPage() {
     
     return mergePlotlyLayout(resolvedTheme === "dark", {
       height: Math.max(300, traceNames.length * 60 + 100),
-      // Extra top/bottom margin: horizontal legend below plot avoids overlap with y-axis labels.
-      margin: { l: 200, r: 24, t: 16, b: 72 },
+      showlegend: false,
+      margin: { l: 200, r: 24, t: 16, b: 48 },
       xaxis: {
         title: { text: "Time", font: { size: 11 } },
         tickfont: { size: 10 },
@@ -1239,14 +1239,6 @@ export default function PatternAnalyzerPage() {
         automargin: true,
       },
       hovermode: "closest" as const,
-      legend: {
-        orientation: "h" as const,
-        y: -0.22,
-        yanchor: "top" as const,
-        x: 0.5,
-        xanchor: "center" as const,
-        font: { size: 10 },
-      },
       shapes: plotShapes,
       annotations: [],
       font: { family: "Roboto, sans-serif", size: 11 },

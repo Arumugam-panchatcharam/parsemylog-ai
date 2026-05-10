@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,6 +44,13 @@ _RG_FILTERED_MAX_RAW_MATCHES_PER_FILE = 1000
 # Spill alternation patterns to ``-f`` when many unique regexes (argv size).
 _PATTERN_SCAN_RG_FILE_THRESHOLD = max(
     8, int(os.environ.get("CPE_OVERVIEW_PATTERN_RG_FILE_THRESHOLD", "96"))
+)
+# Split batched multi-pattern rg into chunks so each stdout line is attributed against
+# at most N patterns (cuts O(lines × total_patterns) CPU when all domains are enabled).
+# CPE_OVERVIEW_PATTERN_BATCH_CHUNK — max patterns per batched rg pass (default 8).
+_CPE_OVERVIEW_PATTERN_BATCH_CHUNK = max(
+    4,
+    int(os.environ.get("CPE_OVERVIEW_PATTERN_BATCH_CHUNK", "8")),
 )
 
 cpe_overview_bp = Blueprint("cpe_overview", __name__)
@@ -710,8 +718,44 @@ def get_cpe_overview(project_id):
 
 _PATTERN_SCAN_CACHE = ".cpe_overview_pattern_scan.json"
 
+
 # Timestamp regex (same as regex_analyzer.py)
 _LOG_TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
+
+
+def _spawn_rg_deadline_watchdog(
+    proc: subprocess.Popen,
+    deadline: float,
+    log_label: str,
+) -> threading.Event:
+    """Kill *proc* once ``time.monotonic() >= deadline`` if it is still running.
+
+    Iterating ``for line in proc.stdout`` blocks in ``readline()`` until ripgrep
+    prints a line (or exits). Large trees can spend a long time between lines, so
+    per-line deadline checks never run without a parallel watchdog.
+    """
+    cancel = threading.Event()
+
+    def run() -> None:
+        while True:
+            if cancel.is_set():
+                return
+            now = time.monotonic()
+            if now >= deadline:
+                if proc.poll() is None:
+                    logger.warning(
+                        "[CPEOverview] %s: rg exceeded deadline, terminating process",
+                        log_label,
+                    )
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                return
+            cancel.wait(timeout=min(0.5, max(0.02, deadline - now)))
+
+    threading.Thread(target=run, daemon=True).start()
+    return cancel
 
 
 def _pattern_line_digest(line_text: str) -> bytes:
@@ -763,23 +807,29 @@ def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
             errors="replace",
         )
         assert proc.stdout is not None
-        for raw_line in proc.stdout:
-            if time.monotonic() > deadline:
-                logger.warning(
-                    "[CPEOverview] rg (dedup count) timed out for regex: %s",
-                    regex[:80],
-                )
-                proc.kill()
-                break
-            line = raw_line.rstrip("\n")
-            if not line.startswith(base_str):
-                continue
-            rest = line[len(base_str) :].lstrip("/\\")
-            cpos = rest.find(":")
-            if cpos == -1:
-                continue
-            line_text = rest[cpos + 1 :]
-            seen.add(_pattern_line_digest(line_text))
+        wd_cancel = _spawn_rg_deadline_watchdog(
+            proc, deadline, "rg dedup count"
+        )
+        try:
+            for raw_line in proc.stdout:
+                if time.monotonic() > deadline:
+                    logger.warning(
+                        "[CPEOverview] rg (dedup count) timed out for regex: %s",
+                        regex[:80],
+                    )
+                    proc.kill()
+                    break
+                line = raw_line.rstrip("\n")
+                if not line.startswith(base_str):
+                    continue
+                rest = line[len(base_str) :].lstrip("/\\")
+                cpos = rest.find(":")
+                if cpos == -1:
+                    continue
+                line_text = rest[cpos + 1 :]
+                seen.add(_pattern_line_digest(line_text))
+        finally:
+            wd_cancel.set()
         try:
             proc.stdout.close()
         except Exception:
@@ -1041,6 +1091,319 @@ def _task_uses_filtered_rg_scan(
     )
 
 
+def _accumulate_cpe_overview_pattern_line(
+    line: str,
+    base_str: str,
+    serial_set: Set[str],
+    task_ctx: List[
+        Tuple[
+            Dict[str, Any],
+            re.Pattern[str],
+            Optional[Tuple[dt_time, dt_time]],
+            Optional[timedelta],
+        ]
+    ],
+    per_pattern_counts: Dict[str, Dict[str, int]],
+    raw_hits_per_task_file: Dict[Tuple[str, int, str], int],
+    line_dedup: DefaultDict[Tuple[str, int, str], Set[bytes]],
+    cpe_reboots: Dict[str, List[Dict[str, str]]],
+    cpe_reboot_windows: Dict[str, List[tuple]],
+    reboot_window_minutes: Optional[int],
+) -> None:
+    """Apply one ripgrep output line to ``per_pattern_counts`` (multi-pattern scan)."""
+    if not line.startswith(base_str):
+        return
+    rest = line[len(base_str) :].lstrip("/\\")
+    cpos = rest.find(":")
+    if cpos == -1:
+        return
+    file_rel = rest[:cpos]
+    line_text = rest[cpos + 1 :]
+    serial = file_rel.split("/", 1)[0].split("\\", 1)[0]
+    if serial not in serial_set:
+        return
+
+    base_norm = base_str.rstrip("/\\")
+    full_file = f"{base_norm}/{file_rel}"
+
+    ts_match = _LOG_TS_RE.search(line)
+    ts_dt: Optional[datetime] = None
+    if ts_match:
+        try:
+            ts_dt = parse_timestamp(ts_match.group(1))
+            if not ts_dt:
+                ts_dt = datetime.fromisoformat(ts_match.group(1))
+        except ValueError:
+            ts_dt = None
+
+    for task, cre, mwt, rp_delta in task_ctx:
+        if not cre.search(line_text):
+            continue
+
+        uses_cap = _task_uses_filtered_rg_scan(task, reboot_window_minutes)
+        if uses_cap:
+            cap_key = (task["domain"], task["idx"], full_file)
+            n_raw = raw_hits_per_task_file.get(cap_key, 0)
+            if n_raw >= _RG_FILTERED_MAX_RAW_MATCHES_PER_FILE:
+                continue
+            raw_hits_per_task_file[cap_key] = n_raw + 1
+
+        key = f"{task['domain']}::{task['idx']}"
+        counts_row = per_pattern_counts[key]
+
+        if ts_dt is None:
+            _count_if_new_duplicate_line(
+                line_dedup,
+                task["domain"],
+                task["idx"],
+                serial,
+                line_text,
+                counts_row,
+            )
+            continue
+
+        if mwt is not None:
+            mw_start, mw_end = mwt
+            match_time = ts_dt.time()
+            if mw_start <= mw_end:
+                if mw_start <= match_time <= mw_end:
+                    continue
+            else:
+                if match_time >= mw_start or match_time <= mw_end:
+                    continue
+
+        if rp_delta is not None and cpe_reboots:
+            skip_rp = False
+            for r in cpe_reboots.get(serial, []):
+                try:
+                    rt = parse_timestamp(r["timestamp"])
+                    if not rt:
+                        rt = datetime.fromisoformat(r["timestamp"])
+                except (ValueError, KeyError):
+                    continue
+                if abs(ts_dt - rt) <= rp_delta:
+                    skip_rp = True
+                    break
+            if skip_rp:
+                continue
+
+        if reboot_window_minutes and cpe_reboot_windows:
+            windows = cpe_reboot_windows.get(serial, [])
+            if windows:
+                if not _timestamp_in_windows(ts_dt, windows):
+                    continue
+            else:
+                continue
+
+        _count_if_new_duplicate_line(
+            line_dedup,
+            task["domain"],
+            task["idx"],
+            serial,
+            line_text,
+            counts_row,
+        )
+
+
+def _run_multi_cpe_pattern_scan_per_regex_sequential(
+    rg_binary: str,
+    base_dir: Path,
+    cpe_serials: List[str],
+    all_tasks: List[Dict[str, Any]],
+    cpe_reboots: Dict[str, List[Dict[str, str]]],
+    reboot_window_minutes: Optional[int],
+) -> Dict[str, Dict[str, int]]:
+    """
+    Fallback when batched multi-pattern ripgrep fails (exit 2: invalid Rust regex,
+    argv limits, etc.): one ``rg`` invocation per distinct regex string, same counting
+    semantics as :func:`_run_multi_cpe_pattern_scan_batched`.
+    """
+    serial_set = set(cpe_serials)
+    zero_row = {s: 0 for s in cpe_serials}
+    per_pattern_counts: Dict[str, Dict[str, int]] = {
+        f"{t['domain']}::{t['idx']}": dict(zero_row) for t in all_tasks
+    }
+
+    compiled_pairs: List[Tuple[Dict[str, Any], re.Pattern[str]]] = []
+    for t in all_tasks:
+        try:
+            compiled_pairs.append((t, re.compile(t["regex"], re.IGNORECASE)))
+        except re.error as exc:
+            logger.warning(
+                "[CPEOverview] Skip pattern %r (invalid regex): %s",
+                t.get("name", ""),
+                exc,
+            )
+
+    if not compiled_pairs:
+        return per_pattern_counts
+
+    task_ctx: List[
+        Tuple[
+            Dict[str, Any],
+            re.Pattern[str],
+            Optional[Tuple[dt_time, dt_time]],
+            Optional[timedelta],
+        ]
+    ] = []
+    for t, cre in compiled_pairs:
+        mw = t.get("maintenance_window")
+        mwt: Optional[Tuple[dt_time, dt_time]] = None
+        if mw:
+            mwt = (
+                datetime.strptime(mw["start"], "%H:%M").time(),
+                datetime.strptime(mw["end"], "%H:%M").time(),
+            )
+        rp_delta: Optional[timedelta] = None
+        rp_min = t.get("reboot_proximity_minutes")
+        if rp_min is not None:
+            try:
+                rp_delta = timedelta(minutes=int(rp_min))
+            except (TypeError, ValueError):
+                rp_delta = None
+        task_ctx.append((t, cre, mwt, rp_delta))
+
+    unique_patterns = list(dict.fromkeys(t["regex"] for t, _ in compiled_pairs))
+
+    cpe_reboot_windows: Dict[str, List[tuple]] = {}
+    if reboot_window_minutes and cpe_reboots:
+        for serial, reboots in cpe_reboots.items():
+            if reboots:
+                cpe_dir = base_dir / serial
+                if cpe_dir.exists():
+                    windows = _get_reboot_time_windows(cpe_dir, reboot_window_minutes)
+                    if windows:
+                        cpe_reboot_windows[serial] = windows
+
+    ctx_by_regex: DefaultDict[
+        str,
+        List[
+            Tuple[
+                Dict[str, Any],
+                re.Pattern[str],
+                Optional[Tuple[dt_time, dt_time]],
+                Optional[timedelta],
+            ]
+        ],
+    ] = defaultdict(list)
+    for tc in task_ctx:
+        ctx_by_regex[tc[0]["regex"]].append(tc)
+
+    all_tasks_filtered = all(
+        _task_uses_filtered_rg_scan(t, reboot_window_minutes) for t, _ in compiled_pairs
+    )
+    rg_max_count_prefix: List[str] = []
+    if all_tasks_filtered:
+        cap = _RG_FILTERED_MAX_RAW_MATCHES_PER_FILE * len(compiled_pairs)
+        rg_max_count_prefix = ["--max-count", str(cap)]
+
+    raw_hits_per_task_file: Dict[Tuple[str, int, str], int] = {}
+    line_dedup: DefaultDict[Tuple[str, int, str], Set[bytes]] = defaultdict(set)
+    base_str = str(base_dir)
+
+    for regex in unique_patterns:
+        ctx_sub = ctx_by_regex[regex]
+        cmd = [
+            rg_binary,
+            *rg_max_count_prefix,
+            "--no-heading",
+            "--no-line-number",
+            "-i",
+            "--max-filesize",
+            "500M",
+            "-e",
+            regex,
+            str(base_dir),
+        ]
+        proc: Optional[subprocess.Popen[str]] = None
+        stderr_path: Optional[str] = None
+        stderr_fp = None
+        try:
+            stderr_tf = tempfile.NamedTemporaryFile(delete=False, suffix=".rgstderr")
+            stderr_path = stderr_tf.name
+            stderr_tf.close()
+            stderr_fp = open(stderr_path, "w", encoding="utf-8")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=stderr_fp,
+                text=True,
+                errors="replace",
+            )
+            assert proc.stdout is not None
+            deadline_pat = time.monotonic() + _RG_TIMEOUT_FILTERED
+            wd_cancel = _spawn_rg_deadline_watchdog(
+                proc, deadline_pat, "rg per-regex fallback"
+            )
+            try:
+                for raw_line in proc.stdout:
+                    if time.monotonic() > deadline_pat:
+                        logger.warning(
+                            "[CPEOverview] rg (per-regex fallback) timed out"
+                        )
+                        proc.kill()
+                        break
+                    _accumulate_cpe_overview_pattern_line(
+                        raw_line.rstrip("\n"),
+                        base_str,
+                        serial_set,
+                        ctx_sub,
+                        per_pattern_counts,
+                        raw_hits_per_task_file,
+                        line_dedup,
+                        cpe_reboots,
+                        cpe_reboot_windows,
+                        reboot_window_minutes,
+                    )
+            finally:
+                wd_cancel.set()
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "[CPEOverview] rg (per-regex fallback) wait timed out"
+                )
+                proc.kill()
+                proc.wait(timeout=30)
+        except Exception as exc:
+            logger.warning("[CPEOverview] rg (per-regex fallback) error: %s", exc)
+            if proc and proc.poll() is None:
+                proc.kill()
+        finally:
+            if stderr_fp is not None:
+                try:
+                    stderr_fp.close()
+                except Exception:
+                    pass
+
+        err_txt = ""
+        if stderr_path:
+            try:
+                err_txt = Path(stderr_path).read_text(
+                    encoding="utf-8", errors="replace"
+                ).strip()
+            except OSError:
+                err_txt = ""
+            try:
+                Path(stderr_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        if proc is None or proc.returncode not in (0, 1):
+            logger.warning(
+                "[CPEOverview] rg (per-regex fallback) exit %s for pattern %.120s%s",
+                getattr(proc, "returncode", "?"),
+                regex,
+                f": {err_txt[:800]}" if err_txt else "",
+            )
+
+    return per_pattern_counts
+
+
 def _run_multi_cpe_pattern_scan_batched(
     rg_binary: str,
     base_dir: Path,
@@ -1174,15 +1537,24 @@ def _run_multi_cpe_pattern_scan_batched(
     deadline = time.monotonic() + _RG_TIMEOUT_FILTERED
     proc: Optional[subprocess.Popen[str]] = None
     scan_timed_out = False
+    stderr_path: Optional[str] = None
+    stderr_fp = None
     try:
+        stderr_tf = tempfile.NamedTemporaryFile(delete=False, suffix=".rgstderr")
+        stderr_path = stderr_tf.name
+        stderr_tf.close()
+        stderr_fp = open(stderr_path, "w", encoding="utf-8")
         proc = subprocess.Popen(
             cmd_base,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr_fp,
             text=True,
             errors="replace",
         )
         assert proc.stdout is not None
+        wd_cancel = _spawn_rg_deadline_watchdog(
+            proc, deadline, "rg batched multi-pattern"
+        )
         try:
             for raw_line in proc.stdout:
                 if time.monotonic() > deadline:
@@ -1192,102 +1564,20 @@ def _run_multi_cpe_pattern_scan_batched(
                     scan_timed_out = True
                     proc.kill()
                     break
-                line = raw_line.rstrip("\n")
-                if not line.startswith(base_str):
-                    continue
-                rest = line[len(base_str) :].lstrip("/\\")
-                cpos = rest.find(":")
-                if cpos == -1:
-                    continue
-                file_rel = rest[:cpos]
-                line_text = rest[cpos + 1 :]
-                serial = file_rel.split("/", 1)[0].split("\\", 1)[0]
-                if serial not in serial_set:
-                    continue
-
-                base_norm = base_str.rstrip("/\\")
-                full_file = f"{base_norm}/{file_rel}"
-
-                ts_match = _LOG_TS_RE.search(line)
-                ts_dt: Optional[datetime] = None
-                if ts_match:
-                    try:
-                        ts_dt = parse_timestamp(ts_match.group(1))
-                        if not ts_dt:
-                            ts_dt = datetime.fromisoformat(ts_match.group(1))
-                    except ValueError:
-                        ts_dt = None
-
-                for task, cre, mwt, rp_delta in task_ctx:
-                    if not cre.search(line_text):
-                        continue
-
-                    uses_cap = _task_uses_filtered_rg_scan(
-                        task, reboot_window_minutes
-                    )
-                    if uses_cap:
-                        cap_key = (task["domain"], task["idx"], full_file)
-                        n_raw = raw_hits_per_task_file.get(cap_key, 0)
-                        if n_raw >= _RG_FILTERED_MAX_RAW_MATCHES_PER_FILE:
-                            continue
-                        raw_hits_per_task_file[cap_key] = n_raw + 1
-
-                    key = f"{task['domain']}::{task['idx']}"
-                    counts_row = per_pattern_counts[key]
-
-                    if ts_dt is None:
-                        _count_if_new_duplicate_line(
-                            line_dedup,
-                            task["domain"],
-                            task["idx"],
-                            serial,
-                            line_text,
-                            counts_row,
-                        )
-                        continue
-
-                    if mwt is not None:
-                        mw_start, mw_end = mwt
-                        match_time = ts_dt.time()
-                        if mw_start <= mw_end:
-                            if mw_start <= match_time <= mw_end:
-                                continue
-                        else:
-                            if match_time >= mw_start or match_time <= mw_end:
-                                continue
-
-                    if rp_delta is not None and cpe_reboots:
-                        skip_rp = False
-                        for r in cpe_reboots.get(serial, []):
-                            try:
-                                rt = parse_timestamp(r["timestamp"])
-                                if not rt:
-                                    rt = datetime.fromisoformat(r["timestamp"])
-                            except (ValueError, KeyError):
-                                continue
-                            if abs(ts_dt - rt) <= rp_delta:
-                                skip_rp = True
-                                break
-                        if skip_rp:
-                            continue
-
-                    if reboot_window_minutes and cpe_reboot_windows:
-                        windows = cpe_reboot_windows.get(serial, [])
-                        if windows:
-                            if not _timestamp_in_windows(ts_dt, windows):
-                                continue
-                        else:
-                            continue
-
-                    _count_if_new_duplicate_line(
-                        line_dedup,
-                        task["domain"],
-                        task["idx"],
-                        serial,
-                        line_text,
-                        counts_row,
-                    )
+                _accumulate_cpe_overview_pattern_line(
+                    raw_line.rstrip("\n"),
+                    base_str,
+                    serial_set,
+                    task_ctx,
+                    per_pattern_counts,
+                    raw_hits_per_task_file,
+                    line_dedup,
+                    cpe_reboots,
+                    cpe_reboot_windows,
+                    reboot_window_minutes,
+                )
         finally:
+            wd_cancel.set()
             try:
                 proc.stdout.close()
             except Exception:
@@ -1305,19 +1595,48 @@ def _run_multi_cpe_pattern_scan_batched(
         if proc and proc.poll() is None:
             proc.kill()
     finally:
+        if stderr_fp is not None:
+            try:
+                stderr_fp.close()
+            except Exception:
+                pass
         if pat_file:
             Path(pat_file).unlink(missing_ok=True)
+
+    err_txt = ""
+    if stderr_path:
+        try:
+            err_txt = Path(stderr_path).read_text(
+                encoding="utf-8", errors="replace"
+            ).strip()
+        except OSError:
+            err_txt = ""
+        try:
+            Path(stderr_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
     if scan_timed_out:
         return per_pattern_counts
 
     if proc is None or proc.returncode not in (0, 1):
-        if proc is not None:
-            logger.warning(
-                "[CPEOverview] rg (batched multi-pattern) exit %s",
-                proc.returncode,
-            )
-        return per_pattern_counts
+        rc = proc.returncode if proc is not None else None
+        logger.warning(
+            "[CPEOverview] rg (batched multi-pattern) exit %s%s",
+            rc,
+            f": {err_txt[:1500]}" if err_txt else "",
+        )
+        logger.info(
+            "[CPEOverview] Using per-regex ripgrep fallback (Rust regex / argv limits)"
+        )
+        return _run_multi_cpe_pattern_scan_per_regex_sequential(
+            rg_binary,
+            base_dir,
+            cpe_serials,
+            all_tasks,
+            cpe_reboots,
+            reboot_window_minutes,
+        )
 
     return per_pattern_counts
 
@@ -1534,16 +1853,35 @@ def run_pattern_scan(project_id):
                 cpe_reboots[cpe_info["serial"]] = []
 
     if is_multi_cpe and len(cpe_dirs) > 1:
-        # Single ripgrep over the project tree (all patterns as alternates), then
-        # attribute counts per pattern/CPE in Python — avoids N parallel rg processes.
-        per_pattern_counts = _run_multi_cpe_pattern_scan_batched(
-            rg_binary,
-            base_dir,
-            cpe_serials,
-            all_tasks,
-            cpe_reboots,
-            reboot_window_minutes,
-        )
+        # Batched rg over the project tree; optionally chunked to limit Python attribution cost.
+        chunk_sz = _CPE_OVERVIEW_PATTERN_BATCH_CHUNK
+
+        if len(all_tasks) <= chunk_sz:
+            per_pattern_counts = _run_multi_cpe_pattern_scan_batched(
+                rg_binary,
+                base_dir,
+                cpe_serials,
+                all_tasks,
+                cpe_reboots,
+                reboot_window_minutes,
+            )
+        else:
+            zero_row = {s: 0 for s in cpe_serials}
+            per_pattern_counts = {
+                f"{t['domain']}::{t['idx']}": dict(zero_row) for t in all_tasks
+            }
+            for i in range(0, len(all_tasks), chunk_sz):
+                chunk = all_tasks[i : i + chunk_sz]
+                part = _run_multi_cpe_pattern_scan_batched(
+                    rg_binary,
+                    base_dir,
+                    cpe_serials,
+                    chunk,
+                    cpe_reboots,
+                    reboot_window_minutes,
+                )
+                for key, row in part.items():
+                    per_pattern_counts[key] = row
 
         for domain_name, dom_data in result_domains.items():
             n_patterns = len(dom_data["patterns"])

@@ -20,11 +20,11 @@ Format::
 import copy
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import threading
-import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -58,6 +58,17 @@ _RG_PATTERNS_DIR = Path(__file__).resolve().parent.parent.parent / "configs" / "
 
 # Rule parser config (domain presets from JSON)
 _RULE_PARSER_CONFIG = Path(UPLOAD_DIRECTORY) / "rule_parser_config.json"
+
+# Async Pattern Analyzer scan: ripgrep limits (multi‑GB CPE dumps need higher ceilings).
+# LOGAI_PATTERN_ANALYZER_RG_TIMEOUT_SEC — per-pattern subprocess timeout (seconds, min 120, default 1800).
+# LOGAI_PATTERN_ANALYZER_RG_MAX_FILESIZE — rg --max-filesize (e.g. 2G, 4G); larger files are skipped by rg.
+_PATTERN_ANALYZER_RG_TIMEOUT_SEC = max(
+    120,
+    int(os.environ.get("LOGAI_PATTERN_ANALYZER_RG_TIMEOUT_SEC", "1800")),
+)
+_PATTERN_ANALYZER_RG_MAX_FILESIZE = (
+    os.environ.get("LOGAI_PATTERN_ANALYZER_RG_MAX_FILESIZE", "4G").strip() or "4G"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -728,7 +739,7 @@ def _run_ripgrep_scan(
             "--line-number",
             "--no-filename",
             "--max-count", "50000",
-            "--max-filesize", "500M",
+            "--max-filesize", _PATTERN_ANALYZER_RG_MAX_FILESIZE,
             "-i",
             "-e", regex,
             *path_args,
@@ -739,7 +750,7 @@ def _run_ripgrep_scan(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=_PATTERN_ANALYZER_RG_TIMEOUT_SEC,
             )
         except subprocess.TimeoutExpired:
             logger.warning(f"[PatternAnalyzer] ripgrep timed out for pattern: {name}")
@@ -869,6 +880,14 @@ def _regex_scan_background_job(
         if not project_dir.exists():
             fail("Project directory not found")
             return
+
+        _write_scan_progress(project_dir, scan_id, {
+            "status": "running",
+            "current": 0,
+            "total": len(enabled_patterns),
+            "pattern_name": "Building reboot timeline (large uploads can take several minutes)…",
+            "error": None,
+        })
 
         reboots = find_and_extract_reboots(project_dir)
         if filter_short_reboots and len(reboots) > 1:
@@ -1033,6 +1052,7 @@ def regex_scan_validate_and_start_async(
         "scan_id": scan_id,
         "accepted": True,
         "total_patterns": len(enabled_patterns),
+        "rg_timeout_sec": _PATTERN_ANALYZER_RG_TIMEOUT_SEC,
     }), 202
 
 
