@@ -155,8 +155,11 @@ curl -X POST http://localhost:40901/api/utilities/oui-update \
 ### 5. Build Frontend
 
 ```bash
-# Build React SPA
+# Preferred (Compose v2 plugin):
 docker compose --profile build up frontend-build
+
+# Same outcome without `docker compose` (plain Docker):
+./scripts/build-frontend-docker.sh
 
 # Wait for completion
 # Expected: "Frontend build complete."
@@ -686,6 +689,34 @@ sudo chown -R $USER:$USER /opt/parsemylog-ai
 
 # 3. Disk space
 df -h
+```
+
+### Frontend build: `docker: unknown command: docker compose`
+
+Install the Compose **v2 plugin** so `docker compose` is available (subcommand of Docker CLI):
+
+```bash
+# Debian/Ubuntu (Docker’s apt repo)
+sudo apt-get update && sudo apt-get install -y docker-compose-plugin
+docker compose version
+```
+
+See also: [Docker Compose install](https://docs.docker.com/compose/install/linux/).
+
+**Without installing the plugin**, build the SPA into the same volumes nginx uses:
+
+```bash
+./scripts/build-frontend-docker.sh
+```
+
+### Frontend build / legacy Compose shows `KeyError: 'id'`
+
+Standalone **`docker-compose`** (Python v1) can throw **`KeyError: 'id'`** while streaming Docker events. Prefer **`docker compose`** (v2) or **`./scripts/build-frontend-docker.sh`**.
+
+Verify the frontend toolchain on the host:
+
+```bash
+cd frontend && npm ci && npm run build
 ```
 
 ### High Memory Usage

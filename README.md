@@ -139,7 +139,7 @@ ParseMyLog-AI uses a microservices architecture with clear separation of concern
 
 ### 🚀 Production Deployment (5 minutes)
 
-**Prerequisites:** Docker 20.10+ and Docker Compose v2+
+**Prerequisites:** Docker Engine 20.10+. For stack commands you want the Compose **v2 plugin** (`docker compose`, note the space). If you only have legacy **`docker-compose`**, it may hit **`KeyError: 'id'`** on newer Docker releases—you can still build the SPA with **`./scripts/build-frontend-docker.sh`** (plain `docker run`).
 
 ```bash
 # 1. Clone and configure
@@ -151,11 +151,13 @@ cp .env_example .env
 ./scripts/download-oui.sh
 # OR: wget -O oui.txt https://standards-oui.ieee.org/oui/oui.txt
 
-# 3. Build frontend
-docker compose --profile build up frontend-build
+# 3. Build frontend (pick one)
+docker compose --profile build up frontend-build   # needs Compose v2: docker compose version
+./scripts/build-frontend-docker.sh                 # same volumes as Compose; only requires docker run
 
 # 4. Start all services
 docker compose up -d --build
+# No Compose plugin yet (same compose file): docker-compose up -d --build
 
 # 5. Open browser
 open http://localhost:40901

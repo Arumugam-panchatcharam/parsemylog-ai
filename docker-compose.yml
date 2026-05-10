@@ -129,7 +129,8 @@ services:
 
   # One-shot: build React SPA into frontend_dist volume, then exit.
   # Only runs when explicitly requested (profile: build).
-  #   docker-compose --profile build up frontend-build
+  #   docker compose --profile build up frontend-build
+  # Same volumes without Compose v2: ./scripts/build-frontend-docker.sh
   frontend-build:
     profiles: ["build"]
     image: node:22-alpine
