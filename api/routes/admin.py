@@ -5,11 +5,20 @@ Admin API Routes
 Endpoints for user management (admin-only) and system settings.
 """
 
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+import json
+import re
+from pathlib import Path
+
+from flask import Blueprint, jsonify, request, send_file
 
 from api.app import dbm
 from api.auth import admin_required
+from api.routes.regex_analyzer import (
+    _scan_progress_path,
+    _scan_result_path,
+    regex_scan_validate_and_start_async,
+)
+from logai.utils.constants import NON_TEXT_EXTENSIONS, UPLOAD_DIRECTORY
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -208,3 +217,115 @@ def update_llm_settings():
         "enabled": bool(enabled),
         "message": f"LLM {'enabled' if enabled else 'disabled'} successfully",
     }), 200
+
+
+# =====================================================================
+# Pattern Analyzer preview (admin — any project's uploads)
+# =====================================================================
+
+
+@admin_bp.route("/projects/<project_id>/cpes", methods=["GET"])
+@admin_required
+def admin_list_project_cpes(project_id):
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    cpes = dbm.list_project_cpes(project_id)
+    result = []
+    for c in cpes:
+        result.append({
+            "serial": c.serial,
+            "mac": c.mac,
+            "date_from": c.date_from,
+            "date_to": c.date_to,
+            "created_at": str(c.created_at) if c.created_at else None,
+        })
+    return jsonify(result), 200
+
+
+@admin_bp.route("/projects/<project_id>/files", methods=["GET"])
+@admin_required
+def admin_list_project_files(project_id):
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    cpe_id = request.args.get("cpe_id")
+    files = dbm.get_project_files(project_id, cpe_id=cpe_id)
+    result = []
+    for f in files:
+        filename, file_path, original_name, file_size, uploaded_at = f
+        if file_size == 0:
+            continue
+        is_viewable = not any(filename.lower().endswith(ext) for ext in NON_TEXT_EXTENSIONS)
+        result.append({
+            "filename": filename,
+            "file_path": file_path,
+            "original_name": original_name,
+            "file_size": file_size,
+            "file_size_mb": round(file_size / (1024 * 1024), 2) if file_size else 0,
+            "uploaded_at": str(uploaded_at) if uploaded_at else None,
+            "is_viewable": is_viewable,
+        })
+    return jsonify(result), 200
+
+
+@admin_bp.route("/projects/<project_id>/regex-scan", methods=["POST"])
+@admin_required
+def admin_regex_scan(project_id):
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
+    resp, code = regex_scan_validate_and_start_async(project.user_id, project_id, cpe_id, data)
+    return resp, code
+
+
+@admin_bp.route("/projects/<project_id>/regex-scan/<scan_id>/progress", methods=["GET"])
+@admin_required
+def admin_regex_scan_progress(project_id, scan_id):
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    if not re.fullmatch(r"[0-9a-f]{12}", scan_id):
+        return jsonify({"error": "Invalid scan_id"}), 400
+
+    cpe_id = request.args.get("cpe_id")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{project.user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
+    prog_path = _scan_progress_path(project_dir, scan_id)
+
+    if not prog_path.exists():
+        return jsonify({"error": "Scan progress not found"}), 404
+
+    try:
+        payload = json.loads(prog_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return jsonify({"error": "Could not read scan progress"}), 500
+
+    return jsonify(payload), 200
+
+
+@admin_bp.route("/projects/<project_id>/regex-scan/<scan_id>/results", methods=["GET"])
+@admin_required
+def admin_regex_scan_results(project_id, scan_id):
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+
+    if not re.fullmatch(r"[0-9a-f]{12}", scan_id):
+        return jsonify({"error": "Invalid scan_id"}), 400
+
+    cpe_id = request.args.get("cpe_id")
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{project.user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
+    cache_path = _scan_result_path(project_dir, scan_id)
+
+    if not cache_path.exists():
+        return jsonify({"error": "Scan results not found or expired"}), 404
+
+    return send_file(cache_path, mimetype="application/json", as_attachment=False)

@@ -18,6 +18,11 @@ from flask import Blueprint, jsonify, request
 
 from api.app import dbm
 from api.auth import admin_required, get_user_id
+from api.user_db_mngr import (
+    global_pattern_row_to_entry,
+    normalized_pattern_scan_filename,
+    pattern_scan_filename_for_global_db,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,22 +152,9 @@ def get_global_patterns(natco_id):
     for p in patterns:
         if p.domain not in domains:
             domains[p.domain] = []
-        entry: Dict[str, Any] = {
-            "id": p.id,
-            "name": p.name,
-            "regex": p.regex,
-            "enabled": p.enabled,
-        }
-        if p.maintenance_window_json:
-            try:
-                entry["maintenance_window"] = json.loads(p.maintenance_window_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if p.reboot_proximity_minutes is not None:
-            entry["reboot_proximity_minutes"] = p.reboot_proximity_minutes
-        if p.min_frequency_threshold is not None:
-            entry["min_frequency_threshold"] = p.min_frequency_threshold
-        domains[p.domain].append(entry)
+        row = global_pattern_row_to_entry(p)
+        row["id"] = p.id
+        domains[p.domain].append(row)
 
     return jsonify({"domains": domains, "natco": {"id": natco.id, "code": natco.code, "name": natco.name}}), 200
 
@@ -216,6 +208,8 @@ def set_global_patterns(natco_id):
                 else None
             )
 
+            sf_val = pattern_scan_filename_for_global_db(p)
+
             gp = dbm.GlobalPattern(
                 natco_id=natco_id,
                 domain=domain_name,
@@ -225,6 +219,7 @@ def set_global_patterns(natco_id):
                 maintenance_window_json=mw_json,
                 reboot_proximity_minutes=rp_val,
                 min_frequency_threshold=threshold_val,
+                scan_filename=sf_val,
                 created_by=user_id,
             )
             dbm.db.session.add(gp)
@@ -347,17 +342,7 @@ def get_submission(submission_id):
     )
     current_dict: Dict[str, Dict[str, Any]] = {}
     for gp in current_global:
-        entry: Dict[str, Any] = {"name": gp.name, "regex": gp.regex, "enabled": gp.enabled}
-        if gp.maintenance_window_json:
-            try:
-                entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if gp.reboot_proximity_minutes is not None:
-            entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
-        if gp.min_frequency_threshold is not None:
-            entry["min_frequency_threshold"] = gp.min_frequency_threshold
-        current_dict[gp.regex] = entry
+        current_dict[gp.regex] = global_pattern_row_to_entry(gp)
 
     submitted_patterns = json.loads(sub.patterns_json) if sub.patterns_json else []
 
@@ -374,6 +359,7 @@ def get_submission(submission_id):
                 or cur.get("maintenance_window") != p.get("maintenance_window")
                 or cur.get("reboot_proximity_minutes") != p.get("reboot_proximity_minutes")
                 or cur.get("min_frequency_threshold") != p.get("min_frequency_threshold")
+                or normalized_pattern_scan_filename(cur) != normalized_pattern_scan_filename(p)
             )
             if changed:
                 modified_patterns.append({"submitted": p, "current": cur})
@@ -439,6 +425,8 @@ def approve_submission(submission_id):
             else None
         )
 
+        sf_val = pattern_scan_filename_for_global_db(p)
+
         existing = (
             dbm.db.session.query(dbm.GlobalPattern)
             .filter_by(natco_id=sub.natco_id, domain=sub.domain, regex=regex_val)
@@ -450,6 +438,8 @@ def approve_submission(submission_id):
             existing.maintenance_window_json = mw_json
             existing.reboot_proximity_minutes = rp_val
             existing.min_frequency_threshold = threshold_val
+            existing.scan_filename = sf_val
+            existing.scan_time_range_json = None
             existing.updated_at = datetime.utcnow()
         else:
             dbm.db.session.add(dbm.GlobalPattern(
@@ -461,6 +451,7 @@ def approve_submission(submission_id):
                 maintenance_window_json=mw_json,
                 reboot_proximity_minutes=rp_val,
                 min_frequency_threshold=threshold_val,
+                scan_filename=sf_val,
                 created_by=sub.user_id,
             ))
         merged += 1

@@ -1,5 +1,5 @@
 import json
-from typing import Optional, Any, Tuple, List
+from typing import Optional, Any, Tuple, List, Dict
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
@@ -97,11 +97,54 @@ class GlobalPattern(db.Model):
     maintenance_window_json = db.Column(db.Text, nullable=True)
     reboot_proximity_minutes = db.Column(db.Integer, nullable=True)
     min_frequency_threshold = db.Column(db.Integer, nullable=True)
+    scan_filename = db.Column(db.String(256), nullable=True)
+    scan_time_range_json = db.Column(db.Text, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now())
     updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
 
     natco = db.relationship("Natco", back_populates="global_patterns")
+
+
+def global_pattern_row_to_entry(gp: GlobalPattern) -> Dict[str, Any]:
+    """Serialize a GlobalPattern ORM row for API / YAML-style dicts."""
+    entry: Dict[str, Any] = {
+        "name": gp.name,
+        "regex": gp.regex,
+        "enabled": gp.enabled,
+    }
+    if gp.maintenance_window_json:
+        try:
+            entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if gp.reboot_proximity_minutes is not None:
+        entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
+    if gp.min_frequency_threshold is not None:
+        entry["min_frequency_threshold"] = gp.min_frequency_threshold
+    if getattr(gp, "scan_filename", None) and str(gp.scan_filename).strip():
+        entry["scan_filename"] = str(gp.scan_filename).strip()
+    return entry
+
+
+def normalized_pattern_scan_filename(pat: Dict[str, Any]) -> Optional[str]:
+    sf = pat.get("scan_filename")
+    if sf is None:
+        return None
+    s = str(sf).strip()
+    return s or None
+
+
+def pattern_scan_filename_for_global_db(p: Dict[str, Any]) -> Optional[str]:
+    """Basename-only scan file for GlobalPattern (project-local scan_time_range is never global)."""
+    sf_raw = p.get("scan_filename")
+    if sf_raw is None or not str(sf_raw).strip():
+        return None
+    cand = str(sf_raw).strip()
+    if "/" in cand or "\\" in cand or ".." in cand:
+        return None
+    return cand
+
 
 class PatternSubmission(db.Model):
     __tablename__ = "pattern_submissions"
@@ -425,6 +468,7 @@ class DBManager:
             # Migrate existing tables
             self._migrate_add_cpe_columns(app)
             self._migrate_add_global_pattern_filter_columns(app)
+            self._migrate_add_global_pattern_scan_columns(app)
             self._migrate_add_project_tags_column(app)
             # create default admin user if not exists
             if not self.db.session.query(self.User).filter_by(username='admin').first():
@@ -492,6 +536,24 @@ class DBManager:
                     logger.info("[Migration] Added min_frequency_threshold column to global_patterns")
         except Exception as e:
             logger.warning(f"[Migration] Could not add filter columns (may already exist): {e}")
+
+    def _migrate_add_global_pattern_scan_columns(self, app):
+        """Add scan_filename and scan_time_range_json to global_patterns if missing."""
+        try:
+            with app.app_context():
+                from sqlalchemy import text, inspect as sa_inspect
+                inspector = sa_inspect(self.db.engine)
+                cols = [c["name"] for c in inspector.get_columns("global_patterns")]
+                if "scan_filename" not in cols:
+                    self.db.session.execute(text("ALTER TABLE global_patterns ADD COLUMN scan_filename VARCHAR(256)"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added scan_filename column to global_patterns")
+                if "scan_time_range_json" not in cols:
+                    self.db.session.execute(text("ALTER TABLE global_patterns ADD COLUMN scan_time_range_json TEXT"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added scan_time_range_json column to global_patterns")
+        except Exception as e:
+            logger.warning(f"[Migration] Could not add global pattern scan columns (may already exist): {e}")
 
     def _migrate_add_project_tags_column(self, app):
         """Add tags JSON column to projects if missing."""

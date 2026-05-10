@@ -152,6 +152,8 @@ CREATE TABLE pattern_submissions (
 └──────────────────────────────────────────────────────────┘
 ```
 
+When reviewing or editing global patterns, expand **Preview on uploaded logs** to run an admin-only async regex scan against any user's project (pick user → project → optional CPE). Per-pattern `scan_filename` / `scan_time_range` in the pattern list are honored the same as in the workspace. API: [`GET/POST /api/admin/projects/<project_id>/...`](../API_REFERENCE.md#pattern-analyzer-preview-admin).
+
 **Approve:**
 
 - Pattern automatically merged into global library

@@ -870,10 +870,56 @@ export interface UserPattern {
   maintenance_window?: MaintenanceWindow | null;
   reboot_proximity_minutes?: number | null;
   min_frequency_threshold?: number | null;
+  /** Basename only; restricts ripgrep to matching uploaded files for this pattern */
+  scan_filename?: string | null;
+  /** Naive local start/end; optional per-pattern post-rg time filter */
+  scan_time_range?: { start: string; end: string } | null;
 }
 
 /** Domain-grouped patterns: { domain_name: UserPattern[] } */
 export type DomainPatterns = Record<string, UserPattern[]>;
+
+/** POST /regex-scan returns 202 Accepted with scan job id */
+export interface RegexScanAcceptedResponse {
+  scan_id: string;
+  accepted: boolean;
+  total_patterns: number;
+}
+
+export interface RegexScanProgressPayload {
+  status: "running" | "complete" | "error";
+  current: number;
+  total: number;
+  pattern_name?: string | null;
+  error?: string | null;
+  total_matches?: number;
+  trace_count?: number;
+  reboots_count?: number;
+}
+
+export interface PatternAnalyzerScanResult {
+  traces: Array<{
+    name: string;
+    times: string[];
+    texts: string[];
+    counts?: number[];
+    total: number;
+    bucketed?: boolean;
+    bucket_minutes?: number;
+    /** Echoed from pattern scan_time_range so charts clip without re-scanning. */
+    scan_time_range?: { start: string; end: string };
+    scan_filename?: string | null;
+  }>;
+  reboots: Array<{
+    timestamp: string;
+    reason: string;
+    reboot_type?: string;
+    is_short_reboot?: boolean;
+    uptime_before_reboot_sec?: number;
+  }>;
+  total_matches: number;
+  cpe_serial?: string | null;
+}
 
 export const patternAnalyzerApi = {
   getPatterns: (projectId: string) =>
@@ -897,33 +943,20 @@ export const patternAnalyzerApi = {
   scan: (projectId: string, data: {
     patterns: UserPattern[];
     bucket_minutes: number;
-    time_range?: { start: string; end: string };
     filter_pre_ntp?: boolean;
     filter_short_reboots?: boolean;
     cpe_id?: string | null;
-  }) => api.post<{
-    scan_id: string;
-    total_matches: number;
-    trace_count: number;
-    reboots_count: number;
-    elapsed_ms: number;
-  }>(`/projects/${projectId}/regex-scan`, {
-    ...data,
-    cpe_id: data.cpe_id || undefined,
-  }),
+  }) =>
+    api.post<RegexScanAcceptedResponse>(`/projects/${projectId}/regex-scan`, {
+      ...data,
+      cpe_id: data.cpe_id || undefined,
+    }),
+  getScanProgress: (projectId: string, scanId: string, cpeId?: string | null) =>
+    api.get<RegexScanProgressPayload>(`/projects/${projectId}/regex-scan/${scanId}/progress`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
   getScanResults: (projectId: string, scanId: string, cpeId?: string | null) =>
-    api.get<{
-      traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
-      reboots: Array<{
-        timestamp: string;
-        reason: string;
-        reboot_type?: string;
-        is_short_reboot?: boolean;
-        uptime_before_reboot_sec?: number;
-      }>;
-      total_matches: number;
-      cpe_serial?: string | null;
-    }>(`/projects/${projectId}/regex-scan/${scanId}/results`, {
+    api.get<PatternAnalyzerScanResult>(`/projects/${projectId}/regex-scan/${scanId}/results`, {
       params: cpeId ? { cpe_id: cpeId } : undefined,
     }),
 };
@@ -1016,6 +1049,7 @@ export interface DiffPattern extends UserPattern {
   global_maintenance_window?: MaintenanceWindow | null;
   global_reboot_proximity_minutes?: number | null;
   global_min_frequency_threshold?: number | null;
+  global_scan_filename?: string | null;
 }
 
 export interface DomainDiff {
@@ -1155,6 +1189,54 @@ export const adminApi = {
     api.post(`/admin/submissions/${id}/approve`, { comment }),
   rejectSubmission: (id: number, comment?: string) =>
     api.post(`/admin/submissions/${id}/reject`, { comment }),
+
+  // Pattern Analyzer preview (any user's project / CPE)
+  listProjectCpes: (projectId: string) =>
+    api.get<
+      Array<{
+        serial: string;
+        mac: string | null;
+        date_from: string | null;
+        date_to: string | null;
+        created_at: string | null;
+      }>
+    >(`/admin/projects/${projectId}/cpes`),
+  listProjectFiles: (projectId: string, cpeId?: string | null) =>
+    api.get<
+      Array<{
+        filename: string;
+        file_path: string;
+        original_name: string;
+        file_size: number;
+        file_size_mb: number;
+        uploaded_at: string | null;
+        is_viewable: boolean;
+      }>
+    >(`/admin/projects/${projectId}/files`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
+  regexScan: (
+    projectId: string,
+    data: {
+      patterns: UserPattern[];
+      bucket_minutes: number;
+      filter_pre_ntp?: boolean;
+      filter_short_reboots?: boolean;
+      cpe_id?: string | null;
+    },
+  ) =>
+    api.post<RegexScanAcceptedResponse>(`/admin/projects/${projectId}/regex-scan`, {
+      ...data,
+      cpe_id: data.cpe_id || undefined,
+    }),
+  regexScanProgress: (projectId: string, scanId: string, cpeId?: string | null) =>
+    api.get<RegexScanProgressPayload>(`/admin/projects/${projectId}/regex-scan/${scanId}/progress`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
+  regexScanResults: (projectId: string, scanId: string, cpeId?: string | null) =>
+    api.get<PatternAnalyzerScanResult>(`/admin/projects/${projectId}/regex-scan/${scanId}/results`, {
+      params: cpeId ? { cpe_id: cpeId } : undefined,
+    }),
 };
 
 // ---------- PCAP Analyzer ----------

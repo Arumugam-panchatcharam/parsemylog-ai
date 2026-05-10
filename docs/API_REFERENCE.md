@@ -498,38 +498,86 @@ Response: 200 OK
 }
 ```
 
-### Trigger Regex Scan
+### Trigger Regex Scan (async)
+
+Starts a background ripgrep job. Poll progress until `complete`, then fetch results.
 
 ```http
-POST /api/<project_id>/regex-scan
+POST /api/projects/<project_id>/regex-scan?cpe_id=<optional_cpe_serial>
 Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
-  "cpe_id": "AABBCCDDEEFF",
-  "domains": ["wifi", "platform"]
+  "patterns": [
+    {
+      "name": "Example",
+      "regex": "error",
+      "enabled": true,
+      "scan_filename": "WiFi.log",
+      "scan_time_range": {"start": "2025-05-06T00:00:00", "end": "2025-05-08T23:59:59"}
+    }
+  ],
+  "bucket_minutes": 60,
+  "filter_pre_ntp": true,
+  "filter_short_reboots": true,
+  "cpe_id": "AABBCCDDEEFF"
 }
 
 Response: 202 Accepted
 {
   "scan_id": "scan_abc123",
-  "status": "running"
+  "accepted": true,
+  "total_patterns": 12
 }
 ```
 
-### Get Scan Results
+Optional **per-pattern** fields on each object in `patterns`:
+
+| Field | Meaning |
+|-------|---------|
+| `scan_filename` | Basename only; **for that pattern**, ripgrep searches only uploaded files under the project/CPE directory whose final path segment matches (case-insensitive). Omit to use all files for that pattern. Returns **400** if set and no file matches. |
+| `scan_time_range` | `{ "start", "end" }` naive local ISO strings; filters that pattern’s matches **after** ripgrep. Omit entirely or supply **both** start and end. **400** if only one side is set, or if `start` > `end`. |
+
+Top-level JSON fields:
+
+| Field | Meaning |
+|-------|---------|
+| `cpe_id` | May also be passed as query `cpe_id` (same value). |
+
+### Regex Scan Progress
 
 ```http
-GET /api/<project_id>/regex-scan/<scan_id>/results
+GET /api/projects/<project_id>/regex-scan/<scan_id>/progress?cpe_id=<optional>
 Authorization: Bearer <access_token>
 
 Response: 200 OK
 {
-  "scan_id": "scan_abc123",
-  "status": "completed",
-  "results": [...]
+  "status": "running",
+  "current": 3,
+  "total": 12,
+  "pattern_name": "WiFi Timeout",
+  "error": null
 }
 ```
+
+Status is `running`, `complete`, or `error`. Results are not ready until progress reports `complete`.
+
+### Get Scan Results
+
+```http
+GET /api/projects/<project_id>/regex-scan/<scan_id>/results?cpe_id=<optional>
+Authorization: Bearer <access_token>
+
+Response: 200 OK
+{
+  "traces": [{"name": "...", "times": [], "texts": [], "total": 0}],
+  "reboots": [],
+  "total_matches": 479,
+  "cpe_serial": "AABBCCDDEEFF"
+}
+```
+
+Returns **404** until the worker has written the result file for `scan_id`.
 
 ---
 
@@ -671,6 +719,22 @@ Response: 200 OK
   ]
 }
 ```
+
+### Pattern Analyzer preview (admin)
+
+Same scan semantics as the user `POST /api/projects/<project_id>/regex-scan`, but resolves disk paths using the **project owner** from the database so admins can preview patterns against another user’s uploads.
+
+```http
+GET /api/admin/projects/<project_id>/cpes
+GET /api/admin/projects/<project_id>/files?cpe_id=<optional>
+Authorization: Bearer <access_token>  (Admin only)
+
+POST /api/admin/projects/<project_id>/regex-scan?cpe_id=<optional>
+GET /api/admin/projects/<project_id>/regex-scan/<scan_id>/progress?cpe_id=<optional>
+GET /api/admin/projects/<project_id>/regex-scan/<scan_id>/results?cpe_id=<optional>
+```
+
+Request and response bodies match the user-facing regex-scan endpoints.
 
 ### Review Pattern Submissions
 

@@ -1,8 +1,22 @@
 import { useState, useEffect, useRef, useMemo, memo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { patternAnalyzerApi, patternGovernanceApi, natcoApi, projectsApi } from "@/api/endpoints";
-import type { UserPattern, DomainPatterns, DomainDiff, NatcoInfo, MaintenanceWindow } from "@/api/endpoints";
+import {
+  patternAnalyzerApi,
+  patternGovernanceApi,
+  natcoApi,
+  projectsApi,
+  filesApi,
+} from "@/api/endpoints";
+import type {
+  UserPattern,
+  DomainPatterns,
+  DomainDiff,
+  NatcoInfo,
+  MaintenanceWindow,
+  RegexScanProgressPayload,
+} from "@/api/endpoints";
+import { runPatternAnalyzerScan } from "@/lib/patternAnalyzerScanRunner";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import { useTheme } from "@/hooks/useTheme";
@@ -28,10 +42,12 @@ import PublishIcon from "@mui/icons-material/Publish";
 import PublicIcon from "@mui/icons-material/Public";
 import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CircularProgress from "@mui/material/CircularProgress";
+import LinearProgress from "@mui/material/LinearProgress";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import CloseIcon from "@mui/icons-material/Close";
 import FilterListIcon from "@mui/icons-material/FilterList";
+import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import PatternOverviewTab from "@/pages/PatternOverviewTab";
 
 // Memoized Plot component to prevent unnecessary re-renders
@@ -47,7 +63,17 @@ interface PatternAnalyzerRebootRow {
 }
 
 interface ScanResult {
-  traces: Array<{ name: string; times: string[]; texts: string[]; total: number }>;
+  traces: Array<{
+    name: string;
+    times: string[];
+    texts: string[];
+    total: number;
+    bucketed?: boolean;
+    bucket_minutes?: number;
+    counts?: number[];
+    scan_time_range?: { start: string; end: string };
+    scan_filename?: string | null;
+  }>;
   reboots: PatternAnalyzerRebootRow[];
   total_matches: number;
   /** Present on scans after server stamp; used to reject stale results after CPE switch. */
@@ -71,6 +97,83 @@ const BUCKET_OPTIONS = [
 ];
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
+
+/** Strip incomplete per-pattern scan scope before API calls (save/sync/submit). */
+function sanitizeDomainsForApi(domains: DomainPatterns): DomainPatterns {
+  const out: DomainPatterns = {};
+  for (const [domain, list] of Object.entries(domains)) {
+    out[domain] = list.map((p) => sanitizePatternForApi(p));
+  }
+  return out;
+}
+
+function sanitizePatternForApi(p: UserPattern): UserPattern {
+  const q: UserPattern = { ...p };
+  const tr = q.scan_time_range;
+  if (!tr?.start?.trim() || !tr?.end?.trim()) {
+    delete q.scan_time_range;
+  } else {
+    q.scan_time_range = { start: tr.start.trim(), end: tr.end.trim() };
+  }
+  if (!q.scan_filename?.trim()) delete q.scan_filename;
+  else q.scan_filename = q.scan_filename.trim();
+  return q;
+}
+
+/** Compare log/chart timestamps for filtering (ISO-ish strings or browser-parseable dates). */
+function cmpPatternAnalyzerTs(a: string, b: string): number {
+  const ma = Date.parse(a);
+  const mb = Date.parse(b);
+  if (Number.isFinite(ma) && Number.isFinite(mb)) {
+    return ma - mb;
+  }
+  return a.localeCompare(b);
+}
+
+/** Parse naive ISO ``YYYY-MM-DDTHH:mm[:ss]`` as UTC instant (matches scan_time_range semantics). */
+function utcNaiveIsoToMs(s: string): number {
+  const x = s.trim();
+  if (!x) return NaN;
+  if (/[zZ]$|[+-]\d\d:\d\d$/.test(x)) return Date.parse(x);
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(x);
+  if (m) {
+    const sec = m[6] != null ? parseInt(m[6], 10) : 0;
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], sec);
+  }
+  return Date.parse(x);
+}
+
+/**
+ * Intersect reboot-driven chart window with per-pattern scan_time_range from the scan (UTC ISO bounds).
+ * Empty bounds mean “no constraint” from that side.
+ */
+function effectivePatternAnalyzerWindow(
+  chart?: { start?: string; end?: string } | null,
+  perTrace?: { start?: string; end?: string } | null,
+): { lo?: string; hi?: string; disjoint: boolean } {
+  const cLo = chart?.start?.trim() || "";
+  const cHi = chart?.end?.trim() || "";
+  const pLo = perTrace?.start?.trim() || "";
+  const pHi = perTrace?.end?.trim() || "";
+  let lo = "";
+  let hi = "";
+  if (cLo && pLo) {
+    lo = cmpPatternAnalyzerTs(cLo, pLo) >= 0 ? cLo : pLo;
+  } else {
+    lo = cLo || pLo;
+  }
+  if (cHi && pHi) {
+    hi = cmpPatternAnalyzerTs(cHi, pHi) <= 0 ? cHi : pHi;
+  } else {
+    hi = cHi || pHi;
+  }
+  const disjoint = Boolean(lo && hi) && cmpPatternAnalyzerTs(lo, hi) > 0;
+  return {
+    lo: lo || undefined,
+    hi: hi || undefined,
+    disjoint,
+  };
+}
 
 function formatUptimeBeforeReboot(sec: number | string | undefined | null): string {
   if (sec == null || sec === "") return "—";
@@ -306,6 +409,7 @@ export default function PatternAnalyzerPage() {
   const [bucketMinutes, setBucketMinutes] = useState(0); // 0 = Auto
   const [filterPreNtp, setFilterPreNtp] = useState(true);
   const [filterShortReboots, setFilterShortReboots] = useState(true);
+  const [scanProgress, setScanProgress] = useState<RegexScanProgressPayload | null>(null);
 
   // Scan results
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -332,7 +436,7 @@ export default function PatternAnalyzerPage() {
 
   // -- Sync from global mutation (sends current UI patterns so merge includes unsaved edits) --
   const syncMutation = useMutation({
-    mutationFn: () => patternGovernanceApi.sync(projectId!, domains),
+    mutationFn: () => patternGovernanceApi.sync(projectId!, sanitizeDomainsForApi(domains)),
     onSuccess: (res) => {
       setDomains(res.data.domains);
       queryClient.invalidateQueries({ queryKey: ["regex-patterns", projectId] });
@@ -348,7 +452,7 @@ export default function PatternAnalyzerPage() {
     setSelectedChanges({});
     setSubmitComment("");
     try {
-      const res = await patternGovernanceApi.diff(projectId, domains);
+      const res = await patternGovernanceApi.diff(projectId, sanitizeDomainsForApi(domains));
       setDiffData(res.data.domains);
       const sel: Record<string, boolean> = {};
       for (const [domain, diff] of Object.entries(res.data.domains)) {
@@ -375,20 +479,16 @@ export default function PatternAnalyzerPage() {
         for (const p of diff.new) {
           if (selectedChanges[`${domain}::${p.regex}`]) {
             patsToSubmit.push({
-              name: p.name, regex: p.regex, enabled: p.enabled, change_type: "new",
-              ...(p.maintenance_window ? { maintenance_window: p.maintenance_window } : {}),
-              ...(p.reboot_proximity_minutes != null ? { reboot_proximity_minutes: p.reboot_proximity_minutes } : {}),
-              ...(p.min_frequency_threshold != null ? { min_frequency_threshold: p.min_frequency_threshold } : {}),
+              ...sanitizePatternForApi(p as UserPattern),
+              change_type: "new",
             });
           }
         }
         for (const p of diff.modified) {
           if (selectedChanges[`${domain}::${p.regex}`]) {
             patsToSubmit.push({
-              name: p.name, regex: p.regex, enabled: p.enabled, change_type: "modified",
-              ...(p.maintenance_window ? { maintenance_window: p.maintenance_window } : {}),
-              ...(p.reboot_proximity_minutes != null ? { reboot_proximity_minutes: p.reboot_proximity_minutes } : {}),
-              ...(p.min_frequency_threshold != null ? { min_frequency_threshold: p.min_frequency_threshold } : {}),
+              ...sanitizePatternForApi(p as UserPattern),
+              change_type: "modified",
             });
           }
         }
@@ -497,9 +597,11 @@ export default function PatternAnalyzerPage() {
     }
   }
 
+  const chartFilterRange = effectiveRange;
+
   // -- Save patterns mutation --
   const saveMutation = useMutation({
-    mutationFn: () => patternAnalyzerApi.savePatterns(projectId!, domains),
+    mutationFn: () => patternAnalyzerApi.savePatterns(projectId!, sanitizeDomainsForApi(domains)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["regex-patterns", projectId] });
     },
@@ -522,34 +624,42 @@ export default function PatternAnalyzerPage() {
     setEndRebootIdx(null);
     setSliderValue(0);
     setVisibleRange(null);
+    setScanProgress(null);
   }, [projectId, cpeId]);
 
-  // -- Run scan mutation (two-phase: scan → fetch results) --
+  const { data: scanFilesRaw } = useQuery({
+    queryKey: ["pattern-analyzer-files", projectId, cpeId ?? ""],
+    queryFn: async () =>
+      (await filesApi.list(projectId!, cpeId)).data as Array<{ filename: string; is_viewable?: boolean }>,
+    enabled: !!projectId,
+  });
+
+  // -- Run scan (async ripgrep + progress polling) --
   const scanMutation = useMutation({
     mutationFn: async () => {
       const dbgCpe = cpeId;
-      // Calculate effective bucket for API call
       const effectiveBucket = bucketMinutes === 0 ? calculateAutoBucket(scanResult) : bucketMinutes;
-      
-      // Phase 1: trigger scan, get lightweight metadata
+
       setScanStatus("Scanning log files with ripgrep...");
-      const scanRes = await patternAnalyzerApi.scan(projectId!, {
-        patterns: enabledPatterns,
-        bucket_minutes: effectiveBucket,
-        time_range: effectiveRange,
-        filter_pre_ntp: filterPreNtp,
-        filter_short_reboots: filterShortReboots,
-        cpe_id: dbgCpe,
+      setScanProgress({
+        status: "running",
+        current: 0,
+        total: Math.max(enabledPatterns.length, 1),
+        pattern_name: null,
+        error: null,
       });
 
-      const { scan_id, total_matches, trace_count, elapsed_ms } = scanRes.data;
-      setScanStatus(
-        `Scan complete (${total_matches.toLocaleString()} matches, ${trace_count} patterns, ${elapsed_ms}ms). Loading results...`
-      );
+      const result = await runPatternAnalyzerScan("user", {
+        projectId: projectId!,
+        cpeId: dbgCpe,
+        patterns: enabledPatterns,
+        bucketMinutes: effectiveBucket,
+        filterPreNtp: filterPreNtp,
+        filterShortReboots: filterShortReboots,
+        onProgress: setScanProgress,
+      });
 
-      // Phase 2: fetch full Plotly-ready data from cache (must use same CPE as phase 1; `cpeId` can change mid-flight)
-      const resultsRes = await patternAnalyzerApi.getScanResults(projectId!, scan_id, dbgCpe);
-      return { result: resultsRes.data, dbgCpe };
+      return { result, dbgCpe };
     },
     onSuccess: (payload) => {
       const current = cpeIdRef.current;
@@ -558,6 +668,7 @@ export default function PatternAnalyzerPage() {
       const expectedKey = current ?? null;
       const resultKey = stamped !== null && stamped !== "" ? stamped : started;
       const applyResult = resultKey === expectedKey;
+      setScanProgress(null);
       if (!applyResult) {
         setScanStatus("Scan results ignored — CPE changed before load finished. Run scan again.");
         return;
@@ -567,6 +678,7 @@ export default function PatternAnalyzerPage() {
     },
     onError: () => {
       setScanStatus("");
+      setScanProgress(null);
     },
   });
 
@@ -702,6 +814,43 @@ export default function PatternAnalyzerPage() {
       [domain]: (prev[domain] || []).map((p, i) =>
         i === idx ? { ...p, min_frequency_threshold: threshold } : p
       ),
+    }));
+  };
+
+  const updatePatternScanFilename = (domain: string, idx: number, filename: string) => {
+    const v = filename.trim();
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) =>
+        i === idx ? { ...p, scan_filename: v ? v : undefined } : p
+      ),
+    }));
+  };
+
+  const updatePatternScanTimeRange = (
+    domain: string,
+    idx: number,
+    range: { start: string; end: string } | null,
+  ) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) =>
+        i === idx ? { ...p, scan_time_range: range ?? undefined } : p
+      ),
+    }));
+  };
+
+  const patchScanTimeField = (domain: string, idx: number, field: "start" | "end", value: string) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((pat, i) => {
+        if (i !== idx) return pat;
+        const cur = pat.scan_time_range ?? { start: "", end: "" };
+        return {
+          ...pat,
+          scan_time_range: { ...cur, [field]: value },
+        };
+      }),
     }));
   };
 
@@ -898,22 +1047,35 @@ export default function PatternAnalyzerPage() {
     let actualTimeRange: { start: string; end: string } | undefined;
 
     if (scanResult) {
-    // Client-side time filter so graph updates instantly when
-    // reboot selection or slider changes (without re-scanning).
-    const rangeStart = effectiveRange?.start || "";
-    const rangeEnd = effectiveRange?.end || "";
+    // Client-side time filter: reboot/slider window ∩ each trace's scan_time_range (echoed from scan).
+    const chartLo = chartFilterRange?.start?.trim() || "";
+    const chartHi = chartFilterRange?.end?.trim() || "";
 
     scanResult.traces.forEach((trace: any, idx) => {
       let filteredTimes = trace.times;
       let filteredTexts = trace.texts;
       let filteredCounts = trace.counts || trace.times.map(() => 1);
 
+      const { lo: rangeStart, hi: rangeEnd, disjoint } = effectivePatternAnalyzerWindow(
+        chartLo || chartHi ? { start: chartLo, end: chartHi } : null,
+        trace.scan_time_range ?? null,
+      );
+      if (disjoint) {
+        return;
+      }
+
+      const hasPatScanUtc = !!(
+        trace.scan_time_range?.start?.trim() && trace.scan_time_range?.end?.trim()
+      );
+      const cmpT = (x: string, y: string) =>
+        hasPatScanUtc ? utcNaiveIsoToMs(x) - utcNaiveIsoToMs(y) : cmpPatternAnalyzerTs(x, y);
+
       if (rangeStart || rangeEnd) {
         const indices: number[] = [];
         for (let i = 0; i < trace.times.length; i++) {
           const t = trace.times[i];
-          if (rangeStart && t < rangeStart) continue;
-          if (rangeEnd && t > rangeEnd) continue;
+          if (rangeStart && cmpT(t, rangeStart) < 0) continue;
+          if (rangeEnd && cmpT(t, rangeEnd) > 0) continue;
           indices.push(i);
         }
         filteredTimes = indices.map((i) => trace.times[i]);
@@ -965,8 +1127,8 @@ export default function PatternAnalyzerPage() {
     // Reboot vertical lines + invisible hover targets (annotations overlapped legend/y-axis).
     const rebootsInRange: PatternAnalyzerRebootRow[] = [];
     scanResult.reboots.forEach((reboot) => {
-      if (rangeStart && reboot.timestamp < rangeStart) return;
-      if (rangeEnd && reboot.timestamp > rangeEnd) return;
+      if (chartLo && cmpPatternAnalyzerTs(reboot.timestamp, chartLo) < 0) return;
+      if (chartHi && cmpPatternAnalyzerTs(reboot.timestamp, chartHi) > 0) return;
 
       rebootsInRange.push(reboot);
       const accent = patternRebootBoundaryAccent(reboot);
@@ -1004,11 +1166,12 @@ export default function PatternAnalyzerPage() {
     }
     
     // Calculate actual data bounds when no reboot selection to fix timeline compression
-    if (!effectiveRange && plotData.length > 0) {
+    if (!chartFilterRange && plotData.length > 0) {
       let minTime = Infinity;
       let maxTime = -Infinity;
       
       plotData.forEach((trace) => {
+        if (trace.showlegend === false && trace.marker?.opacity === 0) return;
         trace.x.forEach((ts: string) => {
           const ms = new Date(ts).getTime();
           if (ms < minTime) minTime = ms;
@@ -1031,11 +1194,11 @@ export default function PatternAnalyzerPage() {
   }
 
     return { plotData, plotShapes, traceNames, filteredMatchCount, actualTimeRange };
-  }, [scanResult, effectiveRange]);
+  }, [scanResult, chartFilterRange]);
 
   // Memoize Plotly layout to prevent unnecessary re-renders
   const plotLayout = useMemo(() => {
-    const range = effectiveRange || actualTimeRange;
+    const range = chartFilterRange || actualTimeRange;
     
     // Calculate effective bucket based on visible range or full data
     let effectiveBucket: number;
@@ -1090,7 +1253,7 @@ export default function PatternAnalyzerPage() {
     });
   }, [
     traceNames,
-    effectiveRange,
+    chartFilterRange,
     actualTimeRange,
     bucketMinutes,
     plotShapes,
@@ -1102,7 +1265,7 @@ export default function PatternAnalyzerPage() {
   const domainNames = Object.keys(domains);
 
   return (
-    <div className="p-4 space-y-4 max-w-full overflow-y-auto" style={{ height: "calc(100vh - 48px)" }}>
+    <div className="p-4 space-y-4 max-w-full min-w-0 overflow-y-auto" style={{ height: "calc(100vh - 48px)" }}>
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
@@ -1364,7 +1527,10 @@ export default function PatternAnalyzerPage() {
                             const hasMW = !!(p.maintenance_window?.start && p.maintenance_window?.end);
                             const hasRP = !!(p.reboot_proximity_minutes && p.reboot_proximity_minutes > 0);
                             const hasFT = !!(p.min_frequency_threshold && p.min_frequency_threshold > 0);
-                            const hasFilters = hasMW || hasRP || hasFT;
+                            const hasScanFile = !!(p.scan_filename?.trim());
+                            const hasScanTime = !!(p.scan_time_range?.start?.trim() && p.scan_time_range?.end?.trim());
+                            const hasScanScope = hasScanFile || hasScanTime;
+                            const hasFilters = hasMW || hasRP || hasFT || hasScanScope;
                             return (
                               <div key={idx} ref={scrollTarget?.domain === domain && scrollTarget?.idx === idx ? newPatternRef : undefined}>
                                 <div className="grid grid-cols-[32px_1fr_2fr_auto_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
@@ -1401,8 +1567,12 @@ export default function PatternAnalyzerPage() {
                                             hasMW ? `MW: ${p.maintenance_window!.start}–${p.maintenance_window!.end} UTC` : "",
                                             hasRP ? `Reboot: ±${p.reboot_proximity_minutes}min` : "",
                                             hasFT ? `Frequency: >${p.min_frequency_threshold}` : "",
+                                            hasScanFile ? `Scan file: ${p.scan_filename}` : "",
+                                            hasScanTime
+                                              ? `UTC scan window: ${p.scan_time_range!.start}–${p.scan_time_range!.end}`
+                                              : "",
                                           ].filter(Boolean).join(" | ")
-                                        : "Set exclusion filters"
+                                        : "Filters / scan scope for this pattern"
                                     }
                                   >
                                     <FilterListIcon style={{ fontSize: 13 }} />
@@ -1419,6 +1589,12 @@ export default function PatternAnalyzerPage() {
                                         {p.min_frequency_threshold}
                                       </span>
                                     )}
+                                    {hasScanFile && (
+                                      <span className="flex items-center gap-0.5 max-w-[72px] truncate" title={p.scan_filename ?? ""}>
+                                        <InsertDriveFileIcon style={{ fontSize: 11 }} />
+                                      </span>
+                                    )}
+                                    {hasScanTime && <span className="text-[9px] opacity-80">⏱</span>}
                                   </button>
                                   <button
                                     onClick={() => removePattern(domain, idx)}
@@ -1518,6 +1694,78 @@ export default function PatternAnalyzerPage() {
                                           <CloseIcon style={{ fontSize: 13 }} />
                                         </button>
                                       )}
+                                    </div>
+                                    <div className="flex flex-col gap-2 px-2 py-1.5 rounded bg-slate-50 dark:bg-slate-900/25 border border-slate-200 dark:border-slate-700/50 text-[11px]">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <InsertDriveFileIcon
+                                          style={{ fontSize: 13 }}
+                                          className="text-slate-600 dark:text-slate-400 shrink-0"
+                                        />
+                                        <span className="text-muted-foreground shrink-0">Scan log file</span>
+                                        <select
+                                          value={p.scan_filename ?? ""}
+                                          onChange={(e) => updatePatternScanFilename(domain, idx, e.target.value)}
+                                          className="text-xs px-1.5 py-0.5 rounded border border-border bg-background flex-1 min-w-[120px] max-w-[260px]"
+                                        >
+                                          <option value="">All files</option>
+                                          {(scanFilesRaw ?? []).map((f) => (
+                                            <option key={f.filename} value={f.filename}>
+                                              {f.filename}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        {hasScanFile && (
+                                          <button
+                                            type="button"
+                                            onClick={() => updatePatternScanFilename(domain, idx, "")}
+                                            className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
+                                            title="Clear file scope"
+                                          >
+                                            <CloseIcon style={{ fontSize: 13 }} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-muted-foreground shrink-0">
+                                          Limit matches to time (UTC)
+                                        </span>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          placeholder="2025-03-27T00:00:00"
+                                          title="UTC start (ISO local to UTC, no timezone suffix)"
+                                          value={p.scan_time_range?.start ?? ""}
+                                          onChange={(e) => patchScanTimeField(domain, idx, "start", e.target.value)}
+                                          className="text-xs px-1 py-0.5 rounded border border-border bg-background font-mono w-[148px]"
+                                        />
+                                        <span className="text-muted-foreground">–</span>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          placeholder="2025-03-28T00:00:00"
+                                          title="UTC end (ISO local to UTC, no timezone suffix)"
+                                          value={p.scan_time_range?.end ?? ""}
+                                          onChange={(e) => patchScanTimeField(domain, idx, "end", e.target.value)}
+                                          className="text-xs px-1 py-0.5 rounded border border-border bg-background font-mono w-[148px]"
+                                        />
+                                        {(!!p.scan_time_range?.start?.trim() || !!p.scan_time_range?.end?.trim()) && (
+                                          <button
+                                            type="button"
+                                            onClick={() => updatePatternScanTimeRange(domain, idx, null)}
+                                            className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600 transition-colors"
+                                            title="Clear time window"
+                                          >
+                                            <CloseIcon style={{ fontSize: 13 }} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <p className="text-[10px] text-muted-foreground">
+                                        Ripgrep searches only the chosen basename for this pattern; timestamps filter
+                                        parsed log times against your UTC window (ISO{' '}
+                                        <code className="text-[9px]">YYYY-MM-DDTHH:mm:ss</code>). Partial entries are
+                                        omitted on Save until both start and end are set. This window stays on the
+                                        project only—it is not submitted to global NATCO patterns.
+                                      </p>
                                     </div>
                                   </div>
                                 )}
@@ -1693,6 +1941,11 @@ export default function PatternAnalyzerPage() {
                                       {p.min_frequency_threshold != null && (
                                         <span className="text-[10px] text-green-600 dark:text-green-400" title="Frequency threshold">&gt;{p.min_frequency_threshold}</span>
                                       )}
+                                      {p.scan_filename?.trim() && (
+                                        <span className="text-[10px] text-sky-600 dark:text-sky-400" title="Scan log file">
+                                          file:{p.scan_filename}
+                                        </span>
+                                      )}
                                     </div>
                                     <code className="text-[11px] font-mono text-muted-foreground block truncate mt-0.5">{p.regex}</code>
                                   </div>
@@ -1708,6 +1961,9 @@ export default function PatternAnalyzerPage() {
                               const mwChanged = mwStr !== gMwStr;
                               const rpChanged = (p.reboot_proximity_minutes ?? null) !== (p.global_reboot_proximity_minutes ?? null);
                               const ftChanged = (p.min_frequency_threshold ?? null) !== (p.global_min_frequency_threshold ?? null);
+                              const scanFileStr = p.scan_filename?.trim() || "none";
+                              const gScanFileStr = p.global_scan_filename?.trim() || "none";
+                              const scanFileChanged = scanFileStr !== gScanFileStr;
                               return (
                                 <label key={key} className="flex items-start gap-3 px-4 py-2 hover:bg-muted/20 cursor-pointer">
                                   <input type="checkbox" checked={checked} onChange={(e) => setSelectedChanges((prev) => ({ ...prev, [key]: e.target.checked }))} className="h-4 w-4 mt-0.5 accent-primary shrink-0" />
@@ -1732,6 +1988,11 @@ export default function PatternAnalyzerPage() {
                                       )}
                                       {ftChanged && (
                                         <span className="text-[10px] text-green-600 dark:text-green-400">Freq: &gt;{p.global_min_frequency_threshold ?? "none"} → &gt;{p.min_frequency_threshold ?? "none"}</span>
+                                      )}
+                                      {scanFileChanged && (
+                                        <span className="text-[10px] text-sky-600 dark:text-sky-400">
+                                          Scan file: {gScanFileStr} → {scanFileStr}
+                                        </span>
                                       )}
                                     </div>
                                   </div>
@@ -1784,13 +2045,13 @@ export default function PatternAnalyzerPage() {
       )}
 
       {/* ====== SCAN CONFIGURATION ====== */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="bg-card border border-border rounded-xl overflow-hidden min-w-0">
         <div className="px-4 py-2 border-b border-border bg-muted/30">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
             <PlayArrowIcon className="text-primary" style={{ fontSize: 14 }} /> Scan Configuration
           </h3>
         </div>
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 min-w-0">
           {/* Row 1: Bucket + Run */}
           <div className="flex flex-wrap items-end gap-4">
             <div>
@@ -1990,17 +2251,48 @@ export default function PatternAnalyzerPage() {
                       Viewing last <span className="font-semibold">{viewingLabel}</span> before end reboot
                     </div>
 
-                    {effectiveRange && (
+                    {chartFilterRange && (
                       <div className="text-[10px] text-muted-foreground">
-                        Effective range:{" "}
-                        <span className="font-mono font-medium">{effectiveRange.start}</span>
+                        Effective chart window:{" "}
+                        <span className="font-mono font-medium">{chartFilterRange.start}</span>
                         {" \u2192 "}
-                        <span className="font-mono font-medium">{effectiveRange.end}</span>
+                        <span className="font-mono font-medium">{chartFilterRange.end}</span>
                       </div>
                     )}
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {scanMutation.isPending && (
+            <div className="rounded-lg border border-primary/30 bg-muted/40 dark:bg-muted/30 p-3 space-y-2 min-w-0 max-w-full overflow-hidden box-border">
+              <div className="w-full min-w-0 overflow-hidden rounded-full">
+                <LinearProgress
+                  sx={{ width: "100%", borderRadius: 9999 }}
+                  variant={scanProgress != null && scanProgress.total > 0 ? "determinate" : "indeterminate"}
+                  value={
+                    scanProgress != null && scanProgress.total > 0
+                      ? Math.min(
+                          100,
+                          Math.max(0, (100 * scanProgress.current) / scanProgress.total),
+                        )
+                      : 0
+                  }
+                />
+              </div>
+              <div className="flex flex-col items-center gap-1 text-center text-muted-foreground min-w-0 px-1">
+                <span className="text-sm break-words max-w-full">
+                  {scanProgress?.pattern_name
+                    ? `Scanning: ${scanProgress.pattern_name}`
+                    : scanStatus || "Scanning log files with ripgrep…"}
+                </span>
+                {scanProgress != null && scanProgress.total > 0 ? (
+                  <span className="text-[11px] font-mono tabular-nums">
+                    Pattern {scanProgress.current} / {scanProgress.total}
+                  </span>
+                ) : null}
+              </div>
             </div>
           )}
         </div>
@@ -2033,7 +2325,7 @@ export default function PatternAnalyzerPage() {
             </div>
             <div className="flex items-center gap-3 text-[11px]">
               <span className="font-semibold">
-                {effectiveRange
+                {chartFilterRange
                   ? `${filteredMatchCount.toLocaleString()} / ${scanResult.total_matches.toLocaleString()} matches (filtered)`
                   : `${scanResult.total_matches.toLocaleString()} total matches`}
               </span>
@@ -2048,7 +2340,7 @@ export default function PatternAnalyzerPage() {
 
           {plotData.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground">
-              <p className="text-sm">No matches found{effectiveRange ? " in selected time range" : " with timestamps"}.</p>
+              <p className="text-sm">No matches found{chartFilterRange ? " in selected time range" : " with timestamps"}.</p>
               <p className="text-xs mt-1">Try adjusting your patterns or time range.</p>
             </div>
           ) : (
@@ -2123,13 +2415,6 @@ export default function PatternAnalyzerPage() {
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {scanMutation.isPending && (
-        <div className="flex items-center gap-3 justify-center py-8 text-muted-foreground">
-          <CircularProgress size={20} />
-          <span className="text-sm">{scanStatus || "Scanning log files with ripgrep..."}</span>
         </div>
       )}
 

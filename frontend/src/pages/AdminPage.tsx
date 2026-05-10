@@ -29,6 +29,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import CircularProgress from "@mui/material/CircularProgress";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import { formatDate } from "@/lib/utils";
+import { AdminRegexScanPreview } from "@/components/admin/AdminRegexScanPreview";
 
 /* ================================================================ Types */
 interface AdminUser {
@@ -470,6 +471,16 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
     }));
   };
 
+  const updatePatternScanFilename = (d: string, idx: number, raw: string) => {
+    const v = raw.trim();
+    setDomains((prev) => ({
+      ...prev,
+      [d]: (prev[d] || []).map((p, i) =>
+        i === idx ? { ...p, ...(v ? { scan_filename: v } : { scan_filename: undefined }) } : p,
+      ),
+    }));
+  };
+
   const handleExportJSON = () => {
     const content = JSON.stringify({ domains }, null, 2);
     const blob = new Blob([content], { type: "application/json" });
@@ -815,6 +826,8 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
               {saveMutation.isSuccess && <div className="mb-3 px-3 py-2 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 text-xs rounded-lg">Patterns saved successfully.</div>}
               {importMsg && <div className="mb-3 px-3 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-xs rounded-lg flex items-center gap-1.5"><UploadFileIcon style={{ fontSize: 14 }} />{importMsg}</div>}
 
+              <AdminRegexScanPreview patterns={Object.values(domains).flat()} />
+
               {/* Domains */}
               <div className="space-y-2">
                 {Object.keys(domains).map((domain) => {
@@ -851,7 +864,18 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                 const hasMW = !!p.maintenance_window;
                                 const hasRP = p.reboot_proximity_minutes != null && p.reboot_proximity_minutes > 0;
                                 const hasFT = p.min_frequency_threshold != null && p.min_frequency_threshold > 0;
-                                const hasFilter = hasMW || hasRP || hasFT;
+                                const hasScanFn = !!(p.scan_filename?.trim());
+                                const hasFilter = hasMW || hasRP || hasFT || hasScanFn;
+                                const filterTitleParts = [
+                                  hasScanFn ? `file: ${p.scan_filename}` : null,
+                                  hasMW ? `MW: ${p.maintenance_window?.start ?? "–"}–${p.maintenance_window?.end ?? "–"}` : null,
+                                  hasRP ? `RP: ±${p.reboot_proximity_minutes}m` : null,
+                                  hasFT ? `FT: >${p.min_frequency_threshold}` : null,
+                                ].filter(Boolean);
+                                const filterTitle =
+                                  filterTitleParts.length > 0
+                                    ? filterTitleParts.join(" | ")
+                                    : "Add scan file / maintenance window / reboot proximity / frequency filters";
                                 return (
                                   <div key={idx}>
                                     <div className="grid grid-cols-[32px_1fr_2fr_36px_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
@@ -860,7 +884,7 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                       <input type="text" value={p.regex} onChange={(e) => updatePattern(domain, idx, "regex", e.target.value)} placeholder="Regex" className="text-xs px-2 py-1 rounded border border-border bg-background font-mono min-w-0" />
                                       <button
                                         onClick={() => setFilterEditTarget(filterEditTarget === fk ? null : fk)}
-                                        title={hasFilter ? `MW: ${p.maintenance_window?.start ?? "–"}–${p.maintenance_window?.end ?? "–"} | RP: ±${p.reboot_proximity_minutes ?? "–"}m | FT: >${p.min_frequency_threshold ?? "–"}` : "Add maintenance window / reboot proximity / frequency threshold filter"}
+                                        title={filterTitle}
                                         className={`p-0.5 rounded text-xs flex items-center justify-center gap-0.5 ${hasFilter ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400" : "hover:bg-muted text-muted-foreground"}`}
                                       >
                                         <FilterListIcon style={{ fontSize: 14 }} />
@@ -869,6 +893,29 @@ function PatternEditorModal({ natcoId, onClose }: { natcoId: number; onClose: ()
                                     </div>
                                     {filterEditTarget === fk && (
                                       <div className="ml-6 mr-2 my-2 p-3 border border-border rounded-lg bg-muted/50 dark:bg-muted/30 space-y-3 text-xs text-foreground">
+                                        {/* Scan log file (basename; global NATCO default for ripgrep paths) */}
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <InsertDriveFileIcon style={{ fontSize: 14 }} className="text-sky-600 dark:text-sky-400 shrink-0" />
+                                          <span className="text-muted-foreground shrink-0">Scan file</span>
+                                          <input
+                                            type="text"
+                                            value={p.scan_filename ?? ""}
+                                            onChange={(e) => updatePatternScanFilename(domain, idx, e.target.value)}
+                                            placeholder="e.g. messages"
+                                            className="flex-1 min-w-[140px] max-w-[240px] px-1.5 py-0.5 rounded border border-border bg-background text-xs font-mono"
+                                          />
+                                          <span className="text-[10px] text-muted-foreground">basename only; empty = all files</span>
+                                          {hasScanFn && (
+                                            <button
+                                              type="button"
+                                              onClick={() => updatePatternScanFilename(domain, idx, "")}
+                                              className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground"
+                                              title="Clear scan file"
+                                            >
+                                              <CloseIcon style={{ fontSize: 12 }} />
+                                            </button>
+                                          )}
+                                        </div>
                                         {/* Maintenance Window */}
                                         <div className="flex items-center gap-2">
                                           <ScheduleIcon style={{ fontSize: 14 }} className="text-purple-600 dark:text-purple-400 shrink-0" />
@@ -981,10 +1028,15 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
   return (
     <div className="space-y-1">
       <p className="text-xs font-semibold text-muted-foreground uppercase">Submitted Patterns</p>
-      {submission.patterns.map((p: { name: string; regex: string; enabled: boolean; change_type?: string; maintenance_window?: { start: string; end: string } | null; reboot_proximity_minutes?: number | null; min_frequency_threshold?: number | null }, idx: number) => {
+      {submission.patterns.map((p: UserPattern & { change_type?: string }, idx: number) => {
         const current = modifiedMap.get(p.regex);
         const changes: Array<{ label: string; from: string; to: string }> = [];
         
+        const fmtScanFn = (sf: unknown) => {
+          const s = sf != null && String(sf).trim() ? String(sf).trim() : "";
+          return s || "none";
+        };
+
         if (current && p.change_type === "modified") {
           if (current.name !== p.name) changes.push({ label: "name", from: String(current.name), to: String(p.name) });
           if (current.enabled !== p.enabled) changes.push({ label: "enabled", from: String(current.enabled ?? true), to: String(p.enabled ?? true) });
@@ -995,8 +1047,11 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
           const subRp = p.reboot_proximity_minutes;
           if ((curRp ?? null) !== (subRp ?? null)) changes.push({ label: "reboot", from: curRp != null ? `±${curRp}m` : "none", to: subRp != null ? `±${subRp}m` : "none" });
           const curFt = current.min_frequency_threshold as number | null | undefined;
-          const subFt = (p as any).min_frequency_threshold;
+          const subFt = p.min_frequency_threshold;
           if ((curFt ?? null) !== (subFt ?? null)) changes.push({ label: "frequency", from: curFt != null ? `>${curFt}` : "none", to: subFt != null ? `>${subFt}` : "none" });
+          const curSf = fmtScanFn(current.scan_filename);
+          const subSf = fmtScanFn(p.scan_filename);
+          if (curSf !== subSf) changes.push({ label: "scan file", from: curSf, to: subSf });
         }
 
         return (
@@ -1041,6 +1096,15 @@ function SubmissionPatternList({ submission }: { submission: PatternSubmission }
                 >
                   <FilterListIcon style={{ fontSize: 10, marginRight: 2 }} className="text-sky-600 dark:text-sky-400 inline align-middle" />
                   &gt;{p.min_frequency_threshold}
+                </span>
+              )}
+              {p.scan_filename?.trim() && (
+                <span
+                  className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] border border-border bg-muted/50 text-foreground max-w-[120px] truncate"
+                  title={`Scan log file: ${p.scan_filename}`}
+                >
+                  <InsertDriveFileIcon style={{ fontSize: 10, marginRight: 2 }} className="text-sky-600 dark:text-sky-400 inline align-middle" />
+                  {p.scan_filename}
                 </span>
               )}
             </div>
@@ -1165,6 +1229,11 @@ function ReviewTab() {
               {isExpanded && (
                 <div className="border-t border-border p-4 space-y-3">
                   <SubmissionPatternList submission={s} />
+
+                  <AdminRegexScanPreview
+                    defaultUserId={s.user_id}
+                    patterns={s.patterns.filter((p) => p.enabled !== false && p.regex.trim())}
+                  />
 
                   {s.admin_comment && (
                     <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 rounded text-xs text-amber-800 dark:text-amber-400">

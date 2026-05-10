@@ -10,10 +10,13 @@ The Pattern Analyzer provides high-speed regex pattern management and scanning u
 - **ripgrep Scanning** - Ultra-fast regex matching (10-100x faster than Python)
 - **Time-Series Visualization** - Pattern occurrences over time with Plotly
 - **Reboot Window Filtering** - Select start/end boundaries, zoom with slider
+- **Optional file scope per pattern** — Restrict ripgrep to an uploaded **basename** for each pattern (case-insensitive). Clear errors when that pattern’s basename matches no file.
+- **Optional time window per pattern** — `scan_time_range` with naive local start/end filters that pattern’s matches after ripgrep (chart reboot window is separate).
+- **Async scan + progress** - `POST …/regex-scan` returns **202** with `scan_id`; poll `GET …/regex-scan/<scan_id>/progress` until `complete`, then load results.
 - **NATCO Integration** - Sync patterns from global library
 - **Pattern Submission** - Submit local changes for admin review
 - **Import/Export** - Multiple format support (JSON, YAML, rule_parser_config)
-- **Per-CPE Support** - Scan individual or all CPEs
+- **Per-CPE Support** - Scan individual or all CPEs (workspace router context)
 
 ## How It Works
 
@@ -135,6 +138,12 @@ for match in matches:
 ```
 
 ### Scan Logs
+
+Open **Filters** on a pattern row to set **Scan log file** (same file list as Log Viewer; empty = all files for that pattern) and optional **Limit matches to time (local)** (`datetime-local` start/end). Use naive local values (avoid `Date.toISOString()`). For inclusive calendar days, end at `23:59:59` on the last day. Incomplete time fields are omitted on **Save** until both start and end are set.
+
+The **reboot range** and slider still define the **chart** window only.
+
+**Run Scan** starts an async job; the progress bar advances per enabled pattern while ripgrep runs.
 
 **Trigger Scan:**
 

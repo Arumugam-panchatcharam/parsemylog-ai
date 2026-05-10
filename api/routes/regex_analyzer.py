@@ -17,35 +17,33 @@ Format::
         - ...
 """
 
+import copy
 import json
 import logging
 import re
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from flask import Blueprint, jsonify, request, Response, send_file
 from flask_jwt_extended import jwt_required
 
 from api.app import dbm
+from api.user_db_mngr import global_pattern_row_to_entry, normalized_pattern_scan_filename
 from api.auth import get_user_id
 from logai.utils.constants import UPLOAD_DIRECTORY
 from logai.info_extractor import find_and_extract_reboots
 from logai.timestamp_parser import parse_timestamp, normalize_to_date_only
 
 logger = logging.getLogger(__name__)
-
-# #region REMOVED: agent log instrumentation (verified fix 2026-04-18)
-# _AGENT_DEBUG_LOG = Path("/Users/parumugam/Documents/Repos/parsemylog-ai/.cursor/debug-27a569.log")
-# #endregion
-
 
 regex_analyzer_bp = Blueprint("regex_analyzer", __name__)
 
@@ -249,21 +247,7 @@ def load_project_patterns(user_id: int, project_id: str) -> Dict[str, List[Dict[
             for gp in global_patterns:
                 if gp.domain not in global_domains:
                     global_domains[gp.domain] = []
-                entry: Dict[str, Any] = {
-                    "name": gp.name,
-                    "regex": gp.regex,
-                    "enabled": gp.enabled,
-                }
-                if gp.maintenance_window_json:
-                    try:
-                        entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                if gp.reboot_proximity_minutes is not None:
-                    entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
-                if gp.min_frequency_threshold is not None:
-                    entry["min_frequency_threshold"] = gp.min_frequency_threshold
-                global_domains[gp.domain].append(entry)
+                global_domains[gp.domain].append(global_pattern_row_to_entry(gp))
             
             logger.info(
                 f"[PatternAnalyzer] Seeding project {project_id} from DB global "
@@ -394,6 +378,7 @@ def _load_domain_presets() -> Dict[str, List[Dict[str, Any]]]:
 _MAX_POINTS_PER_PATTERN = 3000  # cap per-pattern to keep result file reasonable
 _MAX_TEXT_LEN = 200  # truncate matched log lines for hover text
 _SCAN_RESULT_PREFIX = ".scan_result_"  # cache file prefix
+_SCAN_PROGRESS_PREFIX = ".scan_progress_"
 
 
 def _scan_result_path(project_dir: Path, scan_id: str) -> Path:
@@ -401,13 +386,104 @@ def _scan_result_path(project_dir: Path, scan_id: str) -> Path:
     return project_dir / f"{_SCAN_RESULT_PREFIX}{scan_id}.json"
 
 
+def _scan_progress_path(project_dir: Path, scan_id: str) -> Path:
+    """Return the path to a scan progress JSON file."""
+    return project_dir / f"{_SCAN_PROGRESS_PREFIX}{scan_id}.json"
+
+
+def _write_scan_progress(project_dir: Path, scan_id: str, payload: Dict[str, Any]) -> None:
+    """Persist scan progress for polling (multi-worker safe on shared upload volume)."""
+    path = _scan_progress_path(project_dir, scan_id)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _cleanup_old_scan_results(project_dir: Path) -> None:
-    """Remove old scan result cache files from a project directory."""
-    for old_file in project_dir.glob(f"{_SCAN_RESULT_PREFIX}*.json"):
+    """Remove old scan result and progress cache files from a project directory."""
+    for prefix in (_SCAN_RESULT_PREFIX, _SCAN_PROGRESS_PREFIX):
+        for old_file in project_dir.glob(f"{prefix}*.json"):
+            try:
+                old_file.unlink()
+            except OSError:
+                pass
+
+
+def _resolve_rg_paths(project_dir: Path, filename: Optional[str]) -> tuple[List[Path], Optional[str]]:
+    """
+    Resolve paths passed to ripgrep.
+
+    When *filename* is empty, search the whole *project_dir* tree (single root path).
+    Otherwise match files whose basename equals *filename* (case-insensitive).
+
+    Returns:
+        (paths_for_rg, error_message) — error_message set when filter finds no files.
+    """
+    if not filename or not str(filename).strip():
+        return [project_dir], None
+
+    raw = str(filename).strip()
+    if ".." in raw or "/" in raw or "\\" in raw:
+        return [], "Invalid filename: path separators and '..' are not allowed"
+
+    wanted = Path(raw).name.lower()
+    matches: List[Path] = []
+    try:
+        for p in project_dir.rglob("*"):
+            if p.is_file() and p.name.lower() == wanted:
+                try:
+                    p.resolve().relative_to(project_dir.resolve())
+                except ValueError:
+                    continue
+                matches.append(p)
+    except OSError as e:
+        return [], f"Could not scan directory for filename filter: {e}"
+
+    if not matches:
+        return [], f"No file matching basename '{raw}' under the scan directory"
+
+    return matches, None
+
+
+def _parse_iso_as_utc_naive(raw: Optional[str]) -> Optional[datetime]:
+    """Parse scan_time_range boundary strings as UTC (returns naive UTC datetime)."""
+    if raw is None or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    dt = parse_timestamp(s)
+    if dt is None:
         try:
-            old_file.unlink()
-        except OSError:
-            pass
+            if s.endswith("Z"):
+                dt = datetime.fromisoformat(s[:-1])
+            else:
+                dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _ts_as_utc_naive_for_scan_compare(ts: datetime) -> datetime:
+    """Align log-line timestamps with naive UTC scan window boundaries."""
+    if ts.tzinfo is None:
+        return ts
+    return ts.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _validate_time_range_window(time_range: Dict[str, Any]) -> Optional[str]:
+    """Return error if start/end are inconsistent (``scan_time_range`` uses UTC)."""
+    if not time_range:
+        return None
+    start_raw = time_range.get("start")
+    end_raw = time_range.get("end")
+    if not start_raw or not end_raw:
+        return None
+    ts_start = _parse_iso_as_utc_naive(str(start_raw))
+    ts_end = _parse_iso_as_utc_naive(str(end_raw))
+    if ts_start is None or ts_end is None:
+        return None
+    if ts_start > ts_end:
+        return "time_range.start must be before or equal to time_range.end"
+    return None
 
 
 def _calculate_adaptive_bucket_minutes(times: List[str], target_points: int = 600) -> int:
@@ -543,14 +619,32 @@ def _get_build_timestamps(project_dir: Path) -> List[datetime]:
     return []
 
 
+def _pattern_scan_trace_echo(pat: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy per-pattern scan bounds onto trace payloads for client-side chart clipping."""
+    extra: Dict[str, Any] = {}
+    tr = pat.get("scan_time_range")
+    if isinstance(tr, dict):
+        st_raw = tr.get("start")
+        en_raw = tr.get("end")
+        if st_raw and en_raw:
+            extra["scan_time_range"] = {
+                "start": str(st_raw).strip(),
+                "end": str(en_raw).strip(),
+            }
+    sf = pat.get("scan_filename")
+    if sf is not None and str(sf).strip():
+        extra["scan_filename"] = str(sf).strip()
+    return extra
+
+
 def _run_ripgrep_scan(
     project_dir: Path,
     patterns: List[Dict[str, Any]],
     bucket_minutes: int = 5,
-    time_start: Optional[str] = None,
-    time_end: Optional[str] = None,
     filter_pre_ntp: bool = False,
     reboots: Optional[List[Dict[str, str]]] = None,
+    scan_id: Optional[str] = None,
+    progress_writer: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Run ripgrep with combined patterns and return individual match points.
@@ -559,22 +653,19 @@ def _run_ripgrep_scan(
     hover display.
 
     Args:
-        project_dir: Path to the project directory containing log files.
+        project_dir: Path used for version.txt / pre-NTP resolution.
         patterns: List of enabled patterns [{name, regex}, ...].
+            Optional per pattern:
+            - scan_filename: basename to restrict ripgrep paths (else whole tree).
+            - scan_time_range: {"start", "end"} ISO instants interpreted as **UTC** (optional).
         bucket_minutes: (unused, kept for API compat)
-        time_start: Optional ISO start time filter.
-        time_end: Optional ISO end time filter.
-        filter_pre_ntp: When True, exclude log lines whose timestamps are
-            from before NTP sync (i.e., timestamps on any build date from version.txt).
-            Supports firmware upgrades with multiple build dates. Logs are normalized
-            to date-only comparison (year-month-date), so any log on a build date is
-            excluded regardless of time component.
-        reboots: Reboot data (unused when *filter_pre_ntp* is True).
+        filter_pre_ntp: When True, exclude pre-NTP build-date lines.
+        reboots: Reboot data for proximity filter.
+        scan_id: Optional id for logging.
+        progress_writer: Optional callback(completed_count, total, pattern_name_or_none).
 
     Returns:
-        Dict with:
-            - traces: [{name, times, texts}] per pattern
-            - total_matches: int
+        Dict with traces and total_matches.
     """
     rg_binary = shutil.which("rg")
     if not rg_binary:
@@ -583,26 +674,18 @@ def _run_ripgrep_scan(
     if not patterns:
         return {"traces": [], "total_matches": 0}
 
-    # Parse optional time filters
-    ts_start = None
-    ts_end = None
-    if time_start:
-        try:
-            ts_start = parse_timestamp(time_start)
-            if not ts_start:
-                ts_start = datetime.fromisoformat(time_start)
-        except ValueError:
-            pass
-    if time_end:
-        try:
-            ts_end = parse_timestamp(time_end)
-            if not ts_end:
-                ts_end = datetime.fromisoformat(time_end)
-        except ValueError:
-            pass
+    path_cache: Dict[str, Tuple[List[Path], Optional[str]]] = {}
 
-    # Pre-NTP filter: Get all build dates from version.txt (handles firmware upgrades)
-    # Logs with dates matching any build date are pre-NTP (device clock not yet synced)
+    def paths_for_pattern(pat: Dict[str, Any]) -> List[Path]:
+        raw_fn = pat.get("scan_filename")
+        fn = str(raw_fn).strip() if raw_fn else ""
+        key = fn.lower() if fn else "__ALL__"
+        if key not in path_cache:
+            path_cache[key] = _resolve_rg_paths(project_dir, fn or None)
+        resolved, _err = path_cache[key]
+        return resolved
+
+    # Pre-NTP filter
     pre_ntp_dates: List[datetime] = []
     if filter_pre_ntp:
         pre_ntp_dates = _get_build_timestamps(project_dir)
@@ -610,12 +693,34 @@ def _run_ripgrep_scan(
             date_list = ", ".join(dt.strftime("%Y-%m-%d") for dt in pre_ntp_dates)
             logger.info(f"[PatternAnalyzer] Pre-NTP filter active: excluding logs from build date(s): {date_list}")
 
-    traces = []
+    traces: List[Dict[str, Any]] = []
     total_matches = 0
+    total_pat = len(patterns)
+    sid = scan_id or ""
 
-    for pat in patterns:
+    for idx, pat in enumerate(patterns):
         regex = pat["regex"]
         name = pat["name"]
+
+        pat_paths = paths_for_pattern(pat)
+        path_args = [str(p) for p in pat_paths]
+        if not path_args:
+            if progress_writer:
+                progress_writer(idx + 1, total_pat, name)
+            continue
+
+        ts_start = None
+        ts_end = None
+        tr = pat.get("scan_time_range")
+        if isinstance(tr, dict):
+            st_raw = tr.get("start")
+            en_raw = tr.get("end")
+            if st_raw and en_raw:
+                ts_start = _parse_iso_as_utc_naive(str(st_raw))
+                ts_end = _parse_iso_as_utc_naive(str(en_raw))
+
+        if progress_writer:
+            progress_writer(idx, total_pat, name)
 
         cmd = [
             rg_binary,
@@ -626,7 +731,7 @@ def _run_ripgrep_scan(
             "--max-filesize", "500M",
             "-i",
             "-e", regex,
-            str(project_dir),
+            *path_args,
         ]
 
         try:
@@ -638,9 +743,13 @@ def _run_ripgrep_scan(
             )
         except subprocess.TimeoutExpired:
             logger.warning(f"[PatternAnalyzer] ripgrep timed out for pattern: {name}")
+            if progress_writer:
+                progress_writer(idx + 1, total_pat, name)
             continue
         except Exception as e:
             logger.warning(f"[PatternAnalyzer] ripgrep error for pattern {name}: {e}")
+            if progress_writer:
+                progress_writer(idx + 1, total_pat, name)
             continue
 
         if result.returncode not in (0, 1):
@@ -648,9 +757,10 @@ def _run_ripgrep_scan(
                 f"[PatternAnalyzer] rg exit code {result.returncode} "
                 f"for pattern '{name}': {result.stderr[:200]}"
             )
+            if progress_writer:
+                progress_writer(idx + 1, total_pat, name)
             continue
 
-        # Collect individual match points
         times: List[str] = []
         texts: List[str] = []
         match_count = 0
@@ -668,7 +778,8 @@ def _run_ripgrep_scan(
             except ValueError:
                 continue
 
-            # Skip if on a pre-NTP build date (date-only comparison)
+            ts = _ts_as_utc_naive_for_scan_compare(ts)
+
             if pre_ntp_dates:
                 ts_date = normalize_to_date_only(ts)
                 if ts_date in pre_ntp_dates:
@@ -685,9 +796,7 @@ def _run_ripgrep_scan(
 
             match_count += 1
 
-            # Cap per-pattern points to keep payload reasonable
             if len(times) < _MAX_POINTS_PER_PATTERN:
-                # Strip the line number prefix that rg prepends (e.g. "123:")
                 text = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
                 if len(text) > _MAX_TEXT_LEN:
                     text = text[:_MAX_TEXT_LEN] + "..."
@@ -696,12 +805,13 @@ def _run_ripgrep_scan(
 
         total_matches += match_count
 
+        trace_echo = _pattern_scan_trace_echo(pat)
         if times:
-            # Apply bucketing for patterns with >500 matches (more aggressive)
             if len(times) > 500:
                 adaptive_bucket = _calculate_adaptive_bucket_minutes(times, target_points=300)
                 bucket_times, bucket_texts, bucket_counts = _bucket_matches(times, texts, adaptive_bucket)
                 traces.append({
+                    **trace_echo,
                     "name": name,
                     "times": bucket_times,
                     "texts": bucket_texts,
@@ -711,8 +821,8 @@ def _run_ripgrep_scan(
                     "bucket_minutes": adaptive_bucket,
                 })
             else:
-                # Keep individual points for patterns with <500 matches
                 traces.append({
+                    **trace_echo,
                     "name": name,
                     "times": times,
                     "texts": texts,
@@ -721,10 +831,209 @@ def _run_ripgrep_scan(
                     "bucketed": False,
                 })
 
+        if progress_writer:
+            progress_writer(idx + 1, total_pat, name)
+
+    logger.debug(f"[PatternAnalyzer] Scan {sid}: {total_matches} total matches, {len(traces)} traces")
+
     return {
         "traces": traces,
         "total_matches": total_matches,
     }
+
+
+def _regex_scan_background_job(
+    owner_user_id: int,
+    project_id: str,
+    cpe_id: Optional[str],
+    scan_id: str,
+    enabled_patterns: List[Dict[str, Any]],
+    bucket_minutes: int,
+    filter_pre_ntp: bool,
+    filter_short_reboots: bool,
+) -> None:
+    """Run scan in a background thread; updates progress file and writes results."""
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{owner_user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
+
+    def fail(msg: str) -> None:
+        _write_scan_progress(project_dir, scan_id, {
+            "status": "error",
+            "current": 0,
+            "total": len(enabled_patterns),
+            "pattern_name": None,
+            "error": msg,
+        })
+
+    try:
+        if not project_dir.exists():
+            fail("Project directory not found")
+            return
+
+        reboots = find_and_extract_reboots(project_dir)
+        if filter_short_reboots and len(reboots) > 1:
+            reboots = [r for r in reboots if r.get("is_short_reboot", False)]
+
+        total_p = len(enabled_patterns)
+
+        def progress_writer(completed: int, total: int, pattern_name: Optional[str]) -> None:
+            _write_scan_progress(project_dir, scan_id, {
+                "status": "running",
+                "current": completed,
+                "total": total,
+                "pattern_name": pattern_name,
+                "error": None,
+            })
+
+        scan_result = _run_ripgrep_scan(
+            project_dir=project_dir,
+            patterns=enabled_patterns,
+            bucket_minutes=bucket_minutes,
+            filter_pre_ntp=filter_pre_ntp,
+            reboots=reboots,
+            scan_id=scan_id,
+            progress_writer=progress_writer,
+        )
+
+        full_result = {
+            "traces": scan_result["traces"],
+            "reboots": reboots,
+            "total_matches": scan_result["total_matches"],
+            "cpe_serial": cpe_id,
+        }
+        cache_path = _scan_result_path(project_dir, scan_id)
+        cache_path.write_text(json.dumps(full_result), encoding="utf-8")
+
+        _write_scan_progress(project_dir, scan_id, {
+            "status": "complete",
+            "current": total_p,
+            "total": total_p,
+            "pattern_name": None,
+            "error": None,
+            "total_matches": scan_result["total_matches"],
+            "trace_count": len(scan_result["traces"]),
+            "reboots_count": len(reboots),
+        })
+
+        logger.info(
+            f"[PatternAnalyzer] Scan complete for project {project_id}: "
+            f"{scan_result['total_matches']} matches, "
+            f"{len(reboots)} reboots, cached as {cache_path.name}"
+        )
+    except RuntimeError as e:
+        logger.warning(f"[PatternAnalyzer] Scan runtime error: {e}")
+        fail(str(e))
+    except Exception as e:
+        logger.exception(f"[PatternAnalyzer] Scan error: {e}")
+        fail(f"Scan failed: {str(e)}")
+
+
+def regex_scan_validate_and_start_async(
+    owner_user_id: int,
+    project_id: str,
+    cpe_id: Optional[str],
+    data: Dict[str, Any],
+) -> tuple:
+    """
+    Validate scan payload, spawn background job, return Flask (response, status).
+
+    Cleans prior scan cache files on disk before enqueueing the new job.
+    """
+    patterns = data.get("patterns", [])
+    bucket_minutes = int(data.get("bucket_minutes", 5))
+    filter_pre_ntp = bool(data.get("filter_pre_ntp", False))
+    filter_short_reboots = bool(data.get("filter_short_reboots", False))
+
+    if bucket_minutes < 1:
+        bucket_minutes = 1
+
+    enabled_patterns = [
+        p for p in patterns
+        if isinstance(p, dict)
+        and p.get("enabled", True)
+        and p.get("regex", "").strip()
+    ]
+
+    if not enabled_patterns:
+        return jsonify({"error": "No enabled patterns provided"}), 400
+
+    base_dir = Path(f"{UPLOAD_DIRECTORY}/{owner_user_id}/{project_id}")
+    project_dir = base_dir / cpe_id if cpe_id else base_dir
+    if not project_dir.exists():
+        return jsonify({"error": "Project directory not found"}), 404
+
+    for p in enabled_patterns:
+        try:
+            re.compile(p["regex"])
+        except re.error as e:
+            return jsonify({
+                "error": f"Invalid regex for pattern '{p.get('name', '?')}': {e}"
+            }), 400
+
+        raw_sf = p.get("scan_filename")
+        scan_fn = str(raw_sf).strip() if raw_sf else ""
+        if scan_fn and (".." in scan_fn or "/" in scan_fn or "\\" in scan_fn):
+            return jsonify({
+                "error": f"Pattern '{p.get('name', '?')}': invalid scan_filename (no path separators)",
+            }), 400
+
+        paths_check, p_err = _resolve_rg_paths(project_dir, scan_fn or None)
+        if p_err:
+            return jsonify({"error": f"Pattern '{p.get('name', '?')}': {p_err}"}), 400
+        if not paths_check:
+            return jsonify({"error": f"Pattern '{p.get('name', '?')}': no scan paths"}), 400
+
+        str_tr = p.get("scan_time_range")
+        if str_tr is not None:
+            if not isinstance(str_tr, dict):
+                return jsonify({
+                    "error": f"Pattern '{p.get('name', '?')}': scan_time_range must be an object",
+                }), 400
+            st_part = str(str_tr.get("start") or "").strip()
+            en_part = str(str_tr.get("end") or "").strip()
+            if st_part and en_part:
+                tw_err = _validate_time_range_window({"start": st_part, "end": en_part})
+                if tw_err:
+                    return jsonify({"error": f"Pattern '{p.get('name', '?')}': {tw_err}"}), 400
+            elif st_part or en_part:
+                return jsonify({
+                    "error": f"Pattern '{p.get('name', '?')}': scan_time_range requires both start and end",
+                }), 400
+
+    _cleanup_old_scan_results(project_dir)
+
+    scan_id = uuid.uuid4().hex[:12]
+    patterns_copy = copy.deepcopy(enabled_patterns)
+
+    _write_scan_progress(project_dir, scan_id, {
+        "status": "running",
+        "current": 0,
+        "total": len(enabled_patterns),
+        "pattern_name": None,
+        "error": None,
+    })
+
+    thread = threading.Thread(
+        target=_regex_scan_background_job,
+        kwargs={
+            "owner_user_id": owner_user_id,
+            "project_id": project_id,
+            "cpe_id": cpe_id,
+            "scan_id": scan_id,
+            "enabled_patterns": patterns_copy,
+            "bucket_minutes": bucket_minutes,
+            "filter_pre_ntp": filter_pre_ntp,
+            "filter_short_reboots": filter_short_reboots,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({
+        "scan_id": scan_id,
+        "accepted": True,
+        "total_patterns": len(enabled_patterns),
+    }), 202
 
 
 # ---------------------------------------------------------------------------
@@ -835,6 +1144,38 @@ def save_patterns(project_id):
             else:
                 raw_ft = None
 
+            # Optional per-pattern scan scope (validated at scan time against CPE dir)
+            raw_sf = p.get("scan_filename")
+            scan_filename_val: Optional[str] = None
+            if raw_sf is not None and str(raw_sf).strip():
+                sf = str(raw_sf).strip()
+                if ".." in sf or "/" in sf or "\\" in sf:
+                    return jsonify({
+                        "error": f"Pattern '{name}' in domain '{domain_name}': scan_filename must be a basename only",
+                    }), 400
+                scan_filename_val = sf
+
+            raw_scan_tr = p.get("scan_time_range")
+            scan_tr_val: Optional[Dict[str, str]] = None
+            if raw_scan_tr is not None:
+                if not isinstance(raw_scan_tr, dict):
+                    return jsonify({
+                        "error": f"Pattern '{name}' in domain '{domain_name}': scan_time_range must be an object",
+                    }), 400
+                st_tr = str(raw_scan_tr.get("start") or "").strip()
+                en_tr = str(raw_scan_tr.get("end") or "").strip()
+                if st_tr and en_tr:
+                    tw_e = _validate_time_range_window({"start": st_tr, "end": en_tr})
+                    if tw_e:
+                        return jsonify({
+                            "error": f"Pattern '{name}' in domain '{domain_name}': {tw_e}",
+                        }), 400
+                    scan_tr_val = {"start": st_tr, "end": en_tr}
+                elif st_tr or en_tr:
+                    return jsonify({
+                        "error": f"Pattern '{name}' in domain '{domain_name}': scan_time_range requires both start and end",
+                    }), 400
+
             entry: Dict[str, Any] = {
                 "name": name,
                 "regex": regex,
@@ -849,6 +1190,10 @@ def save_patterns(project_id):
                 entry["reboot_proximity_minutes"] = raw_rp
             if raw_ft:
                 entry["min_frequency_threshold"] = raw_ft
+            if scan_filename_val:
+                entry["scan_filename"] = scan_filename_val
+            if scan_tr_val:
+                entry["scan_time_range"] = scan_tr_val
 
             validated.append(entry)
 
@@ -947,28 +1292,20 @@ def get_reboots(project_id):
 @jwt_required()
 def run_scan(project_id):
     """
-    Run ripgrep scan, write Plotly-ready results to a cache file,
-    and return lightweight metadata.
+    Enqueue ripgrep scan (async). Returns scan_id immediately (HTTP 202).
+
+    Poll ``GET /<project_id>/regex-scan/<scan_id>/progress`` until status is
+    ``complete`` or ``error``, then fetch ``.../results``.
 
     Request body:
-        {
-            "patterns": [{ "name": str, "regex": str, "enabled": bool }, ...],
-            "bucket_minutes": int (default 5),
-            "time_range": { "start": str, "end": str }  (optional),
-            "filter_pre_ntp": bool (default false)
-        }
+        patterns, bucket_minutes, filter_pre_ntp, filter_short_reboots,
+        cpe_id (optional).
 
-    Returns:
-        {
-            "scan_id": str,
-            "total_matches": int,
-            "trace_count": int,
-            "reboots_count": int,
-            "elapsed_ms": int
-        }
+        Each pattern may include optional scan scope:
+        ``scan_filename`` (basename) and ``scan_time_range`` ``{start, end}`` (**UTC** ISO strings).
 
-    The full result data (traces, reboots) is fetched separately via
-    ``GET /<project_id>/regex-scan/<scan_id>/results``.
+    Returns (202):
+        { "scan_id", "accepted": true, "total_patterns": int }
     """
     user_id = get_user_id()
     _, err = _verify_project(project_id, user_id)
@@ -976,101 +1313,38 @@ def run_scan(project_id):
         return err
 
     data = request.get_json(silent=True) or {}
-    patterns = data.get("patterns", [])
-    bucket_minutes = int(data.get("bucket_minutes", 5))
-    time_range = data.get("time_range", {})
-    filter_pre_ntp = bool(data.get("filter_pre_ntp", False))
-    filter_short_reboots = bool(data.get("filter_short_reboots", False))
     cpe_id = data.get("cpe_id") or request.args.get("cpe_id")
 
-    if bucket_minutes < 1:
-        bucket_minutes = 1
+    resp, code = regex_scan_validate_and_start_async(user_id, project_id, cpe_id, data)
+    return resp, code
 
-    # Filter to enabled patterns only
-    enabled_patterns = [
-        p for p in patterns
-        if isinstance(p, dict)
-        and p.get("enabled", True)
-        and p.get("regex", "").strip()
-    ]
 
-    if not enabled_patterns:
-        return jsonify({
-            "error": "No enabled patterns provided"
-        }), 400
+@regex_analyzer_bp.route("/<project_id>/regex-scan/<scan_id>/progress", methods=["GET"])
+@jwt_required()
+def get_scan_progress(project_id, scan_id):
+    """Poll scan job progress written under the project (or CPE) directory."""
+    user_id = get_user_id()
+    _, err = _verify_project(project_id, user_id)
+    if err:
+        return err
 
-    # Validate all regex patterns
-    for p in enabled_patterns:
-        try:
-            re.compile(p["regex"])
-        except re.error as e:
-            return jsonify({
-                "error": f"Invalid regex for pattern '{p.get('name', '?')}': {e}"
-            }), 400
+    if not re.fullmatch(r"[0-9a-f]{12}", scan_id):
+        return jsonify({"error": "Invalid scan_id"}), 400
 
+    cpe_id = request.args.get("cpe_id")
     base_dir = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
     project_dir = base_dir / cpe_id if cpe_id else base_dir
-    if not project_dir.exists():
-        return jsonify({"error": "Project directory not found"}), 404
+    prog_path = _scan_progress_path(project_dir, scan_id)
+
+    if not prog_path.exists():
+        return jsonify({"error": "Scan progress not found"}), 404
 
     try:
-        start_time = time.perf_counter()
+        payload = json.loads(prog_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return jsonify({"error": "Could not read scan progress"}), 500
 
-        # Clean up previous scan results
-        _cleanup_old_scan_results(project_dir)
-
-        # Extract reboot boundaries (needed before scan for pre-NTP filter)
-        reboots = find_and_extract_reboots(project_dir)
-        
-        # Filter short reboots if requested (but show all reboots if there's only one)
-        if filter_short_reboots and len(reboots) > 1:
-            reboots = [r for r in reboots if r.get("is_short_reboot", False)]
-
-        # Run ripgrep scan
-        scan_result = _run_ripgrep_scan(
-            project_dir=project_dir,
-            patterns=enabled_patterns,
-            bucket_minutes=bucket_minutes,
-            time_start=time_range.get("start"),
-            time_end=time_range.get("end"),
-            filter_pre_ntp=filter_pre_ntp,
-            reboots=reboots,
-        )
-
-        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
-
-        # Write full results to cache file
-        scan_id = uuid.uuid4().hex[:12]
-        full_result = {
-            "traces": scan_result["traces"],
-            "reboots": reboots,
-            "total_matches": scan_result["total_matches"],
-            "cpe_serial": cpe_id,
-        }
-        cache_path = _scan_result_path(project_dir, scan_id)
-        cache_path.write_text(json.dumps(full_result), encoding="utf-8")
-
-        logger.info(
-            f"[PatternAnalyzer] Scan complete for project {project_id}: "
-            f"{scan_result['total_matches']} matches, "
-            f"{len(reboots)} reboots, "
-            f"{elapsed_ms}ms, cached as {cache_path.name}"
-        )
-
-        # Return lightweight metadata only
-        return jsonify({
-            "scan_id": scan_id,
-            "total_matches": scan_result["total_matches"],
-            "trace_count": len(scan_result["traces"]),
-            "reboots_count": len(reboots),
-            "elapsed_ms": elapsed_ms,
-        }), 200
-
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
-    except Exception as e:
-        logger.exception(f"[PatternAnalyzer] Scan error: {e}")
-        return jsonify({"error": f"Scan failed: {str(e)}"}), 500
+    return jsonify(payload), 200
 
 
 @regex_analyzer_bp.route("/<project_id>/regex-scan/<scan_id>/results", methods=["GET"])
@@ -1150,21 +1424,7 @@ def get_global_patterns(project_id):
     for p in patterns:
         if p.domain not in domains:
             domains[p.domain] = []
-        entry: Dict[str, Any] = {
-            "name": p.name,
-            "regex": p.regex,
-            "enabled": p.enabled,
-        }
-        if p.maintenance_window_json:
-            try:
-                entry["maintenance_window"] = json.loads(p.maintenance_window_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if p.reboot_proximity_minutes is not None:
-            entry["reboot_proximity_minutes"] = p.reboot_proximity_minutes
-        if p.min_frequency_threshold is not None:
-            entry["min_frequency_threshold"] = p.min_frequency_threshold
-        domains[p.domain].append(entry)
+        domains[p.domain].append(global_pattern_row_to_entry(p))
 
     return jsonify({
         "domains": domains,
@@ -1211,21 +1471,7 @@ def sync_from_global(project_id):
     for gp in global_patterns:
         if gp.domain not in global_by_domain:
             global_by_domain[gp.domain] = []
-        entry: Dict[str, Any] = {
-            "name": gp.name,
-            "regex": gp.regex,
-            "enabled": gp.enabled,
-        }
-        if gp.maintenance_window_json:
-            try:
-                entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if gp.reboot_proximity_minutes is not None:
-            entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
-        if gp.min_frequency_threshold is not None:
-            entry["min_frequency_threshold"] = gp.min_frequency_threshold
-        global_by_domain[gp.domain].append(entry)
+        global_by_domain[gp.domain].append(global_pattern_row_to_entry(gp))
 
     # Use caller-supplied patterns or fall back to saved YAML
     body = request.get_json(silent=True) or {}
@@ -1251,13 +1497,21 @@ def sync_from_global(project_id):
         global_regexes = set()
         for gp in global_pats:
             global_regexes.add(gp["regex"])
-            entry = {"name": gp["name"], "regex": gp["regex"], "enabled": gp["enabled"]}
-            if gp.get("maintenance_window"):
-                entry["maintenance_window"] = gp["maintenance_window"]
-            if gp.get("reboot_proximity_minutes") is not None:
-                entry["reboot_proximity_minutes"] = gp["reboot_proximity_minutes"]
-            if gp.get("min_frequency_threshold") is not None:
-                entry["min_frequency_threshold"] = gp["min_frequency_threshold"]
+            entry = dict(gp)
+            prev_user = next(
+                (up for up in user_pats if isinstance(up, dict) and up.get("regex") == gp["regex"]),
+                None,
+            )
+            if prev_user:
+                sf_prev = prev_user.get("scan_filename")
+                if sf_prev is not None and str(sf_prev).strip():
+                    entry["scan_filename"] = str(sf_prev).strip()
+                tr_prev = prev_user.get("scan_time_range")
+                if isinstance(tr_prev, dict) and tr_prev.get("start") and tr_prev.get("end"):
+                    entry["scan_time_range"] = {
+                        "start": str(tr_prev["start"]).strip(),
+                        "end": str(tr_prev["end"]).strip(),
+                    }
             domain_result.append(entry)
             synced += 1
 
@@ -1319,17 +1573,7 @@ def diff_patterns(project_id):
     )
     global_by_domain: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for gp in global_pats:
-        entry: Dict[str, Any] = {"name": gp.name, "regex": gp.regex, "enabled": gp.enabled}
-        if gp.maintenance_window_json:
-            try:
-                entry["maintenance_window"] = json.loads(gp.maintenance_window_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if gp.reboot_proximity_minutes is not None:
-            entry["reboot_proximity_minutes"] = gp.reboot_proximity_minutes
-        if gp.min_frequency_threshold is not None:
-            entry["min_frequency_threshold"] = gp.min_frequency_threshold
-        global_by_domain.setdefault(gp.domain, {})[gp.regex] = entry
+        global_by_domain.setdefault(gp.domain, {})[gp.regex] = global_pattern_row_to_entry(gp)
 
     # Use caller-supplied patterns (POST) or fall back to saved YAML (GET)
     body = request.get_json(silent=True) or {}
@@ -1356,6 +1600,7 @@ def diff_patterns(project_id):
             mw = p.get("maintenance_window")
             rp = p.get("reboot_proximity_minutes")
             ft = p.get("min_frequency_threshold")
+            sf_u = normalized_pattern_scan_filename(p)
 
             base: Dict[str, Any] = {"name": name, "regex": rx, "enabled": enabled}
             if mw:
@@ -1364,6 +1609,8 @@ def diff_patterns(project_id):
                 base["reboot_proximity_minutes"] = rp
             if ft is not None:
                 base["min_frequency_threshold"] = ft
+            if sf_u:
+                base["scan_filename"] = sf_u
 
             if rx not in gmap:
                 new_pats.append(base)
@@ -1372,12 +1619,14 @@ def diff_patterns(project_id):
                 g_mw = gp_entry.get("maintenance_window")
                 g_rp = gp_entry.get("reboot_proximity_minutes")
                 g_ft = gp_entry.get("min_frequency_threshold")
+                g_sf = normalized_pattern_scan_filename(gp_entry)
                 changed = (
                     gp_entry["name"] != name
                     or gp_entry["enabled"] != enabled
                     or mw != g_mw
                     or rp != g_rp
                     or ft != g_ft
+                    or sf_u != g_sf
                 )
                 if changed:
                     base["global_name"] = gp_entry["name"]
@@ -1388,6 +1637,8 @@ def diff_patterns(project_id):
                         base["global_reboot_proximity_minutes"] = g_rp
                     if g_ft is not None:
                         base["global_min_frequency_threshold"] = g_ft
+                    if g_sf:
+                        base["global_scan_filename"] = g_sf
                     modified_pats.append(base)
                 else:
                     unchanged_pats.append(base)
@@ -1474,6 +1725,9 @@ def submit_patterns(project_id):
                     entry["min_frequency_threshold"] = ft_int
             except (TypeError, ValueError):
                 pass
+        sf = p.get("scan_filename")
+        if sf is not None and str(sf).strip():
+            entry["scan_filename"] = str(sf).strip()
         validated.append(entry)
 
     if not validated:
