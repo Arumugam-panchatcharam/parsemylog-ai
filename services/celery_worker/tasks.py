@@ -367,8 +367,19 @@ def process_single_cpe_rg_drain3(self, job_id: str, user_id: int, project_id: st
                     t2_path, dcmscript_path=dcm_path, cpe_dir=cpe_path,
                 )
                 if tel_summary:
-                    date_from = tel_summary.get("date_range", {}).get("from")
-                    date_to = tel_summary.get("date_range", {}).get("to")
+                    otr = tel_summary.get("overall_time_range") or {}
+                    date_from = otr.get("first")
+                    date_to = otr.get("last")
+                    if not date_from or not date_to:
+                        legacy = tel_summary.get("date_range") or {}
+                        date_from = date_from or legacy.get("from")
+                        date_to = date_to or legacy.get("to")
+                    if date_from:
+                        ds = str(date_from).strip()
+                        date_from = ds[:10] if len(ds) >= 10 and ds[4:5] == "-" and ds[7:8] == "-" else ds
+                    if date_to:
+                        ds = str(date_to).strip()
+                        date_to = ds[:10] if len(ds) >= 10 and ds[4:5] == "-" and ds[7:8] == "-" else ds
                 if not mac and tel_reports:
                     for r in tel_reports:
                         m = r.get("mac", "")

@@ -175,6 +175,12 @@ export const batchJobsApi = {
       responseType: "blob",
     }),
 
+  /** CSV: serial, mac, date_from, date_to, hw_ver, sw_ver, WAN */
+  downloadProjectCpesCsv: (projectId: string) =>
+    api.get(`/projects/${projectId}/batch-jobs/download-project-cpes`, {
+      responseType: "blob",
+    }),
+
   // Chunked upload methods
   initUpload: (projectId: string, filename: string, totalSize: number) =>
     api.post<{ upload_id: string; chunk_size: number; message: string }>(

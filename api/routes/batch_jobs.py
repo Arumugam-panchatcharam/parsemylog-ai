@@ -10,6 +10,7 @@ Endpoints for managing batch CPE processing jobs:
 - Cancel running jobs
 """
 
+import csv
 import fcntl
 import json
 import logging
@@ -18,6 +19,7 @@ import subprocess
 import threading
 import time
 import uuid
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify
@@ -26,7 +28,7 @@ from flask_jwt_extended import jwt_required
 from api.app import dbm
 from api.auth import get_user_id
 from services.celery_worker.celery_app import celery
-from logai.utils.constants import BASE_DIR, is_os_junk_dirname, is_os_junk_filename
+from logai.utils.constants import BASE_DIR, UPLOAD_DIRECTORY, is_os_junk_dirname, is_os_junk_filename
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +160,69 @@ def _verify_project(project_id, user_id):
     return project, None
 
 
+def _iso_to_yyyy_mm_dd(val: object) -> str | None:
+    if val is None:
+        return None
+    s = str(val).strip()
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    return s or None
+
+
+def _csv_cell_str(val: object) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return s
+
+
+def _cpe_disk_export_hints(cpe_dir: Path) -> tuple[str | None, str | None, str, str, str]:
+    """
+    Return (date_from, date_to, hw_ver, sw_ver, wan) from telemetry cache and
+    optional .device_info_cache.json. Missing directory or data yields empty strings / None dates.
+    """
+    empty_dates: tuple[str | None, str | None] = (None, None)
+    no_dir = (*empty_dates, "", "", "")
+    if not cpe_dir.is_dir():
+        return no_dir
+
+    date_from: str | None = None
+    date_to: str | None = None
+    hw_ver = ""
+    sw_ver = ""
+    wan = ""
+
+    raw_path = cpe_dir / "raw_telemetry_cache.json"
+    if raw_path.is_file():
+        try:
+            data = json.loads(raw_path.read_text(encoding="utf-8"))
+            summary = data.get("summary") or {}
+            otr = summary.get("overall_time_range") or {}
+            date_from = _iso_to_yyyy_mm_dd(otr.get("first"))
+            date_to = _iso_to_yyyy_mm_dd(otr.get("last"))
+            di = summary.get("device_info") or {}
+            hw_ver = _csv_cell_str(di.get("hw_version"))
+            sw_ver = _csv_cell_str(di.get("version"))
+            wan = _csv_cell_str(di.get("wan_type"))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug(f"[DownloadProjectCPEs] Bad telemetry cache {raw_path}: {e}")
+
+    fallback_path = cpe_dir / ".device_info_cache.json"
+    if fallback_path.is_file():
+        try:
+            fb = json.loads(fallback_path.read_text(encoding="utf-8"))
+            if not hw_ver:
+                hw_ver = _csv_cell_str(fb.get("hw_version"))
+            if not sw_ver:
+                sw_ver = _csv_cell_str(fb.get("version"))
+            if not wan:
+                wan = _csv_cell_str(fb.get("wan_type"))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug(f"[DownloadProjectCPEs] Bad device_info cache {fallback_path}: {e}")
+
+    return date_from, date_to, hw_ver, sw_ver, wan
+
+
 # ---------------------------------------------------------------------------
 # Script Download Endpoint
 # ---------------------------------------------------------------------------
@@ -246,6 +311,70 @@ def download_processing_script(project_id):
         
     except Exception as e:
         logger.error(f"[ScriptDownload] Error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@batch_jobs_bp.route("/<project_id>/batch-jobs/download-project-cpes", methods=["GET"])
+@jwt_required()
+def download_project_cpes_csv(project_id):
+    """
+    Download all CPE devices registered for this project as a CSV file.
+
+    Columns: serial, mac, date_from, date_to, hw_ver, sw_ver, WAN.
+    Dates use DB values first; if missing, telemetry cache under the CPE upload dir is used.
+    hw_ver, sw_ver, and WAN come from telemetry summary and/or .device_info_cache.json when present.
+    """
+    user_id = get_user_id()
+    project, err = _verify_project(project_id, user_id)
+    if err:
+        return err
+
+    try:
+        cpes = dbm.list_project_cpes(project_id)
+        base = Path(f"{UPLOAD_DIRECTORY}/{user_id}/{project_id}")
+        buf = StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["serial", "mac", "date_from", "date_to", "hw_ver", "sw_ver", "WAN"])
+        for c in cpes:
+            d_from = (c.date_from or "").strip() or None
+            d_to = (c.date_to or "").strip() or None
+            hw_ver = ""
+            sw_ver = ""
+            wan = ""
+            if base.exists():
+                td_from, td_to, hw_ver, sw_ver, wan = _cpe_disk_export_hints(base / (c.serial or ""))
+                if not d_from or not d_to:
+                    d_from = d_from or td_from
+                    d_to = d_to or td_to
+            d_from = d_from or ""
+            d_to = d_to or ""
+            writer.writerow(
+                [
+                    c.serial or "",
+                    c.mac or "",
+                    d_from,
+                    d_to,
+                    hw_ver,
+                    sw_ver,
+                    wan,
+                ]
+            )
+        payload = buf.getvalue().encode("utf-8")
+        safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in (project.name or "project"))[
+            :80
+        ]
+        download_name = f"{safe_name}_cpes.csv"
+
+        from flask import send_file
+
+        return send_file(
+            BytesIO(payload),
+            as_attachment=True,
+            download_name=download_name,
+            mimetype="text/csv; charset=utf-8",
+        )
+    except Exception as e:
+        logger.error(f"[DownloadProjectCPEs] Error: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

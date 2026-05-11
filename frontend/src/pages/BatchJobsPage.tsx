@@ -21,6 +21,7 @@ export default function BatchJobsPage() {
   const [cpeFolderPath, setCpeFolderPath] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadMode, setUploadMode] = useState<"folder" | "file">("folder");
+  const [isDownloadingProjectCpes, setIsDownloadingProjectCpes] = useState(false);
 
   // Fetch batch jobs
   const { data: jobsData, isLoading } = useQuery({
@@ -120,6 +121,30 @@ export default function BatchJobsPage() {
     reset();
   };
 
+  const handleDownloadProjectCpes = async () => {
+    if (!projectId || isDownloadingProjectCpes) return;
+    setIsDownloadingProjectCpes(true);
+    try {
+      const response = await batchJobsApi.downloadProjectCpesCsv(projectId);
+      const blob = new Blob([response.data], { type: "text/csv;charset=utf-8" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const filename =
+        (project?.name && `${project.name.replace(/[^\w.\-]+/g, "_")}_cpes.csv`) || "project_cpes.csv";
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to download project CPE list:", error);
+      alert("Failed to download CPE list. Please try again.");
+    } finally {
+      setIsDownloadingProjectCpes(false);
+    }
+  };
+
   const handleDownloadScript = async () => {
     try {
       const response = await batchJobsApi.downloadScript(projectId!);
@@ -194,21 +219,37 @@ export default function BatchJobsPage() {
             Process large batches of CPE logs asynchronously
           </p>
         </div>
-        <button
-          onClick={() => setShowCreateDialog(true)}
-          disabled={hasActiveJobs || isUploading}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          title={
-            hasActiveJobs 
-              ? "Cannot start new job while another job is running"
-              : isUploading 
-              ? "Upload in progress"
-              : "Create a new batch job"
-          }
-        >
-          <AddIcon style={{ fontSize: 20 }} />
-          New Batch Job
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleDownloadProjectCpes}
+            disabled={isDownloadingProjectCpes}
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-wait"
+            title="Download all CPEs registered for this project (CSV)"
+          >
+            {isDownloadingProjectCpes ? (
+              <CircularProgress size={20} className="text-foreground" />
+            ) : (
+              <DownloadIcon style={{ fontSize: 20 }} />
+            )}
+            Download project CPEs
+          </button>
+          <button
+            onClick={() => setShowCreateDialog(true)}
+            disabled={hasActiveJobs || isUploading}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title={
+              hasActiveJobs 
+                ? "Cannot start new job while another job is running"
+                : isUploading 
+                ? "Upload in progress"
+                : "Create a new batch job"
+            }
+          >
+            <AddIcon style={{ fontSize: 20 }} />
+            New Batch Job
+          </button>
+        </div>
       </div>
 
       {/* Create Dialog */}
