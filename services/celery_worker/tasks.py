@@ -31,6 +31,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from celery import Task
+from logai.utils.constants import SKIP_WALK_DIRECTORY_NAMES, is_os_junk_filename
 from .celery_app import celery
 
 # Configure logging
@@ -201,7 +202,10 @@ def extract_upload(self, job_id: str, user_id: int, project_id: str,
         file_hashes = {}  # hash -> filename mapping
         
         for root, dirs, files in os.walk(raw_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP_WALK_DIRECTORY_NAMES]
             for file in files:
+                if is_os_junk_filename(file):
+                    continue
                 src = Path(root) / file
                 dst = staging_dir / file
                 

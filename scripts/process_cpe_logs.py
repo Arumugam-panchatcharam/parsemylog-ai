@@ -28,8 +28,20 @@ import re
 import shutil
 import zipfile
 
-# Prune these from directory traversal (avoid picking outputs or macOS junk).
-_SKIP_WALK_DIRS = frozenset({"archive", "__MACOSX"})
+# Prune these from directory traversal (avoid outputs / OS metadata).
+# Keep in sync with logai.utils.constants.SKIP_WALK_DIRECTORY_NAMES (do not import logai here:
+# ``logai/__init__.py`` pulls heavy deps and breaks standalone ``python3 scripts/process_cpe_logs.py``).
+_SKIP_EXTRA_WALK_DIRS = frozenset({
+    "__MACOSX",
+    ".Trash",
+    "Network Trash Folder",
+    "Temporary Items",
+    "@eaDir",
+    "System Volume Information",
+    "$RECYCLE.BIN",
+    "RECYCLER",
+})
+_SKIP_WALK_DIRS = frozenset({"archive"}) | _SKIP_EXTRA_WALK_DIRS
 
 # CPE log bundle names, e.g. telekom-cz_DC08DAE34B1F_2026-03-19-18-16-13_CPELogs_...tgz
 _RE_CPE_TS_PREFIX = re.compile(

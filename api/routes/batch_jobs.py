@@ -26,7 +26,7 @@ from flask_jwt_extended import jwt_required
 from api.app import dbm
 from api.auth import get_user_id
 from services.celery_worker.celery_app import celery
-from logai.utils.constants import BASE_DIR
+from logai.utils.constants import BASE_DIR, is_os_junk_dirname, is_os_junk_filename
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +118,8 @@ _BATCH_UPLOAD_ROOT_MAX_DEPTH = 8
 
 
 def _is_noise_batch_path(name: str) -> bool:
-    """Skip macOS / archive metadata when detecting a single wrapper folder."""
-    return name == "__MACOSX" or name == ".DS_Store" or name.startswith("._")
+    """Skip OS/NAS archive noise when detecting a single wrapper folder."""
+    return is_os_junk_dirname(name) or is_os_junk_filename(name)
 
 
 def _resolve_batch_cleanup_root(extract_dir: Path) -> Path:

@@ -34,6 +34,7 @@ from logai.utils.constants import (
     MERGED_LOGS_DIR_NAME,
     MERGED_LOGS_ARCHIVE_NAME,
     TELEMETRY_PROFILES_DIR_NAME,
+    path_contains_skipped_dir,
 )
 from api.log_merger import LogMerger
 from typing import List
@@ -407,7 +408,12 @@ class FileManager:
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     tgz_names = [
                         n for n in zf.namelist()
-                        if n.endswith('.tgz') or n.endswith('.tar.gz') or n.endswith('.tar')
+                        if (
+                            n.endswith('.tgz')
+                            or n.endswith('.tar.gz')
+                            or n.endswith('.tar')
+                        )
+                        and not path_contains_skipped_dir(Path(n).parts)
                     ]
                     # Group by MAC
                     mac_dates: dict = {}  # MAC -> list of date strings
@@ -535,6 +541,9 @@ class FileManager:
                         moved = 0
                         for f in all_tar_files:
                             if not f.is_file():
+                                continue
+                            rel_parts = f.relative_to(temp_dir).parts
+                            if path_contains_skipped_dir(rel_parts):
                                 continue
                             # For fallback zips, only take tgz files containing this MAC
                             if is_fallback and serial not in f.name:

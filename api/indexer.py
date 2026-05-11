@@ -21,6 +21,8 @@ from logai.utils.constants import (
     NON_TEXT_EXTENSIONS,
     IGNORE_FILENAME_LIST,
     QDRANT_URL,
+    path_contains_skipped_dir,
+    is_os_junk_filename,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,11 @@ def _collect_text_files(project_dir: Path) -> list:
 
     for f in project_dir.rglob('*'):
         if not f.is_file():
+            continue
+        rel = f.relative_to(project_dir)
+        if path_contains_skipped_dir(rel.parts):
+            continue
+        if is_os_junk_filename(f.name):
             continue
         if any(f.name.endswith(ext) for ext in NON_TEXT_EXTENSIONS):
             continue

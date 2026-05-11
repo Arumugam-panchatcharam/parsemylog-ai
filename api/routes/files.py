@@ -45,6 +45,8 @@ from logai.utils.constants import (
     LINES_PER_PAGE,
     NON_TEXT_EXTENSIONS,
     QDRANT_URL,
+    path_contains_skipped_dir,
+    is_os_junk_filename,
 )
 
 logger = logging.getLogger(__name__)
@@ -300,20 +302,26 @@ def _process_regular_archives_background(flask_app, project_id, user_id, project
                     
                     # Move extracted files to project root
                     for item in extract_dir.rglob('*'):
-                        if item.is_file():
-                            # Try to preserve directory structure, but flatten if there are conflicts
-                            rel_path = item.relative_to(extract_dir)
-                            dest = project_dir / rel_path
-                            dest.parent.mkdir(parents=True, exist_ok=True)
-                            if not dest.exists():
-                                shutil.move(str(item), str(dest))
-                            else:
-                                # File exists, use unique name
-                                counter = 1
-                                while dest.exists():
-                                    dest = project_dir / f"{rel_path.stem}_{counter}{rel_path.suffix}"
-                                    counter += 1
-                                shutil.move(str(item), str(dest))
+                        if not item.is_file():
+                            continue
+                        if is_os_junk_filename(item.name):
+                            continue
+                        rel_parts = item.relative_to(extract_dir).parts
+                        if path_contains_skipped_dir(rel_parts):
+                            continue
+                        # Try to preserve directory structure, but flatten if there are conflicts
+                        rel_path = item.relative_to(extract_dir)
+                        dest = project_dir / rel_path
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        if not dest.exists():
+                            shutil.move(str(item), str(dest))
+                        else:
+                            # File exists, use unique name
+                            counter = 1
+                            while dest.exists():
+                                dest = project_dir / f"{rel_path.stem}_{counter}{rel_path.suffix}"
+                                counter += 1
+                            shutil.move(str(item), str(dest))
                     
                     # Clean up extraction directory
                     shutil.rmtree(extract_dir, ignore_errors=True)
