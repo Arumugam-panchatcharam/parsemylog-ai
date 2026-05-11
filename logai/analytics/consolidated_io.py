@@ -17,6 +17,44 @@ from .data_layout import DataLayoutManager
 logger = logging.getLogger(__name__)
 
 
+def _align_vertical_concat_dtypes(left: pl.DataFrame, right: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """
+    Match column dtypes between frames so ``pl.concat(..., how='vertical')`` succeeds.
+
+    Typical mismatch: existing Parquet has Float64 while new rows infer Int64 from Python ints
+    (e.g. ``peak_memory_usage_pct``).
+    """
+    out_l = left
+    out_r = right
+    for col in out_l.columns:
+        if col not in out_r.columns:
+            continue
+        lt = out_l.schema[col]
+        rt = out_r.schema[col]
+        if lt == rt:
+            continue
+        target: pl.DataType | None = None
+        try:
+            li = lt.is_integer()
+            lf = lt.is_float()
+            ri = rt.is_integer()
+            rf = rt.is_float()
+            if lf or rf:
+                target = pl.Float64
+            elif li and ri:
+                target = pl.Int64
+        except AttributeError:
+            ls, rs = str(lt), str(rt)
+            if "Float" in ls or "Float" in rs:
+                target = pl.Float64
+            elif ("Int" in ls or "UInt" in ls) and ("Int" in rs or "UInt" in rs):
+                target = pl.Int64
+        if target is not None:
+            out_l = out_l.with_columns(pl.col(col).cast(target))
+            out_r = out_r.with_columns(pl.col(col).cast(target))
+    return out_l, out_r
+
+
 def upsert_replace_device_serial(path: Path, new_df: pl.DataFrame, serial: str) -> None:
     """
     Replace rows for the given device_serial and append new_df; write atomically via temp file.
@@ -60,7 +98,8 @@ def upsert_replace_device_serial(path: Path, new_df: pl.DataFrame, serial: str) 
         if kept.height == 0:
             out = new_df
         elif set(kept.columns) == set(new_df.columns):
-            out = pl.concat([kept, new_df], how="vertical")
+            kept_a, new_a = _align_vertical_concat_dtypes(kept, new_df)
+            out = pl.concat([kept_a, new_a], how="vertical")
         else:
             out = pl.concat([kept, new_df], how="diagonal")
 

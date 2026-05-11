@@ -24,6 +24,16 @@ from logai.analytics.selfheal.insights import build_selfheal_insights_dataframe
 logger = logging.getLogger(__name__)
 
 
+def _to_float_metric(value: Any) -> float:
+    """Coerce summary metrics to float so Parquet/consolidated concat stays Float64 (not Int64)."""
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _cpe_identity_serial(device_info: Dict[str, Any], folder_serial: str) -> str:
     """
     Prefer device_info['serial'] when non-empty; otherwise the project folder name.
@@ -468,6 +478,8 @@ def _generate_device_health(
 
     summary = selfheal_data.get("summary", {})
 
+    mem_avail_avg = _to_float_metric(summary.get("mem_available_avg_pct", 0))
+
     health_data = [{
         "device_serial": device_serial,
         "model": device_info.get("model", ""),
@@ -476,14 +488,30 @@ def _generate_device_health(
         "sdk_version": device_info.get("sdk_version", ""),
         "wan_type": device_info.get("wan_type", ""),
         "last_reboot_reason": device_info.get("last_reboot_reason", ""),
-        "peak_memory_usage_pct": summary.get("peak_memory_usage_pct", 0),
-        "avg_memory_usage_pct": 100 - summary.get("mem_available_avg_pct", 0),
-        "peak_cpu_usage_pct": summary.get("peak_cpu_usage_pct", 0),
-        "avg_cpu_usage_pct": summary.get("avg_cpu_usage_pct", 0),
+        "peak_memory_usage_pct": _to_float_metric(summary.get("peak_memory_usage_pct", 0)),
+        "avg_memory_usage_pct": max(0.0, 100.0 - mem_avail_avg),
+        "peak_cpu_usage_pct": _to_float_metric(summary.get("peak_cpu_usage_pct", 0)),
+        "avg_cpu_usage_pct": _to_float_metric(summary.get("avg_cpu_usage_pct", 0)),
         "processing_date": processing_date
     }]
     
-    return pl.DataFrame(health_data)
+    return pl.DataFrame(
+        health_data,
+        schema={
+            "device_serial": pl.Utf8,
+            "model": pl.Utf8,
+            "manufacturer": pl.Utf8,
+            "firmware_version": pl.Utf8,
+            "sdk_version": pl.Utf8,
+            "wan_type": pl.Utf8,
+            "last_reboot_reason": pl.Utf8,
+            "peak_memory_usage_pct": pl.Float64,
+            "avg_memory_usage_pct": pl.Float64,
+            "peak_cpu_usage_pct": pl.Float64,
+            "avg_cpu_usage_pct": pl.Float64,
+            "processing_date": pl.Utf8,
+        },
+    )
 
 
 def _generate_signals_parquet(
