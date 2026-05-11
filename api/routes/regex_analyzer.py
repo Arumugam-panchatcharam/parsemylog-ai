@@ -18,6 +18,7 @@ Format::
 """
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 from flask import Blueprint, jsonify, request, Response, send_file
@@ -42,6 +43,12 @@ from api.auth import get_user_id
 from logai.utils.constants import UPLOAD_DIRECTORY
 from logai.info_extractor import find_and_extract_reboots
 from logai.timestamp_parser import parse_timestamp, normalize_to_date_only
+from logai.pattern_value_compare import (
+    extract_numeric_from_match,
+    parse_value_compare_config,
+    validate_regex_capture_group_count,
+    values_satisfy_compare,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -648,6 +655,19 @@ def _pattern_scan_trace_echo(pat: Dict[str, Any]) -> Dict[str, Any]:
     return extra
 
 
+def _aggregation_stat_for_vc_sort_only(
+    values: List[float], operator: str
+) -> Optional[float]:
+    """Summary stat for traces (omit for eq / neq existential semantics)."""
+    if not values:
+        return None
+    if operator in ("gt", "gte"):
+        return max(values)
+    if operator in ("lt", "lte"):
+        return min(values)
+    return None
+
+
 def _run_ripgrep_scan(
     project_dir: Path,
     patterns: List[Dict[str, Any]],
@@ -712,6 +732,13 @@ def _run_ripgrep_scan(
     for idx, pat in enumerate(patterns):
         regex = pat["regex"]
         name = pat["name"]
+
+        vc_norm, _vc_ignore = parse_value_compare_config(pat.get("value_compare"))
+        cre_vc: Optional[re.Pattern] = (
+            re.compile(regex, re.IGNORECASE) if vc_norm is not None else None
+        )
+        vc_line_digests: Set[bytes] = set()
+        vc_samples: List[float] = []
 
         pat_paths = paths_for_pattern(pat)
         path_args = [str(p) for p in pat_paths]
@@ -805,10 +832,28 @@ def _run_ripgrep_scan(
             if pat.get("reboot_proximity_minutes") and reboots and _is_near_reboot(ts, reboots, pat["reboot_proximity_minutes"]):
                 continue
 
+            text_plain = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+
             match_count += 1
 
+            if vc_norm is not None and cre_vc is not None:
+                mv = cre_vc.search(text_plain)
+                if mv is not None:
+                    digest_vc = hashlib.sha256(
+                        text_plain.encode("utf-8", errors="replace")
+                    ).digest()
+                    if digest_vc not in vc_line_digests:
+                        vc_line_digests.add(digest_vc)
+                        ev = extract_numeric_from_match(
+                            mv,
+                            int(vc_norm["capture_group"]),
+                            str(vc_norm["numeric_kind"]),
+                        )
+                        if ev is not None:
+                            vc_samples.append(ev)
+
             if len(times) < _MAX_POINTS_PER_PATTERN:
-                text = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+                text = text_plain
                 if len(text) > _MAX_TEXT_LEN:
                     text = text[:_MAX_TEXT_LEN] + "..."
                 times.append(ts_str)
@@ -817,12 +862,35 @@ def _run_ripgrep_scan(
         total_matches += match_count
 
         trace_echo = _pattern_scan_trace_echo(pat)
+
+        vc_extra: Dict[str, Any] = {}
+        if vc_norm is not None:
+            vc_passed = values_satisfy_compare(
+                vc_samples,
+                str(vc_norm["operator"]),
+                float(vc_norm["compare_to"]),
+                str(vc_norm["numeric_kind"]),
+            )
+            vc_extra["value_compare"] = {
+                "passed": vc_passed,
+                "operator": vc_norm["operator"],
+                "compare_to": vc_norm["compare_to"],
+                "capture_group": vc_norm["capture_group"],
+                "numeric_kind": vc_norm["numeric_kind"],
+                "regex_line_matches": match_count,
+                "values_extracted_unique_lines": len(vc_samples),
+                "aggregate_summary": _aggregation_stat_for_vc_sort_only(
+                    vc_samples, str(vc_norm["operator"])
+                ),
+            }
+
         if times:
             if len(times) > 500:
                 adaptive_bucket = _calculate_adaptive_bucket_minutes(times, target_points=300)
                 bucket_times, bucket_texts, bucket_counts = _bucket_matches(times, texts, adaptive_bucket)
                 traces.append({
                     **trace_echo,
+                    **vc_extra,
                     "name": name,
                     "times": bucket_times,
                     "texts": bucket_texts,
@@ -834,6 +902,7 @@ def _run_ripgrep_scan(
             else:
                 traces.append({
                     **trace_echo,
+                    **vc_extra,
                     "name": name,
                     "times": times,
                     "texts": texts,
@@ -981,6 +1050,10 @@ def regex_scan_validate_and_start_async(
     if not project_dir.exists():
         return jsonify({"error": "Project directory not found"}), 404
 
+    cpe_rows = dbm.list_project_cpes(project_id)
+    multi_workspace_no_cpe = len(cpe_rows) > 1 and not cpe_id
+    vc_any_requested = False
+
     for p in enabled_patterns:
         try:
             re.compile(p["regex"])
@@ -988,6 +1061,19 @@ def regex_scan_validate_and_start_async(
             return jsonify({
                 "error": f"Invalid regex for pattern '{p.get('name', '?')}': {e}"
             }), 400
+
+        vn, vc_err = parse_value_compare_config(p.get("value_compare"))
+        if vc_err:
+            return jsonify({
+                "error": f"Pattern '{p.get('name', '?')}': {vc_err}",
+            }), 400
+        if vn is not None:
+            gerr = validate_regex_capture_group_count(p["regex"], int(vn["capture_group"]))
+            if gerr:
+                return jsonify({
+                    "error": f"Pattern '{p.get('name', '?')}': {gerr}",
+                }), 400
+            vc_any_requested = True
 
         raw_sf = p.get("scan_filename")
         scan_fn = str(raw_sf).strip() if raw_sf else ""
@@ -1018,6 +1104,14 @@ def regex_scan_validate_and_start_async(
                 return jsonify({
                     "error": f"Pattern '{p.get('name', '?')}': scan_time_range requires both start and end",
                 }), 400
+
+    if vc_any_requested and multi_workspace_no_cpe:
+        return jsonify({
+            "error": (
+                "Patterns with numeric value_compare require selecting a single CPE, "
+                "or use Workspace → Pattern Overview to evaluate all CPEs."
+            ),
+        }), 400
 
     _cleanup_old_scan_results(project_dir)
 
@@ -1196,6 +1290,33 @@ def save_patterns(project_id):
                         "error": f"Pattern '{name}' in domain '{domain_name}': scan_time_range requires both start and end",
                     }), 400
 
+            raw_vc = p.get("value_compare")
+            value_compare_save: Optional[Dict[str, Any]] = None
+            if raw_vc not in (None, False):
+                vc_norm, vc_err = parse_value_compare_config(raw_vc)
+                if vc_err:
+                    return jsonify({
+                        "error": f"Pattern '{name}' in domain '{domain_name}': {vc_err}",
+                    }), 400
+                if vc_norm is not None:
+                    grp_err = validate_regex_capture_group_count(
+                        regex, int(vc_norm["capture_group"])
+                    )
+                    if grp_err:
+                        return jsonify({
+                            "error": f"Pattern '{name}' in domain '{domain_name}': {grp_err}",
+                        }), 400
+                    ct_out: Any = vc_norm["compare_to"]
+                    if vc_norm["numeric_kind"] == "int":
+                        ct_out = int(ct_out)
+                    value_compare_save = {
+                        "enabled": True,
+                        "operator": vc_norm["operator"],
+                        "compare_to": ct_out,
+                        "capture_group": int(vc_norm["capture_group"]),
+                        "numeric_kind": vc_norm["numeric_kind"],
+                    }
+
             entry: Dict[str, Any] = {
                 "name": name,
                 "regex": regex,
@@ -1214,6 +1335,8 @@ def save_patterns(project_id):
                 entry["scan_filename"] = scan_filename_val
             if scan_tr_val:
                 entry["scan_time_range"] = scan_tr_val
+            if value_compare_save:
+                entry["value_compare"] = value_compare_save
 
             validated.append(entry)
 

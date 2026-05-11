@@ -15,6 +15,8 @@ import type {
   NatcoInfo,
   MaintenanceWindow,
   RegexScanProgressPayload,
+  PatternValueCompare,
+  ValueCompareOperator,
 } from "@/api/endpoints";
 import { runPatternAnalyzerScan } from "@/lib/patternAnalyzerScanRunner";
 import { useProject } from "@/hooks/useProject";
@@ -73,6 +75,16 @@ interface ScanResult {
     counts?: number[];
     scan_time_range?: { start: string; end: string };
     scan_filename?: string | null;
+    value_compare?: {
+      passed: boolean;
+      operator: ValueCompareOperator;
+      compare_to: number;
+      capture_group: number;
+      numeric_kind: "int" | "float";
+      regex_line_matches: number;
+      values_extracted_unique_lines: number;
+      aggregate_summary: number | null;
+    };
   }>;
   reboots: PatternAnalyzerRebootRow[];
   total_matches: number;
@@ -98,6 +110,48 @@ const BUCKET_OPTIONS = [
 
 const NO_TOOLBAR = { displayModeBar: false } as const;
 
+const VALUE_COMPARE_OPERATORS: ReadonlyArray<{ value: ValueCompareOperator; label: string }> = [
+  { value: "gt", label: "> (gt)" },
+  { value: "gte", label: "≥ (gte)" },
+  { value: "lt", label: "< (lt)" },
+  { value: "lte", label: "≤ (lte)" },
+  { value: "eq", label: "= (eq)" },
+  { value: "neq", label: "≠ (neq)" },
+];
+
+function defaultPatternValueCompare(): PatternValueCompare {
+  return {
+    enabled: true,
+    operator: "gt",
+    compare_to: 0,
+    capture_group: 1,
+    numeric_kind: "int",
+  };
+}
+
+function coerceImportedValueCompare(raw: unknown): PatternValueCompare | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  if (!o.enabled) return undefined;
+  const op = String(o.operator || "gt").toLowerCase();
+  const allowed = new Set<ValueCompareOperator>(["gt", "gte", "lt", "lte", "eq", "neq"]);
+  const operator = (allowed.has(op as ValueCompareOperator) ? op : "gt") as ValueCompareOperator;
+  const compare_to = typeof o.compare_to === "number" && Number.isFinite(o.compare_to)
+    ? o.compare_to
+    : Number(o.compare_to);
+  if (!Number.isFinite(compare_to)) return undefined;
+  let capture_group = Number(o.capture_group ?? 1);
+  if (!Number.isFinite(capture_group) || capture_group < 1) capture_group = 1;
+  const nk = String(o.numeric_kind || "int").toLowerCase() === "float" ? "float" : "int";
+  return {
+    enabled: true,
+    operator,
+    compare_to,
+    capture_group: Math.floor(capture_group),
+    numeric_kind: nk,
+  };
+}
+
 /** Strip incomplete per-pattern scan scope before API calls (save/sync/submit). */
 function sanitizeDomainsForApi(domains: DomainPatterns): DomainPatterns {
   const out: DomainPatterns = {};
@@ -117,6 +171,25 @@ function sanitizePatternForApi(p: UserPattern): UserPattern {
   }
   if (!q.scan_filename?.trim()) delete q.scan_filename;
   else q.scan_filename = q.scan_filename.trim();
+  const vc = q.value_compare;
+  if (!vc?.enabled) {
+    delete q.value_compare;
+  } else {
+    const nk = vc.numeric_kind === "float" ? "float" : "int";
+    let cg = vc.capture_group != null ? Math.floor(Number(vc.capture_group)) : 1;
+    if (!Number.isFinite(cg) || cg < 1) cg = 1;
+    let ct = Number(vc.compare_to);
+    if (!Number.isFinite(ct)) ct = 0;
+    const allowed = new Set<ValueCompareOperator>(["gt", "gte", "lt", "lte", "eq", "neq"]);
+    const op = allowed.has(vc.operator) ? vc.operator : "gt";
+    q.value_compare = {
+      enabled: true,
+      operator: op,
+      compare_to: ct,
+      capture_group: cg,
+      numeric_kind: nk,
+    };
+  }
   return q;
 }
 
@@ -854,6 +927,35 @@ export default function PatternAnalyzerPage() {
     }));
   };
 
+  const updatePatternValueCompare = (domain: string, idx: number, vc: PatternValueCompare | null) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) => {
+        if (i !== idx) return p;
+        if (!vc) {
+          const { value_compare: _removed, ...rest } = p;
+          return rest;
+        }
+        return { ...p, value_compare: vc };
+      }),
+    }));
+  };
+
+  const patchPatternValueCompare = (
+    domain: string,
+    idx: number,
+    patch: Partial<PatternValueCompare>,
+  ) => {
+    setDomains((prev) => ({
+      ...prev,
+      [domain]: (prev[domain] || []).map((p, i) => {
+        if (i !== idx) return p;
+        const base = p.value_compare ?? defaultPatternValueCompare();
+        return { ...p, value_compare: { ...base, ...patch, enabled: true } };
+      }),
+    }));
+  };
+
   const [mwEditTarget, setMwEditTarget] = useState<string | null>(null);
   const mwKey = (domain: string, idx: number) => `${domain}::${idx}`;
 
@@ -903,6 +1005,8 @@ export default function PatternAnalyzerPage() {
                     pattern.min_frequency_threshold = ft;
                   }
                 }
+                const iv = coerceImportedValueCompare(p.value_compare);
+                if (iv) pattern.value_compare = iv;
                 return pattern;
               }).filter((p) => p.regex);
             }
@@ -951,6 +1055,8 @@ export default function PatternAnalyzerPage() {
                   pattern.min_frequency_threshold = ft;
                 }
               }
+              const iv = coerceImportedValueCompare(item.value_compare);
+              if (iv) pattern.value_compare = iv;
               return pattern;
             })
             .filter((p: UserPattern) => p.regex);
@@ -1519,10 +1625,11 @@ export default function PatternAnalyzerPage() {
                             const hasMW = !!(p.maintenance_window?.start && p.maintenance_window?.end);
                             const hasRP = !!(p.reboot_proximity_minutes && p.reboot_proximity_minutes > 0);
                             const hasFT = !!(p.min_frequency_threshold && p.min_frequency_threshold > 0);
+                            const hasVC = !!p.value_compare?.enabled;
                             const hasScanFile = !!(p.scan_filename?.trim());
                             const hasScanTime = !!(p.scan_time_range?.start?.trim() && p.scan_time_range?.end?.trim());
                             const hasScanScope = hasScanFile || hasScanTime;
-                            const hasFilters = hasMW || hasRP || hasFT || hasScanScope;
+                            const hasFilters = hasMW || hasRP || hasFT || hasScanScope || hasVC;
                             return (
                               <div key={idx} ref={scrollTarget?.domain === domain && scrollTarget?.idx === idx ? newPatternRef : undefined}>
                                 <div className="grid grid-cols-[32px_1fr_2fr_auto_32px] gap-2 items-center px-1 py-0.5 rounded hover:bg-muted/30">
@@ -1559,6 +1666,9 @@ export default function PatternAnalyzerPage() {
                                             hasMW ? `MW: ${p.maintenance_window!.start}–${p.maintenance_window!.end} UTC` : "",
                                             hasRP ? `Reboot: ±${p.reboot_proximity_minutes}min` : "",
                                             hasFT ? `Frequency: >${p.min_frequency_threshold}` : "",
+                                            hasVC && p.value_compare
+                                              ? `Numeric: ${p.value_compare.operator} ${p.value_compare.compare_to}`
+                                              : "",
                                             hasScanFile ? `Scan file: ${p.scan_filename}` : "",
                                             hasScanTime
                                               ? `UTC scan window: ${p.scan_time_range!.start}–${p.scan_time_range!.end}`
@@ -1579,6 +1689,15 @@ export default function PatternAnalyzerPage() {
                                       <span className="flex items-center gap-0.5">
                                         <span className="text-[9px]">&gt;</span>
                                         {p.min_frequency_threshold}
+                                      </span>
+                                    )}
+                                    {hasVC && p.value_compare && (
+                                      <span
+                                        className="text-[9px] font-mono text-violet-700 dark:text-violet-300"
+                                        title="Numeric threshold compare"
+                                      >
+                                        {p.value_compare.operator}
+                                        {String(p.value_compare.compare_to)}
                                       </span>
                                     )}
                                     {hasScanFile && (
@@ -1685,6 +1804,98 @@ export default function PatternAnalyzerPage() {
                                         >
                                           <CloseIcon style={{ fontSize: 13 }} />
                                         </button>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-col gap-2 px-2 py-1.5 rounded bg-violet-50 dark:bg-violet-950/25 border border-violet-200 dark:border-violet-800/50 text-[11px]">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <CompareArrowsIcon
+                                          style={{ fontSize: 13 }}
+                                          className="text-violet-600 dark:text-violet-400 shrink-0"
+                                        />
+                                        <label className="flex items-center gap-1.5 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={hasVC}
+                                            onChange={(e) => {
+                                              if (e.target.checked) {
+                                                updatePatternValueCompare(domain, idx, defaultPatternValueCompare());
+                                              } else {
+                                                updatePatternValueCompare(domain, idx, null);
+                                              }
+                                            }}
+                                            className="h-3 w-3 accent-violet-600"
+                                          />
+                                          <span className="text-muted-foreground whitespace-nowrap">Numeric threshold (capture group)</span>
+                                        </label>
+                                      </div>
+                                      {hasVC && p.value_compare && (
+                                        <div className="flex flex-wrap items-center gap-2 ml-6">
+                                          <select
+                                            value={p.value_compare.operator}
+                                            onChange={(e) =>
+                                              patchPatternValueCompare(domain, idx, {
+                                                operator: e.target.value as ValueCompareOperator,
+                                              })
+                                            }
+                                            className="text-xs px-1.5 py-0.5 rounded border border-border bg-background"
+                                          >
+                                            {VALUE_COMPARE_OPERATORS.map((opt) => (
+                                              <option key={opt.value} value={opt.value}>
+                                                {opt.label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <span className="text-muted-foreground">value</span>
+                                          <input
+                                            type="number"
+                                            step={p.value_compare.numeric_kind === "float" ? "any" : 1}
+                                            value={Number.isFinite(p.value_compare.compare_to) ? p.value_compare.compare_to : ""}
+                                            onChange={(e) => {
+                                              const v = Number(e.target.value);
+                                              patchPatternValueCompare(domain, idx, {
+                                                compare_to: Number.isFinite(v) ? v : 0,
+                                              });
+                                            }}
+                                            className="text-xs px-1.5 py-0.5 rounded border border-border bg-background w-[88px]"
+                                          />
+                                          <span className="text-muted-foreground">group</span>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            value={p.value_compare.capture_group ?? 1}
+                                            onChange={(e) => {
+                                              const g = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                                              patchPatternValueCompare(domain, idx, { capture_group: g });
+                                            }}
+                                            className="text-xs px-1.5 py-0.5 rounded border border-border bg-background w-[48px] text-center"
+                                          />
+                                          <select
+                                            value={p.value_compare.numeric_kind ?? "int"}
+                                            onChange={(e) =>
+                                              patchPatternValueCompare(domain, idx, {
+                                                numeric_kind: e.target.value === "float" ? "float" : "int",
+                                              })
+                                            }
+                                            className="text-xs px-1.5 py-0.5 rounded border border-border bg-background"
+                                          >
+                                            <option value="int">int</option>
+                                            <option value="float">float</option>
+                                          </select>
+                                          <button
+                                            type="button"
+                                            onClick={() => updatePatternValueCompare(domain, idx, null)}
+                                            className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-muted-foreground hover:text-red-600"
+                                            title="Remove numeric threshold"
+                                          >
+                                            <CloseIcon style={{ fontSize: 13 }} />
+                                          </button>
+                                        </div>
+                                      )}
+                                      {hasVC && (
+                                        <p className="text-[10px] text-muted-foreground ml-6 leading-snug">
+                                          Regex must include a capturing group (e.g. <code className="text-[10px]">Waninit_start=(\\d+)</code>).
+                                          Workspace Overview reports per‑CPE pass/fail (0/1).
+                                        </p>
                                       )}
                                     </div>
                                     <div className="flex flex-col gap-2 px-2 py-1.5 rounded bg-slate-50 dark:bg-slate-900/25 border border-slate-200 dark:border-slate-700/50 text-[11px]">
@@ -2314,6 +2525,35 @@ export default function PatternAnalyzerPage() {
                   <span className="text-muted-foreground/80"> (legacy scan — run again to stamp)</span>
                 ) : null}
               </p>
+              {scanResult.traces.some((t) => t.value_compare) && (
+                <ul className="mt-1 text-[10px] text-muted-foreground space-y-0.5 list-none pl-0">
+                  {scanResult.traces
+                    .filter((t) => t.value_compare)
+                    .map((t) => {
+                      const v = t.value_compare!;
+                      const agg =
+                        v.aggregate_summary != null
+                          ? `agg ${v.aggregate_summary}`
+                          : "no agg";
+                      return (
+                        <li key={t.name} className="font-mono">
+                          <span className="text-foreground">{t.name}</span>
+                          {": "}
+                          <span
+                            className={
+                              v.passed
+                                ? "text-emerald-700 dark:text-emerald-400"
+                                : "text-amber-800 dark:text-amber-400"
+                            }
+                          >
+                            {v.passed ? "pass" : "fail"}
+                          </span>
+                          {` (${v.operator} ${v.compare_to}, ${agg}, ${v.values_extracted_unique_lines} uniq)`}
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
             </div>
             <div className="flex items-center gap-3 text-[11px]">
               <span className="font-semibold">

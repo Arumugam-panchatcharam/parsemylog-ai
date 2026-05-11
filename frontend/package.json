@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ci:install": "npm ci --no-audit --no-fund --loglevel=error"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -21,6 +22,7 @@
     "axios": "^1.13.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
     "plotly.js-dist-min": "^3.3.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -52,5 +54,10 @@
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
     "vitest": "^4.1.5"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.0.0"
+    }
   }
 }

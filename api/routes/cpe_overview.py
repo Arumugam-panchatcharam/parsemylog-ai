@@ -32,6 +32,12 @@ from api.auth import get_user_id
 from api.reboot_bucketing import detect_short_reboots
 from logai.utils.constants import UPLOAD_DIRECTORY
 from logai.timestamp_parser import parse_timestamp
+from logai.pattern_value_compare import (
+    extract_numeric_from_match,
+    finalize_cpe_counts_for_value_compare_tasks,
+    parse_value_compare_config,
+    values_satisfy_compare,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -781,6 +787,34 @@ def _count_if_new_duplicate_line(
     counts_row[serial] = counts_row.get(serial, 0) + 1
 
 
+def _dedup_append_value_compare(
+    line_dedup: DefaultDict[Tuple[str, int, str], Set[bytes]],
+    value_compare_gather: Dict[str, Dict[str, List[float]]],
+    task_domain: str,
+    task_idx: int,
+    serial: str,
+    line_text: str,
+    m: re.Match[str],
+    vc_cfg: Dict[str, Any],
+) -> None:
+    """First-seen line per (task, CPE) adds one extracted numeric sample to *gather*."""
+    key = (task_domain, task_idx, serial)
+    digest = _pattern_line_digest(line_text)
+    bucket = line_dedup[key]
+    if digest in bucket:
+        return
+    bucket.add(digest)
+    val = extract_numeric_from_match(
+        m,
+        int(vc_cfg["capture_group"]),
+        str(vc_cfg["numeric_kind"]),
+    )
+    if val is None:
+        return
+    tkey = f"{task_domain}::{task_idx}"
+    value_compare_gather.setdefault(tkey, {}).setdefault(serial, []).append(float(val))
+
+
 def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
     """Count unique matching lines across all files (duplicate lines in user + messages, etc.)."""
     base_str = str(search_dir.resolve())
@@ -847,6 +881,197 @@ def _run_rg_count(rg_binary: str, regex: str, search_dir: Path) -> int:
             proc.kill()
 
     return len(seen)
+
+
+def _uniq_line_texts_via_rg(rg_binary: str, search_dir: Path, regex: str) -> List[str]:
+    """Return unique matching log bodies (duplicate lines collapsed) under *search_dir*."""
+    base_str = str(search_dir.resolve())
+    ordered_unique: List[str] = []
+    seen_digest: Set[bytes] = set()
+    cmd = [
+        rg_binary,
+        "--no-heading",
+        "--no-line-number",
+        "-i",
+        "--max-filesize",
+        "500M",
+        "-e",
+        regex,
+        base_str,
+    ]
+    deadline = time.monotonic() + _RG_TIMEOUT_SIMPLE
+    proc: Optional[subprocess.Popen[str]] = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            errors="replace",
+        )
+        assert proc.stdout is not None
+        wd_cancel = _spawn_rg_deadline_watchdog(proc, deadline, "rg uniq line texts")
+        try:
+            for raw_line in proc.stdout:
+                if time.monotonic() > deadline:
+                    logger.warning(
+                        "[CPEOverview] rg (uniq lines) timed out for regex: %s",
+                        regex[:80],
+                    )
+                    proc.kill()
+                    break
+                line = raw_line.rstrip("\n")
+                if not line.startswith(base_str):
+                    continue
+                rest = line[len(base_str) :].lstrip("/\\")
+                cpos = rest.find(":")
+                if cpos == -1:
+                    continue
+                line_text = rest[cpos + 1 :]
+                digest = _pattern_line_digest(line_text)
+                if digest in seen_digest:
+                    continue
+                seen_digest.add(digest)
+                ordered_unique.append(line_text)
+        finally:
+            wd_cancel.set()
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        logger.warning("[CPEOverview] rg (uniq lines) wait timed out for regex: %s", regex[:80])
+        if proc and proc.poll() is None:
+            proc.kill()
+    except Exception as e:
+        logger.warning("[CPEOverview] rg (uniq lines) error: %s", e)
+        if proc and proc.poll() is None:
+            proc.kill()
+
+    return ordered_unique
+
+
+def _single_cpe_value_compare_zero_or_one(
+    rg_binary: str,
+    search_dir: Path,
+    cpe_serial: str,
+    task: Dict[str, Any],
+    cpe_reboots: Dict[str, List[Dict[str, str]]],
+    cpe_reboot_windows: Dict[str, List[tuple]],
+    reboot_window_minutes: Optional[int],
+) -> int:
+    """Evaluate value_compare on one CPE tree; returns ``1`` iff threshold passes."""
+    vc_cfg = task.get("value_compare_cfg")
+    if vc_cfg is None:
+        return 0
+
+    try:
+        cre = re.compile(task["regex"], re.IGNORECASE)
+    except re.error:
+        return 0
+
+    mw = task.get("maintenance_window")
+    mwt: Optional[Tuple[dt_time, dt_time]] = None
+    if mw:
+        mwt = (
+            datetime.strptime(str(mw["start"]), "%H:%M").time(),
+            datetime.strptime(str(mw["end"]), "%H:%M").time(),
+        )
+    rp_delta: Optional[timedelta] = None
+    rp_min = task.get("reboot_proximity_minutes")
+    if rp_min is not None:
+        try:
+            rp_delta = timedelta(minutes=int(rp_min))
+        except (TypeError, ValueError):
+            rp_delta = None
+
+    uniq = _uniq_line_texts_via_rg(rg_binary, search_dir, task["regex"])
+    sample_digests: Set[bytes] = set()
+    samples: List[float] = []
+
+    for line_text in uniq:
+        mv = cre.search(line_text)
+        if mv is None:
+            continue
+
+        ts_match = _LOG_TS_RE.search(line_text)
+        ts_dt: Optional[datetime] = None
+        if ts_match:
+            try:
+                ts_dt = parse_timestamp(ts_match.group(1))
+                if not ts_dt:
+                    ts_dt = datetime.fromisoformat(ts_match.group(1))
+            except ValueError:
+                ts_dt = None
+
+        if ts_dt is None:
+            digest = _pattern_line_digest(line_text)
+            if digest in sample_digests:
+                continue
+            sample_digests.add(digest)
+            val = extract_numeric_from_match(
+                mv,
+                int(vc_cfg["capture_group"]),
+                str(vc_cfg["numeric_kind"]),
+            )
+            if val is not None:
+                samples.append(float(val))
+            continue
+
+        if mwt is not None:
+            mw_start, mw_end = mwt
+            match_time = ts_dt.time()
+            if mw_start <= mw_end:
+                if mw_start <= match_time <= mw_end:
+                    continue
+            else:
+                if match_time >= mw_start or match_time <= mw_end:
+                    continue
+
+        if rp_delta is not None and cpe_reboots:
+            skip_rp = False
+            for r in cpe_reboots.get(cpe_serial, []):
+                try:
+                    rt = parse_timestamp(r["timestamp"])
+                    if not rt:
+                        rt = datetime.fromisoformat(r["timestamp"])
+                except (ValueError, KeyError):
+                    continue
+                if abs(ts_dt - rt) <= rp_delta:
+                    skip_rp = True
+                    break
+            if skip_rp:
+                continue
+
+        if reboot_window_minutes and cpe_reboot_windows:
+            wins = cpe_reboot_windows.get(cpe_serial, [])
+            if wins:
+                if not _timestamp_in_windows(ts_dt, wins):
+                    continue
+            else:
+                continue
+
+        digest = _pattern_line_digest(line_text)
+        if digest in sample_digests:
+            continue
+        sample_digests.add(digest)
+        val = extract_numeric_from_match(
+            mv,
+            int(vc_cfg["capture_group"]),
+            str(vc_cfg["numeric_kind"]),
+        )
+        if val is not None:
+            samples.append(float(val))
+
+    if values_satisfy_compare(
+        samples,
+        str(vc_cfg["operator"]),
+        float(vc_cfg["compare_to"]),
+        str(vc_cfg["numeric_kind"]),
+    ):
+        return 1
+    return 0
 
 
 def _run_rg_count_all_cpes(
@@ -1109,6 +1334,7 @@ def _accumulate_cpe_overview_pattern_line(
     cpe_reboots: Dict[str, List[Dict[str, str]]],
     cpe_reboot_windows: Dict[str, List[tuple]],
     reboot_window_minutes: Optional[int],
+    value_compare_gather: Dict[str, Dict[str, List[float]]],
 ) -> None:
     """Apply one ripgrep output line to ``per_pattern_counts`` (multi-pattern scan)."""
     if not line.startswith(base_str):
@@ -1137,7 +1363,8 @@ def _accumulate_cpe_overview_pattern_line(
             ts_dt = None
 
     for task, cre, mwt, rp_delta in task_ctx:
-        if not cre.search(line_text):
+        m = cre.search(line_text)
+        if not m:
             continue
 
         uses_cap = _task_uses_filtered_rg_scan(task, reboot_window_minutes)
@@ -1148,8 +1375,68 @@ def _accumulate_cpe_overview_pattern_line(
                 continue
             raw_hits_per_task_file[cap_key] = n_raw + 1
 
-        key = f"{task['domain']}::{task['idx']}"
-        counts_row = per_pattern_counts[key]
+        vc_cfg = task.get("value_compare_cfg")
+
+        if vc_cfg is not None:
+            if ts_dt is None:
+                _dedup_append_value_compare(
+                    line_dedup,
+                    value_compare_gather,
+                    task["domain"],
+                    task["idx"],
+                    serial,
+                    line_text,
+                    m,
+                    vc_cfg,
+                )
+                continue
+
+            if mwt is not None:
+                mw_start, mw_end = mwt
+                match_time = ts_dt.time()
+                if mw_start <= mw_end:
+                    if mw_start <= match_time <= mw_end:
+                        continue
+                else:
+                    if match_time >= mw_start or match_time <= mw_end:
+                        continue
+
+            if rp_delta is not None and cpe_reboots:
+                skip_rp = False
+                for r in cpe_reboots.get(serial, []):
+                    try:
+                        rt = parse_timestamp(r["timestamp"])
+                        if not rt:
+                            rt = datetime.fromisoformat(r["timestamp"])
+                    except (ValueError, KeyError):
+                        continue
+                    if abs(ts_dt - rt) <= rp_delta:
+                        skip_rp = True
+                        break
+                if skip_rp:
+                    continue
+
+            if reboot_window_minutes and cpe_reboot_windows:
+                windows = cpe_reboot_windows.get(serial, [])
+                if windows:
+                    if not _timestamp_in_windows(ts_dt, windows):
+                        continue
+                else:
+                    continue
+
+            _dedup_append_value_compare(
+                line_dedup,
+                value_compare_gather,
+                task["domain"],
+                task["idx"],
+                serial,
+                line_text,
+                m,
+                vc_cfg,
+            )
+            continue
+
+        counts_row = per_pattern_counts[f"{task['domain']}::{task['idx']}"]
 
         if ts_dt is None:
             _count_if_new_duplicate_line(
@@ -1299,6 +1586,7 @@ def _run_multi_cpe_pattern_scan_per_regex_sequential(
 
     raw_hits_per_task_file: Dict[Tuple[str, int, str], int] = {}
     line_dedup: DefaultDict[Tuple[str, int, str], Set[bytes]] = defaultdict(set)
+    value_compare_gather: Dict[str, Dict[str, List[float]]] = {}
     base_str = str(base_dir)
 
     for regex in unique_patterns:
@@ -1354,6 +1642,7 @@ def _run_multi_cpe_pattern_scan_per_regex_sequential(
                         cpe_reboots,
                         cpe_reboot_windows,
                         reboot_window_minutes,
+                        value_compare_gather,
                     )
             finally:
                 wd_cancel.set()
@@ -1400,6 +1689,13 @@ def _run_multi_cpe_pattern_scan_per_regex_sequential(
                 regex,
                 f": {err_txt[:800]}" if err_txt else "",
             )
+
+    finalize_cpe_counts_for_value_compare_tasks(
+        per_pattern_counts,
+        all_tasks,
+        cpe_serials,
+        value_compare_gather,
+    )
 
     return per_pattern_counts
 
@@ -1479,6 +1775,7 @@ def _run_multi_cpe_pattern_scan_batched(
 
     raw_hits_per_task_file: Dict[Tuple[str, int, str], int] = {}
     line_dedup: DefaultDict[Tuple[str, int, str], Set[bytes]] = defaultdict(set)
+    value_compare_gather: Dict[str, Dict[str, List[float]]] = {}
     pat_file: Optional[str] = None
 
     all_tasks_filtered = all(
@@ -1575,6 +1872,7 @@ def _run_multi_cpe_pattern_scan_batched(
                     cpe_reboots,
                     cpe_reboot_windows,
                     reboot_window_minutes,
+                    value_compare_gather,
                 )
         finally:
             wd_cancel.set()
@@ -1617,6 +1915,12 @@ def _run_multi_cpe_pattern_scan_batched(
             pass
 
     if scan_timed_out:
+        finalize_cpe_counts_for_value_compare_tasks(
+            per_pattern_counts,
+            all_tasks,
+            cpe_serials,
+            value_compare_gather,
+        )
         return per_pattern_counts
 
     if proc is None or proc.returncode not in (0, 1):
@@ -1637,6 +1941,13 @@ def _run_multi_cpe_pattern_scan_batched(
             cpe_reboots,
             reboot_window_minutes,
         )
+
+    finalize_cpe_counts_for_value_compare_tasks(
+        per_pattern_counts,
+        all_tasks,
+        cpe_serials,
+        value_compare_gather,
+    )
 
     return per_pattern_counts
 
@@ -1666,6 +1977,12 @@ def get_pattern_scan_cache(project_id):
     )
 
 
+def _pattern_row_value_compare_enabled(pat: Dict[str, Any]) -> bool:
+    """Whether *pat* carries an active numeric threshold (overview column is 0/1 semantics)."""
+    norm, _ = parse_value_compare_config(pat.get("value_compare"))
+    return norm is not None
+
+
 def _apply_frequency_filter(
     domain_counts: Dict[str, Any],
     patterns: List[Dict[str, Any]],
@@ -1690,6 +2007,10 @@ def _apply_frequency_filter(
         filtered_counts = []
         for idx, count in enumerate(cpe_entry["counts"]):
             if idx < len(patterns):
+                if _pattern_row_value_compare_enabled(patterns[idx]):
+                    # value_compare counts are 0/1 pass/fail; min_frequency is nonsensical
+                    filtered_counts.append(count)
+                    continue
                 threshold = patterns[idx].get("min_frequency_threshold") or global_threshold or 0
                 # Keep CPE for this pattern only if count > threshold
                 filtered_counts.append(count if count > threshold else 0)
@@ -1823,6 +2144,9 @@ def run_pattern_scan(project_id):
         result_domains[domain_name] = {
             "patterns": [p["name"] for p in enabled],
             "pattern_regexes": [p["regex"] for p in enabled],
+            "pattern_value_compare": [
+                _pattern_row_value_compare_enabled(p) for p in enabled
+            ],
             "cpes": [],
         }
         for idx, pat in enumerate(enabled):
@@ -1835,6 +2159,9 @@ def run_pattern_scan(project_id):
                 task["maintenance_window"] = pat["maintenance_window"]
             if pat.get("reboot_proximity_minutes"):
                 task["reboot_proximity_minutes"] = pat["reboot_proximity_minutes"]
+            vc_norm, _ = parse_value_compare_config(pat.get("value_compare"))
+            if vc_norm is not None:
+                task["value_compare_cfg"] = vc_norm
             all_tasks.append(task)
 
     # Pre-load per-CPE reboots if any pattern uses reboot proximity or reboot window filter
@@ -1851,6 +2178,15 @@ def run_pattern_scan(project_id):
                 cpe_reboots[cpe_info["serial"]] = reboots
             except Exception:
                 cpe_reboots[cpe_info["serial"]] = []
+
+    cpe_reboot_windows_bc: Dict[str, List[tuple]] = {}
+    if reboot_window_minutes and cpe_reboots:
+        for cpe_info in cpe_dirs:
+            rb = cpe_reboots.get(cpe_info["serial"])
+            if rb:
+                wins = _get_reboot_time_windows(cpe_info["dir"], reboot_window_minutes)
+                if wins:
+                    cpe_reboot_windows_bc[cpe_info["serial"]] = wins
 
     if is_multi_cpe and len(cpe_dirs) > 1:
         # Batched rg over the project tree; optionally chunked to limit Python attribution cost.
@@ -1910,7 +2246,18 @@ def run_pattern_scan(project_id):
             counts = []
             for task in all_tasks:
                 if task["domain"] == domain_name:
-                    count = _run_rg_count(rg_binary, task["regex"], cpe_info["dir"])
+                    if task.get("value_compare_cfg") is not None:
+                        count = _single_cpe_value_compare_zero_or_one(
+                            rg_binary,
+                            cpe_info["dir"],
+                            cpe_info["serial"],
+                            task,
+                            cpe_reboots,
+                            cpe_reboot_windows_bc,
+                            reboot_window_minutes,
+                        )
+                    else:
+                        count = _run_rg_count(rg_binary, task["regex"], cpe_info["dir"])
                     counts.append(count)
             dom_data["cpes"] = [{"serial": cpe_info["serial"], "counts": counts}]
             

@@ -869,6 +869,18 @@ export interface MaintenanceWindow {
   end: string;   // HH:MM (UTC, 24h)
 }
 
+/** gt/gte use max of extracted values per CPE; lt/lte use min; eq/neq use “any line”. */
+export type ValueCompareOperator = "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
+
+export interface PatternValueCompare {
+  enabled: boolean;
+  operator: ValueCompareOperator;
+  compare_to: number;
+  /** 1-based capturing group in the pattern regex (default 1). */
+  capture_group?: number;
+  numeric_kind?: "int" | "float";
+}
+
 export interface UserPattern {
   name: string;
   regex: string;
@@ -880,6 +892,8 @@ export interface UserPattern {
   scan_filename?: string | null;
   /** Naive local start/end; optional per-pattern post-rg time filter */
   scan_time_range?: { start: string; end: string } | null;
+  /** Extract a number from regex capture group(s) and classify CPEs against a threshold. */
+  value_compare?: PatternValueCompare | null;
 }
 
 /** Domain-grouped patterns: { domain_name: UserPattern[] } */
@@ -917,6 +931,16 @@ export interface PatternAnalyzerScanResult {
     /** Echoed from pattern scan_time_range so charts clip without re-scanning. */
     scan_time_range?: { start: string; end: string };
     scan_filename?: string | null;
+    value_compare?: {
+      passed: boolean;
+      operator: ValueCompareOperator;
+      compare_to: number;
+      capture_group: number;
+      numeric_kind: "int" | "float";
+      regex_line_matches: number;
+      values_extracted_unique_lines: number;
+      aggregate_summary: number | null;
+    };
   }>;
   reboots: Array<{
     timestamp: string;
@@ -974,6 +998,8 @@ export interface PatternScanDomain {
   patterns: string[];
   /** Same length/order as `patterns`; absent on caches from older scans. */
   pattern_regexes?: string[];
+  /** True when counts are 0/1 pass‑fail from numeric value_compare (overview). */
+  pattern_value_compare?: boolean[];
   cpes: Array<{ serial: string; counts: number[] }>;
 }
 export interface PatternScanResult {

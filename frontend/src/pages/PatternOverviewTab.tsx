@@ -1,7 +1,15 @@
 import { useState, useMemo, Fragment } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { cpeOverviewApi, cpesApi } from "@/api/endpoints";
-import type { PatternScanResult, PatternScanDomain } from "@/api/endpoints";
+import {
+  cpeOverviewApi,
+  cpesApi,
+  patternAnalyzerApi,
+  type MaintenanceWindow,
+  type PatternScanResult,
+  type PatternScanDomain,
+  type PatternValueCompare,
+  type UserPattern,
+} from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { usePlotlyLayoutMerge } from "@/lib/plotlyTheme";
 import Plot from "react-plotly.js";
@@ -13,14 +21,67 @@ import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import FileDownloadIcon from "@mui/icons-material/FileDownload";
+import ExcelJS from "exceljs";
 
 /* ---------------------------------------------------------------- Types */
+
+const DISTRIBUTION_EXPORT_KEYS = [
+  "domain",
+  "pattern_name",
+  "pattern_regex",
+  "cpe_serial",
+  "frequency",
+  "numeric_threshold_pattern",
+  "numeric_compare",
+  "scan_log_filename",
+  "reboot_proximity_minutes",
+  "pattern_min_frequency_threshold",
+  "maintenance_window_utc",
+] as const;
+
+type DistributionExportRow = {
+  domain: string;
+  pattern_name: string;
+  pattern_regex: string;
+  cpe_serial: string;
+  frequency: number;
+  numeric_threshold_pattern: string;
+  numeric_compare: string;
+  scan_log_filename: string;
+  reboot_proximity_minutes: string | number;
+  pattern_min_frequency_threshold: string | number;
+  maintenance_window_utc: string;
+};
+
+function distributionHeaderLabel(key: string): string {
+  return key
+    .split("_")
+    .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : ""))
+    .join(" ");
+}
+
+/** Blend domain plot color toward white for readable row fills in Excel. */
+function domainRowFillArgb(cssHex: string, colorWeight = 0.32): string {
+  const hex = cssHex.replace("#", "").trim();
+  if (hex.length !== 6) return "FFF3F4F6";
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const mix = (c: number) => Math.round(255 * (1 - colorWeight) + c * colorWeight);
+  const rr = mix(r).toString(16).padStart(2, "0");
+  const gg = mix(g).toString(16).padStart(2, "0");
+  const bb = mix(b).toString(16).padStart(2, "0");
+  return `FF${rr}${gg}${bb}`.toUpperCase();
+}
 
 interface PatternRow {
   domain: string;
   name: string;
   /** Regex used for the scan; undefined if cache predates API support. */
   regex?: string;
+  /** True → overview counts are 0/1 pass-fail per CPE. */
+  valueComparePattern?: boolean;
   cpesAffected: number;
   pctAffected: number;
   totalMatches: number;
@@ -78,6 +139,29 @@ function severityBadge(pct: number): string {
   return "text-muted-foreground bg-muted";
 }
 
+/** Human-readable numeric rule for export (e.g. "<=200"). */
+function formatNumericCompareSummary(vc: PatternValueCompare | null | undefined): string {
+  if (!vc?.enabled) return "";
+  const opSyms: Record<PatternValueCompare["operator"], string> = {
+    lte: "<=",
+    lt: "<",
+    gte: ">=",
+    gt: ">",
+    eq: "=",
+    neq: "!=",
+  };
+  let s = `${opSyms[vc.operator] ?? vc.operator}${vc.compare_to}`;
+  if (vc.capture_group != null && vc.capture_group !== 1) {
+    s += ` (group ${vc.capture_group})`;
+  }
+  return s;
+}
+
+function formatMaintenanceWindowUtc(mw: MaintenanceWindow | null | undefined): string {
+  if (!mw?.start?.trim() || !mw?.end?.trim()) return "";
+  return `${mw.start}-${mw.end}_UTC`;
+}
+
 /* ---------------------------------------------------------------- Component */
 
 export default function PatternOverviewTab() {
@@ -90,7 +174,7 @@ export default function PatternOverviewTab() {
   const [expandedPattern, setExpandedPattern] = useState<string | null>(null);
   const [domainFilter, setDomainFilter] = useState<string>("all");
   const [rebootWindowMinutes, setRebootWindowMinutes] = useState<number>(60); // Default 1 hour
-  const [enableRebootFilter, setEnableRebootFilter] = useState<boolean>(true);
+  const [enableRebootFilter, setEnableRebootFilter] = useState<boolean>(false);
   const [filterShortReboots, setFilterShortReboots] = useState(true);
   const [minFrequencyThreshold, setMinFrequencyThreshold] = useState<number>(1);
   const [enableFrequencyFilter, setEnableFrequencyFilter] = useState<boolean>(false);
@@ -101,6 +185,24 @@ export default function PatternOverviewTab() {
     queryFn: async () => (await cpesApi.list(projectId!)).data,
     enabled: !!projectId,
   });
+
+  const { data: patternDomains } = useQuery({
+    queryKey: ["regex-patterns", projectId],
+    queryFn: async () => (await patternAnalyzerApi.getPatterns(projectId!)).data.domains,
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+
+  const patternDefByDomainName = useMemo(() => {
+    const map = new Map<string, UserPattern>();
+    if (!patternDomains) return map;
+    for (const [domain, plist] of Object.entries(patternDomains)) {
+      for (const p of plist) {
+        map.set(`${domain}\0${p.name}`, p);
+      }
+    }
+    return map;
+  }, [patternDomains]);
 
   const {
     data: scanData,
@@ -148,6 +250,7 @@ export default function PatternOverviewTab() {
       names.push(domain);
       const dd = domData as PatternScanDomain;
       dd.patterns.forEach((patName, pIdx) => {
+        const isVc = dd.pattern_value_compare?.[pIdx] === true;
         let affected = 0;
         let total = 0;
         const perCpe: { serial: string; count: number }[] = [];
@@ -163,6 +266,7 @@ export default function PatternOverviewTab() {
           domain,
           name: patName,
           regex: dd.pattern_regexes?.[pIdx],
+          valueComparePattern: isVc,
           cpesAffected: affected,
           pctAffected: totalCpes > 0 ? Math.round((affected / totalCpes) * 100) : 0,
           totalMatches: total,
@@ -197,6 +301,151 @@ export default function PatternOverviewTab() {
     }
   };
 
+  const downloadDistributionExcel = () => {
+    if (!projectId || filteredRows.length === 0) return;
+
+    const lookupPattern = (domain: string, name: string): UserPattern | undefined =>
+      patternDefByDomainName.get(`${domain}\0${name}`);
+
+    const data: DistributionExportRow[] = filteredRows.flatMap((row) =>
+      row.perCpeCounts.map(({ serial, count }) => {
+        const pat = lookupPattern(row.domain, row.name);
+        const mw = formatMaintenanceWindowUtc(pat?.maintenance_window ?? undefined);
+        const rp = pat?.reboot_proximity_minutes;
+        const rpCell = rp != null && Number.isFinite(rp) ? rp : "";
+        const pmin = pat?.min_frequency_threshold;
+        const minCell = pmin != null && Number.isFinite(pmin) ? pmin : "";
+        const scanFn = (pat?.scan_filename ?? "").trim();
+        const numCompare =
+          row.valueComparePattern || pat?.value_compare?.enabled
+            ? formatNumericCompareSummary(pat?.value_compare ?? undefined)
+            : "";
+
+        const out: DistributionExportRow = {
+          domain: row.domain,
+          pattern_name: row.name,
+          pattern_regex: row.regex ?? "",
+          cpe_serial: serial,
+          frequency: count,
+          numeric_threshold_pattern: row.valueComparePattern ? "yes" : "no",
+          numeric_compare: numCompare,
+          scan_log_filename: scanFn,
+          reboot_proximity_minutes: rpCell,
+          pattern_min_frequency_threshold: minCell,
+          maintenance_window_utc: mw,
+        };
+
+        return out;
+      }),
+    );
+
+    void (async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("Pattern distribution", {
+        views: [
+          {
+            state: "frozen",
+            xSplit: 0,
+            ySplit: 1,
+            topLeftCell: "A2",
+            activeCell: "A2",
+          },
+        ],
+      });
+
+      const headerLabels = DISTRIBUTION_EXPORT_KEYS.map((k) => distributionHeaderLabel(k));
+      sheet.addRow(headerLabels);
+
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: "FF0F172A" } };
+      headerRow.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFB8D4F5" },
+      };
+      headerRow.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      headerRow.height = 20;
+      const gridBorderColor = { argb: "FFCBD5E1" };
+      headerRow.eachCell((cell, colNum) => {
+        if (colNum <= DISTRIBUTION_EXPORT_KEYS.length) {
+          cell.border = {
+            top: { style: "thin", color: gridBorderColor },
+            left: { style: "thin", color: gridBorderColor },
+            bottom: { style: "medium", color: { argb: "FF64748B" } },
+            right: { style: "thin", color: gridBorderColor },
+          };
+        }
+      });
+
+      const uniqueDomains = [...new Set(data.map((r) => r.domain))];
+      const domainArgb = new Map<string, string>();
+      uniqueDomains.forEach((d, i) => {
+        const hex = DOMAIN_COLORS[i % DOMAIN_COLORS.length];
+        domainArgb.set(d, domainRowFillArgb(hex));
+      });
+
+      for (const rec of data) {
+        sheet.addRow(DISTRIBUTION_EXPORT_KEYS.map((k) => rec[k]));
+        const rnum = sheet.lastRow!.number;
+        const dataRow = sheet.getRow(rnum);
+        dataRow.alignment = { vertical: "top", horizontal: "left", wrapText: true };
+        const fillArgb = domainArgb.get(rec.domain) ?? "FFF8FAFC";
+        dataRow.eachCell((cell, colNum) => {
+          if (colNum <= DISTRIBUTION_EXPORT_KEYS.length) {
+            cell.fill = {
+              type: "pattern",
+              pattern: "solid",
+              fgColor: { argb: fillArgb },
+            };
+            cell.border = {
+              top: { style: "thin", color: gridBorderColor },
+              left: { style: "thin", color: gridBorderColor },
+              bottom: { style: "thin", color: gridBorderColor },
+              right: { style: "thin", color: gridBorderColor },
+            };
+          }
+        });
+      }
+
+      const numCols = DISTRIBUTION_EXPORT_KEYS.length;
+      for (let col = 1; col <= numCols; col++) {
+        let maxLen = headerLabels[col - 1]?.length ?? 10;
+        for (let rw = 1; rw <= sheet.rowCount; rw++) {
+          const cell = sheet.getCell(rw, col);
+          const t =
+            typeof cell.text === "string" && cell.text.length > 0
+              ? cell.text
+              : cell.value == null
+                ? ""
+                : String(cell.value);
+          maxLen = Math.max(maxLen, t.length);
+        }
+        sheet.getColumn(col).width = Math.min(Math.max(maxLen + 3, 11), 80);
+      }
+
+      try {
+        const buf = await workbook.xlsx.writeBuffer();
+        const stamp = new Date().toISOString().replace(/[:]/g, "-").slice(0, 19);
+        const fname = `pattern-distribution_${projectId}_${stamp}.xlsx`;
+        const blob = new Blob([buf], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fname;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (err: unknown) {
+        // eslint-disable-next-line no-console -- export failure needs a visible breadcrumb for support
+        console.error("Pattern distribution Excel export failed", err);
+      }
+    })();
+  };
+
   const SortIcon = ({ col }: { col: SortKey }) => {
     if (sortKey !== col) return null;
     return sortDir === "asc"
@@ -223,7 +472,10 @@ export default function PatternOverviewTab() {
         const regexSuffix = trimmed
           ? `<br>Regex: ${escapeHtmlForPlotlyHover(trimmed)}`
           : "";
-        return [r.cpesAffected, totalCpes, r.totalMatches, r.domain, regexSuffix] as const;
+        const vcSuffix = r.valueComparePattern
+          ? "<br><i>Numeric threshold: Matches = CPE count passing comparison</i>"
+          : "";
+        return [r.cpesAffected, totalCpes, r.totalMatches, r.domain, regexSuffix, vcSuffix] as const;
       }),
     };
   }, [filteredRows, domainNames, totalCpes]);
@@ -486,7 +738,7 @@ export default function PatternOverviewTab() {
                     "<b>%{y}</b> (%{customdata[3]})<br>" +
                     "CPEs affected: %{customdata[0]} / %{customdata[1]}<br>" +
                     "Spread: %{x}<br>" +
-                    "Total matches: %{customdata[2]}%{customdata[4]}<extra></extra>",
+                    "Total matches: %{customdata[2]}%{customdata[5]}%{customdata[4]}<extra></extra>",
                   text: chartData.x.map((v) => `${v}%`),
                   textposition: "outside",
                   textfont: { size: 9 },
@@ -521,10 +773,23 @@ export default function PatternOverviewTab() {
       {/* Detail table */}
       <div className="flex justify-center">
         <div className="bg-card border border-border rounded-xl overflow-hidden inline-block">
-        <div className="px-3 py-1 border-b border-border bg-muted/30">
+        <div className="px-3 py-1 border-b border-border bg-muted/30 flex items-center justify-between gap-2">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Pattern Distribution Detail
           </h3>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadDistributionExcel();
+            }}
+            disabled={filteredRows.length === 0}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border border-border bg-background hover:bg-muted/80 disabled:opacity-45 disabled:pointer-events-none text-foreground shrink-0"
+            title="Download table as Excel (.xlsx): all CPE rows for visible patterns"
+          >
+            <FileDownloadIcon style={{ fontSize: 14 }} />
+            Excel
+          </button>
         </div>
 
         <div className="overflow-x-auto">
@@ -562,10 +827,14 @@ export default function PatternOverviewTab() {
                   className="text-right px-2 py-1 font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap"
                   onClick={() => handleSort("totalMatches")}
                   title={
-                    enableFrequencyFilter && enableRebootFilter ? "Total matches after applying frequency and reboot filters" :
-                    enableFrequencyFilter ? "Total matches after applying frequency filter" :
-                    enableRebootFilter ? "Total matches after applying reboot timeline filter" :
-                    "Total matches across all CPEs"
+                    "For numeric-threshold patterns, totals sum 0/1 pass flags per CPE. " +
+                    (enableFrequencyFilter && enableRebootFilter
+                      ? "Otherwise: total matches after frequency and reboot filters."
+                      : enableFrequencyFilter
+                        ? "Otherwise: total matches after frequency filter."
+                        : enableRebootFilter
+                          ? "Otherwise: total matches after reboot timeline filter."
+                          : "Otherwise: total matches across all CPEs.")
                   }
                 >
                   Matches <SortIcon col="totalMatches" />
@@ -603,8 +872,18 @@ export default function PatternOverviewTab() {
                         </span>
                       </td>
                       <td className="px-2 py-1 font-medium text-foreground">
-                        <div className="truncate" title={row.name}>
-                          {row.name}
+                        <div className="flex items-center gap-1 min-w-0">
+                          {row.valueComparePattern && (
+                            <span
+                              className="shrink-0 text-[9px] font-bold px-1 py-px rounded bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200"
+                              title="Numeric threshold: cell counts are 0 or 1 per CPE"
+                            >
+                              #
+                            </span>
+                          )}
+                          <div className="truncate" title={row.name}>
+                            {row.name}
+                          </div>
                         </div>
                       </td>
                       <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap align-top">
@@ -642,10 +921,19 @@ export default function PatternOverviewTab() {
                           <div className="bg-muted/30 rounded-lg p-2 max-h-[240px] overflow-y-auto">
                             <div className="flex items-center justify-between mb-2">
                               <p className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide">
-                                Per-CPE Breakdown
+                                {row.valueComparePattern ? "CPE pass list (numeric)" : "Per-CPE Breakdown"}
                               </p>
                               <div className="text-[9px] text-muted-foreground bg-background px-2 py-0.5 rounded border">
-                                {row.perCpeCounts.filter((c) => c.count > 0).length} CPEs • {row.totalMatches.toLocaleString()} total matches
+                                {row.valueComparePattern ? (
+                                  <>
+                                    {row.totalMatches.toLocaleString()} CPEs passed • cap 1/CPE
+                                  </>
+                                ) : (
+                                  <>
+                                    {row.perCpeCounts.filter((c) => c.count > 0).length} CPEs • {row.totalMatches.toLocaleString()}{" "}
+                                    total matches
+                                  </>
+                                )}
                               </div>
                             </div>
                             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1">

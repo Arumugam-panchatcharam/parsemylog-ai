@@ -17,10 +17,38 @@ The Pattern Analyzer provides high-speed regex pattern management and scanning u
 - **Pattern Submission** - Submit local changes for admin review
 - **Import/Export** - Multiple format support (JSON, YAML, rule_parser_config)
 - **Per-CPE Support** - Scan individual or all CPEs (workspace router context)
+- **Numeric value threshold** - Optional `value_compare`: capture a number from each matching line (regex capture group), compare to a threshold, and summarize pass/fail per CPE (`0`/`1`) in Workspace Pattern Overview; over-time scans require a selected CPE when multiple CPEs exist.
 
 ## How It Works
 
-### Pattern Storage
+### Numeric `value_compare` (project YAML)
+
+Stored on each pattern in `project_patterns.yaml` (global NATCO library rows omit this field in v1):
+
+```yaml
+- name: High Waninit_start
+  regex: 'Waninit_start=(\\d+)'
+  enabled: true
+  scan_filename: BootTime.log
+  value_compare:
+    enabled: true
+    operator: gt     # gt | gte | lt | lte | eq | neq
+    compare_to: 500
+    capture_group: 1   # optional, default 1 (Python regex group index)
+    numeric_kind: int  # int | float
+```
+
+**Aggregation when a CPE has multiple matching lines (after line de-duplication, same as other overview scans):**
+
+| Operator | Per-CPE statistic compared to `compare_to` |
+|----------|-------------------------------------------|
+| `gt`, `gte` | `max` of extracted values |
+| `lt`, `lte` | `min` of extracted values |
+| `eq`, `neq` | **Any** line’s value satisfies the comparison |
+
+Overview table **Matches** columns for these patterns sum `0`/`1` counts (number of CPEs that passed).
+
+**Ripgrep Chart scan:** POST `/regex-scan` rejects an all-CPE-root request when multiple CPE directories exist **and** any pattern has numeric `value_compare`; pick one CPE in the workspace selector **or** use Pattern Overview scan for cross-CPE results.
 
 **User Patterns:** `user_uploads/user_{id}/project_{id}/user_patterns.yaml`
 
