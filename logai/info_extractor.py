@@ -812,11 +812,11 @@ def find_and_build_fallback_device_info(
     """
     cache_path = project_dir / _DEVICE_INFO_CACHE_FILE
     source_files = [
+        project_dir / "version.txt",
+        project_dir / "merged_logs" / "version.txt",
         project_dir / "PARODUSlog.txt",
         project_dir / "parodusStart-log.txt",
         project_dir / "telemetry_marker.txt",
-        project_dir / "version.txt",
-        project_dir / "merged_logs" / "version.txt",
     ]
 
     if not force and _cache_is_fresh(cache_path, source_files):
@@ -920,6 +920,48 @@ def find_and_build_fallback_device_info(
 
     _write_json_cache(cache_path, device_info)
     return device_info
+
+
+def refresh_cpe_disk_caches(cpe_dir: Path, *, force: bool = False) -> Dict[str, str]:
+    """
+    Refresh per-CPE JSON caches after merged logs exist under *cpe_dir*.
+
+    Writes ``.version_cache.json`` (via :func:`find_and_parse_version_txt`) and
+    ``.device_info_cache.json`` (via :func:`find_and_build_fallback_device_info`).
+    Call this when log merge has finished so ``version.txt`` / PARODUS / marker
+    inputs are on disk under *cpe_dir*.
+
+    Used by the API merge pipeline (``merge_cpe_logs``, legacy ``merged_logs`` output)
+    and by Celery batch processing after staging merge.
+
+    Returns:
+        Device info dict from the fallback builder (possibly empty).
+    """
+    cpe_dir = Path(cpe_dir)
+    result: Dict[str, str] = {}
+    if not cpe_dir.is_dir():
+        logger.debug(
+            "[InfoExtractor] Skip disk cache refresh (not a directory): %s",
+            cpe_dir,
+        )
+        return result
+    try:
+        find_and_parse_version_txt(cpe_dir, force=force)
+    except Exception as exc:
+        logger.warning(
+            "[InfoExtractor] version cache refresh failed for %s: %s",
+            cpe_dir,
+            exc,
+        )
+    try:
+        result = find_and_build_fallback_device_info(cpe_dir, force=force)
+    except Exception as exc:
+        logger.warning(
+            "[InfoExtractor] device_info cache refresh failed for %s: %s",
+            cpe_dir,
+            exc,
+        )
+    return result or {}
 
 
 def extract_device_info_from_paths(
@@ -1439,7 +1481,7 @@ def parse_consolelog_for_soft_reboots_from_path(console_path: Path) -> List[str]
 # ---------------------------------------------------------------------------
 
 # Cache version - increment when reboot parsing logic changes
-REBOOTS_CACHE_VERSION = 8
+REBOOTS_CACHE_VERSION = 9
 
 
 def _coerce_prev_uptime_seconds(raw: Any) -> Optional[int]:
@@ -1481,6 +1523,114 @@ def _timestamp_delta_seconds(a: datetime, b: datetime) -> float:
     a_naive = a.replace(tzinfo=None) if a.tzinfo else a
     b_naive = b.replace(tzinfo=None) if b.tzinfo else b
     return abs((a_naive - b_naive).total_seconds())
+
+
+def _normalize_reboot_reason(reason: Optional[str]) -> str:
+    """Single bucket for unknown-like values; preserves other device strings."""
+    if reason is None:
+        return "unknown"
+    s = str(reason).strip()
+    if not s:
+        return "unknown"
+    if s.lower() == "unknown":
+        return "unknown"
+    return s
+
+
+# TR-181 keys observed in T2 ``fields`` maps for last reboot reason
+_LAST_REBOOT_REASON_FIELD_KEYS = (
+    "Device.DeviceInfo.X_RDKCENTRAL-COM_LastRebootReason",
+    "Device.DeviceInfo.X_RDKCENTRAL COM_LastRebootReason",
+    "last_reboot_reason_split",
+)
+
+
+def _reason_string_from_telemetry_fields(fields: Dict[str, Any]) -> str:
+    if not fields:
+        return ""
+    for key in _LAST_REBOOT_REASON_FIELD_KEYS:
+        raw = fields.get(key)
+        if raw is None:
+            continue
+        part = str(raw).strip().split(";")[0].strip()
+        if part:
+            return part
+    return ""
+
+
+def _telemetry_reason_for_reboot_timestamp(
+    reports: List[Dict[str, Any]],
+    reboot_dt: datetime,
+    *,
+    max_delta_sec: float,
+) -> str:
+    """
+    Best LastRebootReason from telemetry reports near *reboot_dt*.
+
+    Prefers the smallest |Δt| among reports that carry a non-unknown reason;
+    if only unknown-like samples exist, still returns the closest sample's
+    string so normalization can collapse it to ``unknown``.
+    """
+    if not reports:
+        return ""
+
+    scored: List[tuple[float, int, str]] = []
+
+    for r in reports:
+        if not r.get("parse_ok"):
+            continue
+        t_raw = r.get("time")
+        if t_raw is None:
+            continue
+        rt = parse_timestamp(t_raw)
+        if rt is None:
+            rt = _event_datetime(t_raw)
+        if rt is None:
+            continue
+        delta = _timestamp_delta_seconds(reboot_dt, rt)
+        if delta > max_delta_sec:
+            continue
+        reason_raw = _reason_string_from_telemetry_fields(r.get("fields") or {})
+        if not reason_raw:
+            continue
+        non_unknown = 1 if _normalize_reboot_reason(reason_raw) != "unknown" else 0
+        scored.append((delta, non_unknown, reason_raw))
+
+    if not scored:
+        return ""
+    scored.sort(key=lambda t: (-t[1], t[0]))
+    return scored[0][2].strip()
+
+
+def _apply_telemetry_preferred_reboot_reasons(
+    reboots: List[Dict[str, Any]],
+    project_dir: Path,
+) -> None:
+    """Prefer TR-181 LastRebootReason when raw telemetry matches reboot time."""
+    try:
+        from logai.telemetry_parser import load_raw_telemetry_reports
+    except ImportError:
+        return
+
+    reports = load_raw_telemetry_reports(project_dir)
+    if not reports:
+        return
+
+    max_delta = float(timedelta(hours=48).total_seconds())
+    for row in reboots:
+        r_dt = _event_datetime(row.get("timestamp"))
+        if r_dt is None:
+            continue
+        tr = _telemetry_reason_for_reboot_timestamp(
+            reports, r_dt, max_delta_sec=max_delta
+        )
+        if tr:
+            tr_norm = _normalize_reboot_reason(tr)
+            base_norm = _normalize_reboot_reason(row.get("reason"))
+            if tr_norm != "unknown":
+                row["reason"] = tr
+            elif base_norm == "unknown":
+                row["reason"] = tr
 
 
 def _enrich_reboots_uptime_from_telemetry_cache(
@@ -1563,9 +1713,14 @@ def _supplement_reboots_from_telemetry_if_incomplete(
     Uses same 48-hour window as enrichment to avoid duplicates.
     """
     try:
-        from logai.telemetry_parser import load_telemetry_cache
+        from logai.telemetry_parser import (
+            load_raw_telemetry_reports,
+            load_telemetry_cache,
+        )
     except ImportError:
         return
+
+    reports_opt = load_raw_telemetry_reports(project_dir)
 
     cached = load_telemetry_cache(project_dir)
     if not cached:
@@ -1605,9 +1760,17 @@ def _supplement_reboots_from_telemetry_if_incomplete(
         pu = _coerce_prev_uptime_seconds(ev.get("prev_uptime"))
         ts_str = ev.get("time") or ev.get("timestamp")
         if ts_str:
+            tr_reason = ""
+            if reports_opt:
+                tr_reason = _telemetry_reason_for_reboot_timestamp(
+                    reports_opt,
+                    ev_dt,
+                    max_delta_sec=tol_sec,
+                )
+            reason_val = _normalize_reboot_reason(tr_reason if tr_reason else "unknown")
             new_reboot: Dict[str, Any] = {
                 "timestamp": ts_str,
-                "reason": "unknown",  # Telemetry-only reboots don't have logged reason
+                "reason": reason_val,
                 "uptime_before_reboot_sec": pu,
                 "reboot_type": "hard",
                 "is_short_reboot": False,
@@ -1616,7 +1779,7 @@ def _supplement_reboots_from_telemetry_if_incomplete(
             reboots.append(new_reboot)
             logger.info(
                 f"[InfoExtractor] Supplemented reboot from telemetry: {ts_str} "
-                f"(uptime={pu}s, reason=unknown, source=telemetry)"
+                f"(uptime={pu}s, reason={reason_val}, source=telemetry)"
             )
 
 
@@ -1685,9 +1848,13 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
     p_path = project_dir / "PARODUSlog.txt"
     p_start_path = project_dir / "parodusStart-log.txt"
     console_path = project_dir / "Consolelog.txt"
+    raw_telemetry_path = project_dir / "raw_telemetry_cache.json"
 
     # --- Check cache ---
-    if _reboots_cache_is_fresh(cache_path, [bt_path, p_path, p_start_path, console_path]):
+    if _reboots_cache_is_fresh(
+        cache_path,
+        [bt_path, p_path, p_start_path, console_path, raw_telemetry_path],
+    ):
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             # Handle both old format (array) and new format (object with version)
@@ -1772,6 +1939,7 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
             logger.warning(f"[InfoExtractor] Error parsing {p_start_path}: {e}")
 
     reboots = _cluster_reboot_events_by_proximity(reboots)
+    _apply_telemetry_preferred_reboot_reasons(reboots, project_dir)
     _enrich_reboots_uptime_from_telemetry_cache(reboots, project_dir)
     _supplement_reboots_from_telemetry_if_incomplete(reboots, project_dir)
 
@@ -1818,6 +1986,9 @@ def find_and_extract_reboots(project_dir: Path) -> List[Dict[str, str]]:
         
         reboot["reboot_type"] = reboot_type
         reboot["is_short_reboot"] = False  # Initialize as False; will be set by detect_short_reboots()
+
+    for reboot in reboots:
+        reboot["reason"] = _normalize_reboot_reason(reboot.get("reason"))
 
     if reboots:
         reboots.sort(key=lambda r: r["timestamp"])

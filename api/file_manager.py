@@ -7,6 +7,7 @@ uploaded RDK log tarballs.
 
 Pipeline:
     Upload (base64 tgz) -> save to disk -> LogMerger (extract + merge)
+    -> :func:`refresh_cpe_disk_caches` (version + device_info JSON caches)
     -> Telemetry parse (if present) -> ZIP archive creation
 
 The FileManager is the main entry point called from the log viewer
@@ -40,6 +41,7 @@ from logai.utils.constants import (
 from api.log_merger import LogMerger
 from typing import List
 
+from logai.info_extractor import refresh_cpe_disk_caches
 from logai.telemetry_parser import parse_telemetry_file
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,7 @@ class ConfigIndex:
 # (files.py / _process_multi_cpe_background) and the batch/Celery path
 # (tasks.py / process_single_cpe) MUST call these instead of
 # reimplementing the logic, so that fixes apply in one place.
+# ``merge_cpe_logs`` also runs ``refresh_cpe_disk_caches`` after merge (batch + multi-CPE).
 
 _SKIP_EXTENSIONS = frozenset({
     '.parquet', '.json', '.tgz', '.tar', '.gz',
@@ -118,6 +121,9 @@ def merge_cpe_logs(staging_dir, cpe_dir, merged_subdir=None):
     ``cpe_dir / merged_subdir`` first, then all files are moved up to
     *cpe_dir* and the subdir is removed.  This avoids mixing temporary
     merge artefacts with other files already in *cpe_dir*.
+
+    After merge, runs :func:`logai.info_extractor.refresh_cpe_disk_caches` on
+    *cpe_dir* so ``.version_cache.json`` / ``.device_info_cache.json`` are written.
 
     Returns the number of merged files moved into *cpe_dir*.
     """
@@ -142,8 +148,10 @@ def merge_cpe_logs(staging_dir, cpe_dir, merged_subdir=None):
                 shutil.move(str(src), str(dst))
                 file_count += 1
         shutil.rmtree(output_dir, ignore_errors=True)
+        refresh_cpe_disk_caches(cpe_dir, force=False)
         return file_count
 
+    refresh_cpe_disk_caches(cpe_dir, force=False)
     return sum(1 for f in cpe_dir.iterdir() if f.is_file())
 
 
@@ -269,8 +277,9 @@ class FileManager:
 
         Steps:
         1. Extract tarballs and merge logs chronologically.
-        2. Parse telemetry2_0.txt (if present) using the new YAML-driven parser.
-        3. Create a zip archive of merged logs.
+        2. Refresh ``.version_cache.json`` and ``.device_info_cache.json`` under merged_logs.
+        3. Parse telemetry2_0.txt (if present) using the new YAML-driven parser.
+        4. Create a zip archive of merged logs.
 
         Args:
             project_path: Path to the project directory.
@@ -292,6 +301,8 @@ class FileManager:
         # Step 1: Merge log files (extract tarballs, merge chronologically)
         merger = LogMerger(self.directory, self.merged_logs_path)
         merger.merge_logs()
+
+        refresh_cpe_disk_caches(Path(self.merged_logs_path), force=False)
 
         # Step 2: Parse telemetry if present (new YAML-driven parser)
         # The telemetry is now parsed on-demand in the Telemetry tab callback,
@@ -491,7 +502,7 @@ class FileManager:
           1. Group all zips by serial
           2. Extract ALL zips for that serial into one staging dir
           3. Collect tgz files (filter by MAC for fallback zips)
-          4. Run LogMerger ONCE on the combined set
+          4. Run LogMerger ONCE on the combined set (then ``refresh_cpe_disk_caches``)
           5. Move merged output to {project_dir}/{serial}/
           6. Parse MAC from tgz filenames (or use serial if fallback)
           7. Use min(date_from), max(date_to) across all zips

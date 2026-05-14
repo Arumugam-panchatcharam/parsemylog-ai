@@ -48,6 +48,44 @@ def _cpe_identity_serial(device_info: Dict[str, Any], folder_serial: str) -> str
     return s if s else folder_serial
 
 
+def _strip_nonempty(value: Any) -> str:
+    if value is None:
+        return ""
+    s = str(value).strip()
+    return s
+
+
+def _firmware_version_from_caches(
+    device_info: Dict[str, Any], version_info: Dict[str, Any]
+) -> str:
+    """
+    Prefer device_info['version']; else last entry in version_info['firmware_versions'].
+    Matches graph_analyzer identity fallback when .device_info_cache.json is absent.
+    """
+    v = _strip_nonempty(device_info.get("version"))
+    if v:
+        return v
+    fw_list = version_info.get("firmware_versions") or []
+    if not fw_list:
+        return ""
+    last = fw_list[-1]
+    if not isinstance(last, dict):
+        return ""
+    img = _strip_nonempty(last.get("image_name"))
+    if img:
+        return img
+    return _strip_nonempty(last.get("version"))
+
+
+def _sdk_version_from_caches(
+    device_info: Dict[str, Any], version_info: Dict[str, Any]
+) -> str:
+    v = _strip_nonempty(device_info.get("sdk_version"))
+    if v:
+        return v
+    return _strip_nonempty(version_info.get("sdk_version"))
+
+
 def polars_etl_per_cpe(user_id: str, project_id: str, serial: str, 
                       processing_date: str = None) -> Dict[str, Any]:
     """
@@ -77,7 +115,19 @@ def polars_etl_per_cpe(user_id: str, project_id: str, serial: str,
     try:
         # 1. LOAD phase
         logger.info(f"Loading data for CPE {serial}")
-        
+
+        # Ensure .device_info_cache.json exists: upload and rg indexer
+        # path does not run Celery; refresh runs after log merge in merge_cpe_logs /
+        # process_uploaded_files, so this is only a safety net for ad-hoc ETL/index runs.
+        try:
+            from logai.info_extractor import refresh_cpe_disk_caches
+
+            refresh_cpe_disk_caches(layout.get_cpe_source_dir(serial), force=False)
+        except Exception as exc:
+            logger.debug(
+                "device_info cache refresh skipped for %s: %s", serial, exc
+            )
+
         # Load parquet files
         parquet_data = _load_parquet_files(layout, serial, module_graph)
         
@@ -484,8 +534,8 @@ def _generate_device_health(
         "device_serial": device_serial,
         "model": device_info.get("model", ""),
         "manufacturer": device_info.get("manufacturer", ""),
-        "firmware_version": device_info.get("version", ""),
-        "sdk_version": device_info.get("sdk_version", ""),
+        "firmware_version": _firmware_version_from_caches(device_info, version_info),
+        "sdk_version": _sdk_version_from_caches(device_info, version_info),
         "wan_type": device_info.get("wan_type", ""),
         "last_reboot_reason": device_info.get("last_reboot_reason", ""),
         "peak_memory_usage_pct": _to_float_metric(summary.get("peak_memory_usage_pct", 0)),

@@ -120,6 +120,61 @@ def _find_processed_cpes(layout: DataLayoutManager) -> List[str]:
     return sorted(serials)
 
 
+def _enrich_empty_firmware_from_version_caches(
+    device_health_df: pl.DataFrame,
+    layout: DataLayoutManager,
+) -> pl.DataFrame:
+    """
+    device_health rows often get firmware_version only from .device_info_cache.json.
+    When that cache is missing, version.txt still yields .version_cache.json — use it here
+    so fleet version_distribution matches imagename/VERSION without re-running Polars ETL.
+    """
+    if len(device_health_df) == 0:
+        return device_health_df
+    if "device_serial" not in device_health_df.columns:
+        return device_health_df
+    if "firmware_version" not in device_health_df.columns:
+        return device_health_df
+
+    from .polars_etl import _firmware_version_from_caches, _load_version_info
+
+    fixes: Dict[str, str] = {}
+    for row in device_health_df.to_dicts():
+        serial = row.get("device_serial")
+        if serial is None:
+            continue
+        skey = str(serial).strip()
+        if not skey or skey in fixes:
+            continue
+        raw_fw = row.get("firmware_version")
+        if raw_fw is not None and str(raw_fw).strip():
+            continue
+        vi = _load_version_info(layout, skey)
+        resolved = _firmware_version_from_caches({}, vi)
+        if resolved:
+            fixes[skey] = resolved
+
+    if not fixes:
+        return device_health_df
+
+    lut = pl.DataFrame(
+        {
+            "device_serial": list(fixes.keys()),
+            "_fw_enriched": list(fixes.values()),
+        }
+    )
+    return (
+        device_health_df.join(lut, on="device_serial", how="left")
+        .with_columns(
+            pl.when(pl.col("_fw_enriched").is_not_null())
+            .then(pl.col("_fw_enriched"))
+            .otherwise(pl.col("firmware_version"))
+            .alias("firmware_version")
+        )
+        .drop("_fw_enriched")
+    )
+
+
 def _load_and_aggregate_fleet_data(
     layout: DataLayoutManager,
     module_graph,
@@ -148,6 +203,11 @@ def _load_and_aggregate_fleet_data(
             combined_signals,
             combined_error_templates,
         ) = load_legacy_partitioned_parquets(layout)
+
+    combined_device_health = _enrich_empty_firmware_from_version_caches(
+        combined_device_health,
+        layout,
+    )
 
     fleet_summary = _generate_fleet_aggregations(
         combined_reboot_features,

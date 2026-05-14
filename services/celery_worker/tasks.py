@@ -347,7 +347,7 @@ def process_single_cpe_rg_drain3(
     try:
         from api.user_db_mngr import DBManager
         from api.file_manager import register_cpe_files
-        from logai.info_extractor import find_and_parse_version_txt, find_and_build_fallback_device_info
+        from logai.info_extractor import refresh_cpe_disk_caches
         from logai.telemetry_parser import parse_telemetry_file
         from flask import Flask
         
@@ -366,18 +366,14 @@ def process_single_cpe_rg_drain3(
             
             cpe_path = Path(cpe_dir)
             
-            # Info extraction (cached to disk)
+            # Info extraction (.version_cache.json / .device_info_cache.json); merge_cpe_logs_task
+            # already runs refresh after merge — this is a fast cache hit or covers alternate entrypoints.
             mac = None
             date_from = None
             date_to = None
 
             try:
-                find_and_parse_version_txt(cpe_path)
-            except Exception:
-                pass
-
-            try:
-                fallback_info = find_and_build_fallback_device_info(cpe_path)
+                fallback_info = refresh_cpe_disk_caches(cpe_path, force=False)
                 if fallback_info:
                     mac = fallback_info.get("mac")
             except Exception:

@@ -1316,6 +1316,19 @@ def save_telemetry_cache(
     return cache
 
 
+def load_raw_telemetry_reports(cpe_dir: Path) -> Optional[List[Dict[str, Any]]]:
+    """
+    Load parsed TR-181 reports from ``raw_telemetry_cache.json`` if present.
+
+    Used by reboot extraction to prefer ``LastRebootReason`` samples from telemetry
+    over BootTime/PARODUS strings when timestamps align.
+    """
+    tup = _load_raw_telemetry_cache(cpe_dir)
+    if tup is None:
+        return None
+    return tup[0]
+
+
 def load_telemetry_cache(project_dir: Path) -> Optional[Dict[str, Any]]:
     """
     Load cached API response if it exists.
