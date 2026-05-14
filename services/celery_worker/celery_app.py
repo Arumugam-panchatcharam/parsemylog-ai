@@ -16,12 +16,14 @@ if _PROJECT_ROOT not in sys.path:
 
 # Celery worker is a separate OS process from Flask; Docker Compose passes `.env` as env-file, but locally
 # you only inherit variables you `export` unless we load `.env` here (e.g. CPE_REMOTE_LOG_CDN_BASE).
+# override=True so that a bind-mounted .env in Docker takes precedence over stale env_file values
+# after a `docker-compose restart` (env_file is only read at container *creation* time).
 _dotenv_file = _PROJECT_ROOT_PATH / ".env"
 if _dotenv_file.is_file():
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(_dotenv_file, override=False)
+        load_dotenv(_dotenv_file, override=True)
     except ImportError:
         pass
 

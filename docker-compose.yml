@@ -103,6 +103,8 @@ services:
       - ./configs:/app/configs:ro
       - ./scripts:/app/scripts:ro
       - ./drain3.ini:/app/drain3.ini:ro
+      # .env file — lets load_dotenv read fresh values on restart
+      - ./.env:/app/.env:ro
       # OUI database for MAC vendor lookups
       - ./oui.txt:/app/oui.txt
       # Shared data with API
