@@ -78,6 +78,8 @@ class Natco(db.Model):
     code = db.Column(db.String(16), unique=True, nullable=False)  # e.g. "DE", "PL"
     name = db.Column(db.String(120), nullable=False)              # e.g. "Germany"
     description = db.Column(db.String(512), nullable=True)
+    # API tenant identifier for remote CPE log bundle HTTP calls (x-tenant-id), e.g. "cz".
+    remote_log_tenant_id = db.Column(db.String(32), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now())
 
     global_patterns = db.relationship(
@@ -316,6 +318,63 @@ class CPEProcessRecord(db.Model):
     batch_job = db.relationship("BatchJob", back_populates="cpe_records")
 
 
+class RemoteLogFetchJob(db.Model):
+    """Tracks admin-initiated remote CPE bundle fetch + batch ingest (multiple units)."""
+
+    __tablename__ = "remote_log_fetch_jobs"
+
+    id = db.Column(db.String(64), primary_key=True)
+    project_id = db.Column(db.String(256), db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    batch_job_id = db.Column(db.String(64), db.ForeignKey("batch_jobs.id", ondelete="SET NULL"), nullable=True)
+    status = db.Column(
+        db.String(24),
+        default="queued",
+        nullable=False,
+    )  # queued, processing, completed, failed, cancelled
+    staging_relpath = db.Column(db.String(512), nullable=False)  # relative to UPLOAD_DIRECTORY / user_id / project_id
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now())
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    units = db.relationship(
+        "RemoteLogFetchUnit",
+        back_populates="fetch_job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class RemoteLogFetchUnit(db.Model):
+    """One CPE line from device JSON (ordinal preserves user order)."""
+
+    __tablename__ = "remote_log_fetch_units"
+
+    id = db.Column(db.String(64), primary_key=True)
+    fetch_job_id = db.Column(
+        db.String(64),
+        db.ForeignKey("remote_log_fetch_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ordinal = db.Column(db.Integer, nullable=False)
+    serial_number = db.Column(db.String(256), nullable=False)
+    ranges_json = db.Column(db.Text, nullable=False)  # JSON array of {"start","end"}
+    cpe_record_id = db.Column(db.String(64), db.ForeignKey("cpe_process_records.id", ondelete="SET NULL"), nullable=True)
+
+    download_status = db.Column(
+        db.String(24), default="pending", nullable=False
+    )  # pending, downloading, downloaded, failed
+    process_status = db.Column(
+        db.String(24), default="pending", nullable=False
+    )  # pending, processing, completed, failed, skipped
+
+    bundle_relpath = db.Column(db.String(512), nullable=True)  # final .zip relative to staging (no .part)
+    last_error = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now())
+
+    fetch_job = db.relationship("RemoteLogFetchJob", back_populates="units")
+
+
 # --------------- Knowledge Graph Models ---------------
 
 class KnowledgeGraph(db.Model):
@@ -448,6 +507,8 @@ class DBManager:
         self.KnowledgeNode = KnowledgeNode
         self.KnowledgeEdge = KnowledgeEdge
         self.TemplatePatternBaseline = TemplatePatternBaseline
+        self.RemoteLogFetchJob = RemoteLogFetchJob
+        self.RemoteLogFetchUnit = RemoteLogFetchUnit
 
     # ---------------- Initialization ----------------
     def init_app(self, app):
@@ -470,6 +531,8 @@ class DBManager:
             self._migrate_add_global_pattern_filter_columns(app)
             self._migrate_add_global_pattern_scan_columns(app)
             self._migrate_add_project_tags_column(app)
+            self._migrate_add_natco_remote_log_tenant_column(app)
+            self._migrate_create_remote_log_fetch_tables(app)
             # create default admin user if not exists
             if not self.db.session.query(self.User).filter_by(username='admin').first():
                 self.create_user("admin", "admin123", is_admin=True)
@@ -568,6 +631,82 @@ class DBManager:
                     logger.info("[Migration] Added tags column to projects")
         except Exception as e:
             logger.warning(f"[Migration] Could not add project tags column (may already exist): {e}")
+
+    def _migrate_add_natco_remote_log_tenant_column(self, app):
+        """Add remote_log_tenant_id to natcos if missing."""
+        try:
+            with app.app_context():
+                from sqlalchemy import inspect as sa_inspect, text
+
+                inspector = sa_inspect(self.db.engine)
+                cols = [c["name"] for c in inspector.get_columns("natcos")]
+                if "remote_log_tenant_id" not in cols:
+                    self.db.session.execute(text("ALTER TABLE natcos ADD COLUMN remote_log_tenant_id VARCHAR(32)"))
+                    self.db.session.commit()
+                    logger.info("[Migration] Added remote_log_tenant_id column to natcos")
+        except Exception as e:
+            logger.warning(f"[Migration] NATCO remote_log_tenant_id: {e}")
+
+    def _migrate_create_remote_log_fetch_tables(self, app):
+        """Create remote_log_fetch_jobs / remote_log_fetch_units if missing (SQLite)."""
+        try:
+            with app.app_context():
+                from sqlalchemy import inspect as sa_inspect, text
+
+                inspector = sa_inspect(self.db.engine)
+                tables = inspector.get_table_names()
+
+                if "remote_log_fetch_jobs" not in tables:
+                    self.db.session.execute(
+                        text(
+                            """
+                            CREATE TABLE remote_log_fetch_jobs (
+                                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                                project_id VARCHAR(256) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                                batch_job_id VARCHAR(64) REFERENCES batch_jobs(id) ON DELETE SET NULL,
+                                status VARCHAR(24) NOT NULL DEFAULT 'queued',
+                                staging_relpath VARCHAR(512) NOT NULL,
+                                error_message TEXT,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                            )
+                            """
+                        )
+                    )
+                    self.db.session.commit()
+                    logger.info("[Migration] Created remote_log_fetch_jobs table")
+
+                if "remote_log_fetch_units" not in tables:
+                    self.db.session.execute(
+                        text(
+                            """
+                            CREATE TABLE remote_log_fetch_units (
+                                id VARCHAR(64) PRIMARY KEY NOT NULL,
+                                fetch_job_id VARCHAR(64) NOT NULL REFERENCES remote_log_fetch_jobs(id) ON DELETE CASCADE,
+                                ordinal INTEGER NOT NULL,
+                                serial_number VARCHAR(256) NOT NULL,
+                                ranges_json TEXT NOT NULL,
+                                cpe_record_id VARCHAR(64) REFERENCES cpe_process_records(id) ON DELETE SET NULL,
+                                download_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+                                process_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+                                bundle_relpath VARCHAR(512),
+                                last_error TEXT,
+                                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                            )
+                            """
+                        )
+                    )
+                    self.db.session.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_remote_log_fetch_units_job "
+                            "ON remote_log_fetch_units (fetch_job_id, ordinal)"
+                        )
+                    )
+                    self.db.session.commit()
+                    logger.info("[Migration] Created remote_log_fetch_units table")
+        except Exception as e:
+            logger.warning(f"[Migration] remote log fetch tables: {e}")
 
     # ---------------- User operations ----------------
     def create_user(self, username: str, password: str, email: Optional[str] = None, is_admin: bool = False) -> Tuple[bool, Optional[str]]:
@@ -1356,3 +1495,216 @@ class DBManager:
         except Exception as e:
             self.db.session.rollback()
             return False, str(e)
+
+    # ---------------- Remote log fetch jobs ----------------
+
+    def get_remote_log_fetch_job(self, fetch_job_id: str) -> Optional[Any]:
+        return self.db.session.get(self.RemoteLogFetchJob, fetch_job_id)
+
+    def list_remote_log_fetch_jobs(self, project_id: str, limit: int = 50):
+        return (
+            self.db.session.query(self.RemoteLogFetchJob)
+            .filter_by(project_id=project_id)
+            .order_by(self.RemoteLogFetchJob.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def create_remote_log_fetch_bundle(
+        self,
+        *,
+        fetch_job_id: str,
+        project_id: str,
+        user_id: int,
+        batch_job_id: str,
+        staging_relpath: str,
+        entries: List[Tuple[int, str, str]],
+    ) -> None:
+        """
+        entries: list of (ordinal, serial_number, ranges_json str)
+        """
+        job_row = self.RemoteLogFetchJob(
+            id=fetch_job_id,
+            project_id=project_id,
+            user_id=user_id,
+            batch_job_id=batch_job_id,
+            status="queued",
+            staging_relpath=staging_relpath,
+        )
+        self.db.session.add(job_row)
+        for ordinal, serial, ranges_json in entries:
+            uid = str(uuid.uuid4())
+            cpe_rec_id = str(uuid.uuid4())
+            cpe_row = self.CPEProcessRecord(
+                id=cpe_rec_id,
+                job_id=batch_job_id,
+                serial=serial,
+                status="pending",
+                celery_task_id=None,
+            )
+            self.db.session.add(cpe_row)
+            unit = self.RemoteLogFetchUnit(
+                id=uid,
+                fetch_job_id=fetch_job_id,
+                ordinal=ordinal,
+                serial_number=serial,
+                ranges_json=ranges_json,
+                cpe_record_id=cpe_rec_id,
+                download_status="pending",
+                process_status="pending",
+            )
+            self.db.session.add(unit)
+        self.db.session.commit()
+
+    def create_remote_log_fetch_single_normal(
+        self,
+        *,
+        fetch_job_id: str,
+        project_id: str,
+        user_id: int,
+        staging_relpath: str,
+        serial: str,
+        ranges_json: str,
+    ) -> str:
+        """Single-CPE fetch for normal project (no batch_job). Returns unit id."""
+        job_row = self.RemoteLogFetchJob(
+            id=fetch_job_id,
+            project_id=project_id,
+            user_id=user_id,
+            batch_job_id=None,
+            status="queued",
+            staging_relpath=staging_relpath,
+        )
+        self.db.session.add(job_row)
+        uid = str(uuid.uuid4())
+        unit = self.RemoteLogFetchUnit(
+            id=uid,
+            fetch_job_id=fetch_job_id,
+            ordinal=0,
+            serial_number=serial,
+            ranges_json=ranges_json,
+            cpe_record_id=None,
+            download_status="pending",
+            process_status="pending",
+        )
+        self.db.session.add(unit)
+        self.db.session.commit()
+        return uid
+
+    def get_remote_log_fetch_units_ordered(self, fetch_job_id: str):
+        return (
+            self.db.session.query(self.RemoteLogFetchUnit)
+            .filter_by(fetch_job_id=fetch_job_id)
+            .order_by(self.RemoteLogFetchUnit.ordinal.asc())
+            .all()
+        )
+
+    def get_remote_log_fetch_unit(self, unit_id: str) -> Optional[Any]:
+        return self.db.session.get(self.RemoteLogFetchUnit, unit_id)
+
+    def patch_remote_log_fetch_unit(
+        self,
+        unit_id: str,
+        *,
+        download_status: Optional[str] = None,
+        process_status: Optional[str] = None,
+        bundle_relpath: Optional[str] = None,
+        last_error: Optional[str] = None,
+        clear_bundle: bool = False,
+    ) -> bool:
+        u = self.db.session.get(self.RemoteLogFetchUnit, unit_id)
+        if not u:
+            return False
+        if download_status is not None:
+            u.download_status = download_status
+        if process_status is not None:
+            u.process_status = process_status
+        if bundle_relpath is not None:
+            u.bundle_relpath = bundle_relpath
+        if clear_bundle:
+            u.bundle_relpath = None
+        if last_error is not None:
+            u.last_error = last_error
+        u.updated_at = datetime.now()
+        self.db.session.commit()
+        return True
+
+    def patch_remote_log_fetch_job(
+        self, fetch_job_id: str, *, status: Optional[str] = None, error_message: Optional[str] = None
+    ) -> bool:
+        j = self.db.session.get(self.RemoteLogFetchJob, fetch_job_id)
+        if not j:
+            return False
+        if status is not None:
+            j.status = status
+        if error_message is not None:
+            j.error_message = error_message
+        j.updated_at = datetime.now()
+        self.db.session.commit()
+        return True
+
+    def reset_remote_log_fetch_units_for_retry_failed(self, fetch_job_id: str) -> int:
+        """Reset only failed units to pending. Returns affected count."""
+        rows = self.get_remote_log_fetch_units_ordered(fetch_job_id)
+        n = 0
+        for u in rows:
+            failed = (
+                u.download_status == "failed"
+                or u.process_status == "failed"
+            )
+            if not failed:
+                continue
+            u.download_status = "pending"
+            u.process_status = "pending"
+            u.bundle_relpath = None
+            u.last_error = None
+            u.updated_at = datetime.now()
+            n += 1
+            if u.cpe_record_id:
+                rec = self.db.session.get(self.CPEProcessRecord, u.cpe_record_id)
+                if rec and rec.status != "completed":
+                    rec.status = "pending"
+                    rec.error_message = None
+                    rec.celery_task_id = None
+                    rec.started_at = None
+                    rec.completed_at = None
+        fj = self.db.session.get(self.RemoteLogFetchJob, fetch_job_id)
+        if fj and n > 0:
+            fj.status = "queued"
+            fj.error_message = None
+        self.db.session.commit()
+        return n
+
+    def reset_remote_log_fetch_job_restart_all(self, fetch_job_id: str) -> int:
+        rows = self.get_remote_log_fetch_units_ordered(fetch_job_id)
+        for u in rows:
+            u.download_status = "pending"
+            u.process_status = "pending"
+            u.bundle_relpath = None
+            u.last_error = None
+            u.updated_at = datetime.now()
+            if u.cpe_record_id:
+                rec = self.db.session.get(self.CPEProcessRecord, u.cpe_record_id)
+                if rec:
+                    rec.status = "pending"
+                    rec.error_message = None
+                    rec.celery_task_id = None
+                    rec.started_at = None
+                    rec.completed_at = None
+        fj = self.db.session.get(self.RemoteLogFetchJob, fetch_job_id)
+        count = len(rows)
+        if fj:
+            batch_id = fj.batch_job_id
+            if batch_id:
+                job = self.db.session.get(self.BatchJob, batch_id)
+                if job:
+                    job.processed_cpes = 0
+                    job.failed_cpes = 0
+                    job.status = "queued"
+                    job.error_message = None
+                    job.completed_at = None
+                    job.started_at = None
+            fj.status = "queued"
+            fj.error_message = None
+        self.db.session.commit()
+        return count

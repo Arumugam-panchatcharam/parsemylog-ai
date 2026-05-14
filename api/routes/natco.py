@@ -24,6 +24,7 @@ def list_natcos():
             "code": n.code,
             "name": n.name,
             "description": n.description or "",
+            "remote_log_tenant_id": getattr(n, "remote_log_tenant_id", None) or "",
         }
         for n in natcos
     ]), 200

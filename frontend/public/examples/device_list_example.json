@@ -1,0 +1,10 @@
+[
+  {
+    "serialnumber": "DEVICE_SERIAL_001",
+    "ranges": [{ "start": "2026-03-01", "end": "2026-03-07" }]
+  },
+  {
+    "serialnumber": "DEVICE_SERIAL_002",
+    "ranges": []
+  }
+]

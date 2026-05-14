@@ -54,6 +54,7 @@ def list_natcos():
             "name": n.name,
             "description": n.description or "",
             "pattern_count": pattern_count,
+            "remote_log_tenant_id": getattr(n, "remote_log_tenant_id", None) or "",
             "created_at": str(n.created_at) if n.created_at else None,
         })
     return jsonify(result), 200
@@ -73,11 +74,21 @@ def create_natco():
     if dbm.db.session.query(dbm.Natco).filter_by(code=code).first():
         return jsonify({"error": f"NATCO with code '{code}' already exists"}), 409
 
-    natco = dbm.Natco(code=code, name=name, description=(data.get("description") or "").strip())
+    natco = dbm.Natco(
+        code=code,
+        name=name,
+        description=(data.get("description") or "").strip(),
+        remote_log_tenant_id=(data.get("remote_log_tenant_id") or "").strip().lower() or None,
+    )
     dbm.db.session.add(natco)
     try:
         dbm.db.session.commit()
-        return jsonify({"id": natco.id, "code": natco.code, "name": natco.name}), 201
+        return jsonify({
+            "id": natco.id,
+            "code": natco.code,
+            "name": natco.name,
+            "remote_log_tenant_id": natco.remote_log_tenant_id or "",
+        }), 201
     except Exception as e:
         dbm.db.session.rollback()
         return jsonify({"error": str(e)}), 500
@@ -104,10 +115,22 @@ def update_natco(natco_id):
         if existing:
             return jsonify({"error": f"Code '{new_code}' is already taken"}), 409
         natco.code = new_code
+    if "remote_log_tenant_id" in data:
+        rv = data["remote_log_tenant_id"]
+        natco.remote_log_tenant_id = (
+            rv.strip().lower()
+            if isinstance(rv, str) and rv.strip()
+            else None
+        )
 
     try:
         dbm.db.session.commit()
-        return jsonify({"id": natco.id, "code": natco.code, "name": natco.name}), 200
+        return jsonify({
+            "id": natco.id,
+            "code": natco.code,
+            "name": natco.name,
+            "remote_log_tenant_id": natco.remote_log_tenant_id or "",
+        }), 200
     except Exception as e:
         dbm.db.session.rollback()
         return jsonify({"error": str(e)}), 500

@@ -263,6 +263,7 @@ function NatcoTab() {
   const [formCode, setFormCode] = useState("");
   const [formName, setFormName] = useState("");
   const [formDesc, setFormDesc] = useState("");
+  const [formTenantId, setFormTenantId] = useState("");
   const [patternEditorNatcoId, setPatternEditorNatcoId] = useState<number | null>(null);
 
   const { data: natcos, isLoading } = useQuery({
@@ -271,20 +272,27 @@ function NatcoTab() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => adminApi.createNatco(formCode, formName, formDesc),
+    mutationFn: () =>
+      adminApi.createNatco(formCode, formName, formDesc, formTenantId.trim() || undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["adminNatcos"] });
       setShowCreate(false);
-      setFormCode(""); setFormName(""); setFormDesc("");
+      setFormCode(""); setFormName(""); setFormDesc(""); setFormTenantId("");
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: () => adminApi.updateNatco(editId!, { code: formCode, name: formName, description: formDesc }),
+    mutationFn: () =>
+      adminApi.updateNatco(editId!, {
+        code: formCode,
+        name: formName,
+        description: formDesc,
+        remote_log_tenant_id: formTenantId.trim() || null,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["adminNatcos"] });
       setEditId(null);
-      setFormCode(""); setFormName(""); setFormDesc("");
+      setFormCode(""); setFormName(""); setFormDesc(""); setFormTenantId("");
     },
   });
 
@@ -298,6 +306,7 @@ function NatcoTab() {
     setFormCode(n.code);
     setFormName(n.name);
     setFormDesc(n.description || "");
+    setFormTenantId(n.remote_log_tenant_id || "");
   };
 
   return (
@@ -310,7 +319,7 @@ function NatcoTab() {
           <button onClick={() => queryClient.invalidateQueries({ queryKey: ["adminNatcos"] })} title="Refresh NATCO list" className="p-2 border border-border rounded-lg hover:bg-muted">
             <RefreshIcon style={{ fontSize: 18 }} />
           </button>
-          <button onClick={() => { setShowCreate(true); setFormCode(""); setFormName(""); setFormDesc(""); }} className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90">
+          <button onClick={() => { setShowCreate(true); setFormCode(""); setFormName(""); setFormDesc(""); setFormTenantId(""); }} className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90">
             <AddIcon style={{ fontSize: 18 }} /> New NATCO
           </button>
         </div>
@@ -337,7 +346,8 @@ function NatcoTab() {
                 </h3>
                 <p className="text-xs text-muted-foreground mt-1">{n.description || "No description"}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {n.pattern_count} global patterns - Created: {formatDate(n.created_at)}
+                  {n.pattern_count} global patterns · Remote log tenant: {n.remote_log_tenant_id || "—"}
+                  {" · "}Created: {formatDate(n.created_at)}
                 </p>
               </div>
               <div className="flex gap-1">
@@ -373,6 +383,16 @@ function NatcoTab() {
               <div>
                 <label className="block text-sm font-medium mb-1">Description</label>
                 <textarea value={formDesc} onChange={(e) => setFormDesc(e.target.value)} className="w-full px-3 py-2.5 border border-input rounded-lg bg-background resize-none" rows={2} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Remote log tenant id</label>
+                <input
+                  type="text"
+                  value={formTenantId}
+                  onChange={(e) => setFormTenantId(e.target.value)}
+                  placeholder="e.g. cz (optional; overrides NATCO code for API tenant header)"
+                  className="w-full px-3 py-2.5 border border-input rounded-lg bg-background"
+                />
               </div>
               <div className="flex gap-2 pt-2">
                 <button type="submit" disabled={createMutation.isPending || updateMutation.isPending} className="flex-1 py-2.5 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 disabled:opacity-50">

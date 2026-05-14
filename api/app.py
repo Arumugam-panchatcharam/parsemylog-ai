@@ -208,6 +208,7 @@ def create_api_app():
     from api.routes.pcap import pcap_bp
     from api.routes.telemetry_csv import telemetry_csv_bp
     from api.routes.batch_jobs import batch_jobs_bp
+    from api.routes.cpe_remote_logs import cpe_remote_logs_bp
     from api.routes.knowledge_graph import knowledge_graph_bp
     from api.routes.issue_analysis import issue_analysis_bp
     from api.routes.ml_anomaly import ml_anomaly_bp
@@ -234,6 +235,7 @@ def create_api_app():
     app.register_blueprint(pcap_bp, url_prefix="/api/pcap")
     app.register_blueprint(telemetry_csv_bp, url_prefix="/api/telemetry-csv")
     app.register_blueprint(batch_jobs_bp, url_prefix="/api/projects")
+    app.register_blueprint(cpe_remote_logs_bp, url_prefix="/api/projects")
     app.register_blueprint(knowledge_graph_bp, url_prefix="/api/knowledge-graphs")
     app.register_blueprint(issue_analysis_bp, url_prefix="/api/projects")
     app.register_blueprint(ml_anomaly_bp, url_prefix="/api/projects")

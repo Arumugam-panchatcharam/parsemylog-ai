@@ -284,7 +284,11 @@ class QdrantEmbeddingStore:
 
             # Warmup: Force model to fully load by encoding a dummy string
             logger.info("[QdrantEmbeddingStore] Warming up model...")
-            _ = self.model.encode(["warmup test"], normalize_embeddings=True)
+            _ = self.model.encode(
+                ["warmup test"],
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
 
         # Ensure collection exists
         self._ensure_collection()
@@ -368,7 +372,11 @@ class QdrantEmbeddingStore:
         logger.debug(f"[QdrantEmbeddingStore] Encoding {len(templates)} templates")
         texts = [t["template"] for t in templates]
 
-        embeddings = self.model.encode(texts, normalize_embeddings=True)
+        embeddings = self.model.encode(
+            texts,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
 
         # Prepare Qdrant points with deterministic IDs and metadata
         points = []
@@ -430,7 +438,9 @@ class QdrantEmbeddingStore:
             ...     print(f"Similarity: {hit['similarity']:.3f}")
         """
         # Generate query embedding (normalized for cosine similarity)
-        query_vec = self.model.encode([query], normalize_embeddings=True)[0]
+        query_vec = self.model.encode(
+            [query], normalize_embeddings=True, show_progress_bar=False
+        )[0]
 
         # Search Qdrant
         results = self.client.query_points(
@@ -511,7 +521,9 @@ def quick_search(
     from qdrant_client.models import Filter, FieldCondition, MatchValue
     
     client = QdrantClient(url=qdrant_url)
-    query_vec = model.encode([query], normalize_embeddings=True)[0]
+    query_vec = model.encode(
+        [query], normalize_embeddings=True, show_progress_bar=False
+    )[0]
 
     # Build filter if metadata_filter is provided
     query_filter = None

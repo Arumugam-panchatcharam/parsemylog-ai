@@ -20,10 +20,11 @@ Example:
 import os
 import base64
 import hashlib
+import json
+import logging
+import re
 import shutil
 import tarfile
-import json
-import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,12 @@ from api.log_merger import LogMerger
 from typing import List
 
 from logai.telemetry_parser import parse_telemetry_file
+
+logger = logging.getLogger(__name__)
+
+# Retained crash-bundle zips from remote fetch (normal projects). Scanned by
+# :meth:`FileManager.detect_cpe_zips` so a later download merges with earlier bundles.
+REMOTE_CPE_ARCHIVES_DIRNAME = "_remote_cpe_archives"
 
 
 @dataclass
@@ -280,7 +287,7 @@ class FileManager:
         self.telemetry_path = os.path.join(self.directory, TELEMETRY_PROFILES_DIR_NAME)
         os.makedirs(self.merged_logs_path, exist_ok=True)
 
-        print(f"Processing uploaded files in {self.directory} ...")
+        logger.info("Processing uploaded files in %s", self.directory)
 
         # Step 1: Merge log files (extract tarballs, merge chronologically)
         merger = LogMerger(self.directory, self.merged_logs_path)
@@ -307,9 +314,13 @@ class FileManager:
                     primary, dcmscript_path=dcmscript_file,
                     cpe_dir=Path(self.directory),
                 )
-                print(f"Telemetry: {summary.get('parsed', 0)}/{summary.get('total', 0)} reports parsed")
+                logger.info(
+                    "Telemetry: %s/%s reports parsed",
+                    summary.get("parsed", 0),
+                    summary.get("total", 0),
+                )
             except Exception as e:
-                print(f"Telemetry parsing error (non-fatal): {e}")
+                logger.warning("Telemetry parsing error (non-fatal): %s", e)
 
         # Step 3: Create archive of merged logs
         self.create_merged_logs_archive(
@@ -319,7 +330,7 @@ class FileManager:
             telemetry_path=self.telemetry_path,
         )
 
-        print("Process uploaded files done")
+        logger.info("Process uploaded files done")
 
     # ---------- Multi-CPE Upload ----------
 
@@ -346,6 +357,9 @@ class FileManager:
         1. **Primary zip** -- ``SERIAL_YYYY-MM-DD_YYYY-MM-DD.zip``
            Serial and date range come from the zip filename.
 
+        Bundles saved under ``_remote_cpe_archives/`` (after a successful remote fetch)
+        are scanned in addition to the project root so multiple downloads merge.
+
         2. **Fallback zip** -- any other ``.zip`` containing ``.tgz`` files
            whose names embed a 12-hex-digit MAC and a date, e.g.
            ``partner-id_mac_2025-12-13-23-01-27_CPELogs_*.tgz``
@@ -363,44 +377,56 @@ class FileManager:
         """
         import zipfile
 
+        project_dir = Path(project_dir)
+        scan_roots = [project_dir]
+        archive_dir = project_dir / REMOTE_CPE_ARCHIVES_DIRNAME
+        if archive_dir.is_dir():
+            scan_roots.append(archive_dir)
+
         results = []
         unmatched_zips = []
 
-        for f in project_dir.iterdir():
-            if not f.is_file():
-                continue
+        for base in scan_roots:
+            for f in base.iterdir():
+                if not f.is_file():
+                    continue
 
-            # --- ZIP archives ---
-            if f.name.endswith('.zip'):
-                m = cls.CPE_ZIP_RE.match(f.name)
-                if m:
-                    results.append({
-                        "path": f,
-                        "serial": m.group(1),
-                        "date_from": m.group(2),
-                        "date_to": m.group(3),
-                        "is_fallback": False,
-                        "is_standalone_tar": False,
-                    })
-                else:
-                    unmatched_zips.append(f)
-                continue
+                # --- ZIP archives ---
+                if f.name.endswith('.zip'):
+                    m = cls.CPE_ZIP_RE.match(f.name)
+                    if m:
+                        results.append({
+                            "path": f,
+                            "serial": m.group(1),
+                            "date_from": m.group(2),
+                            "date_to": m.group(3),
+                            "is_fallback": False,
+                            "is_standalone_tar": False,
+                        })
+                    else:
+                        unmatched_zips.append(f)
+                    continue
 
-            # --- Standalone tar/tgz/tar.gz archives ---
-            if any(f.name.endswith(ext) for ext in cls.TAR_EXTENSIONS):
-                m = cls.TGZ_CPE_RE.search(f.name)
-                if m:
-                    mac = m.group(1)
-                    date_str = m.group(2)
-                    results.append({
-                        "path": f,
-                        "serial": mac,
-                        "date_from": date_str,
-                        "date_to": date_str,
-                        "is_fallback": True,
-                        "is_standalone_tar": True,
-                    })
-                    print(f"[DetectCPE] Standalone tar: {f.name} -> MAC {mac} ({date_str})")
+                # --- Standalone tar/tgz/tar.gz archives ---
+                if any(f.name.endswith(ext) for ext in cls.TAR_EXTENSIONS):
+                    m = cls.TGZ_CPE_RE.search(f.name)
+                    if m:
+                        mac = m.group(1)
+                        date_str = m.group(2)
+                        results.append({
+                            "path": f,
+                            "serial": mac,
+                            "date_from": date_str,
+                            "date_to": date_str,
+                            "is_fallback": True,
+                            "is_standalone_tar": True,
+                        })
+                        logger.info(
+                            "[DetectCPE] Standalone tar: %s -> MAC %s (%s)",
+                            f.name,
+                            mac,
+                            date_str,
+                        )
 
         # Fallback: peek inside unmatched zips for tgz files with MAC addresses
         for zip_path in unmatched_zips:
@@ -431,9 +457,15 @@ class FileManager:
                             "is_fallback": True,
                             "is_standalone_tar": False,
                         })
-                        print(f"[DetectCPE] Fallback: {zip_path.name} -> MAC {mac} ({min(dates)} to {max(dates)})")
+                        logger.info(
+                            "[DetectCPE] Fallback: %s -> MAC %s (%s to %s)",
+                            zip_path.name,
+                            mac,
+                            min(dates),
+                            max(dates),
+                        )
             except Exception as e:
-                print(f"[DetectCPE] Error peeking into {zip_path.name}: {e}")
+                logger.warning("[DetectCPE] Error peeking into %s: %s", zip_path.name, e)
 
         return results
 
@@ -487,7 +519,13 @@ class FileManager:
             zip_names = [z["path"].name for z in zip_list]
             is_fallback = any(z.get("is_fallback", False) for z in zip_list)
             label = f" (fallback/MAC)" if is_fallback else ""
-            print(f"[MultiCPE] Processing CPE {serial}{label} — {len(zip_list)} zip(s): {zip_names}")
+            logger.info(
+                "[MultiCPE] Processing CPE %s%s — %s zip(s): %s",
+                serial,
+                label,
+                len(zip_list),
+                zip_names,
+            )
 
             if progress_callback:
                 try:
@@ -520,7 +558,7 @@ class FileManager:
                             m = self.TGZ_MAC_RE.search(archive_path.name)
                             if m:
                                 mac = m.group(1)
-                        print(f"[MultiCPE] Standalone tar -> staging: {dest_name}")
+                        logger.info("[MultiCPE] Standalone tar -> staging: %s", dest_name)
                         continue
 
                     # --- ZIP archive ---
@@ -559,12 +597,25 @@ class FileManager:
                             moved += 1
 
                         if moved == 0:
-                            print(f"[MultiCPE] WARNING: No matching tar files found for {serial} in {archive_path.name}")
+                            logger.warning(
+                                "[MultiCPE] No matching tar files found for %s in %s",
+                                serial,
+                                archive_path.name,
+                            )
                         else:
-                            print(f"[MultiCPE] Staged {moved} tar file(s) for {serial} from {archive_path.name}")
+                            logger.info(
+                                "[MultiCPE] Staged %s tar file(s) for %s from %s",
+                                moved,
+                                serial,
+                                archive_path.name,
+                            )
 
                     except Exception as e:
-                        print(f"[MultiCPE] Error extracting {archive_path.name}: {e}")
+                        logger.warning(
+                            "[MultiCPE] Error extracting %s: %s",
+                            archive_path.name,
+                            e,
+                        )
                     finally:
                         if temp_dir.exists():
                             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -576,7 +627,11 @@ class FileManager:
                         continue
                     md5 = hashlib.md5(f.read_bytes()).hexdigest()
                     if md5 in seen_md5:
-                        print(f"[MultiCPE] Dropping duplicate tgz: {f.name} (same as {seen_md5[md5]})")
+                        logger.info(
+                            "[MultiCPE] Dropping duplicate tgz: %s (same as %s)",
+                            f.name,
+                            seen_md5[md5],
+                        )
                         f.unlink()
                     else:
                         seen_md5[md5] = f.name
@@ -596,10 +651,16 @@ class FileManager:
                     "date_from": date_from,
                     "date_to": date_to,
                 })
-                print(f"[MultiCPE] CPE {serial} processed ({len(zip_list)} zips merged, {file_count} files) -> {cpe_output_dir}")
+                logger.info(
+                    "[MultiCPE] CPE %s processed (%s zips merged, %s files) -> %s",
+                    serial,
+                    len(zip_list),
+                    file_count,
+                    cpe_output_dir,
+                )
 
             except Exception as e:
-                print(f"[MultiCPE] Error processing CPE {serial}: {e}")
+                logger.error("[MultiCPE] Error processing CPE %s: %s", serial, e)
             finally:
                 # Clean up staging dir
                 if staging_dir.exists():
@@ -631,18 +692,16 @@ class FileManager:
         config_list_path = os.path.join(root_dir, "../configs", "config_list.json")
 
         if os.path.exists(config_list_path):
-            #print(f"Loading config from {config_list_path}")
             self.config_index = ConfigIndex.load_from_file(config_list_path)
             if self.config_index:
                 file_config = self.config_index.find_config_for_file(filename)
                 self.config_path = os.path.join(root_dir, "../configs", file_config)
-                #print("config {}, path {}".format(file_config, self.config_path))
                 if os.path.exists(self.config_path):
                     try:
                          with open(self.config_path, 'r') as f:
                             raw_data = json.load(f)
                             return raw_data
                     except json.JSONDecodeError as e:
-                        print(f"Error decoding invalid JSON: {e}\n")
+                        logger.warning("Error decoding invalid JSON in %s: %s", self.config_path, e)
                     except Exception as e:
-                        print(f"An unexpected error occurred: {e}\n")
+                        logger.error("Unexpected error loading config %s: %s", self.config_path, e)

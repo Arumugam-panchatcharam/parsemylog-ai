@@ -2,13 +2,15 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useDropzone } from "react-dropzone";
-import { authApi, filesApi, patternsApi } from "@/api/endpoints";
+import { authApi, filesApi, patternsApi, cpeRemoteLogsApi, projectsApi } from "@/api/endpoints";
 import { useProject } from "@/hooks/useProject";
 import { useCPE } from "@/hooks/useCPE";
 import { useAuth } from "@/hooks/useAuth";
 import { cn, convertLogTimestamp, TZ_OPTIONS } from "@/lib/utils";
 import { highlightLogLine } from "@/lib/logHighlighter";
 import { QuickDedupModal } from "@/components/QuickDedupModal";
+import { RemoteLogLastErrorInline } from "@/components/RemoteLogLastErrorInline";
+import { RangeDatePickerField } from "@/components/RangeDatePickerField";
 import { VirtualLogList } from "@/components/log-viewer/VirtualLogList";
 import { useVirtualLogFeed } from "@/components/log-viewer/useVirtualLogFeed";
 import { useLogFollowTail } from "@/components/log-viewer/useLogStream";
@@ -31,6 +33,7 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import FormatColorTextIcon from "@mui/icons-material/FormatColorText";
 import LanguageIcon from "@mui/icons-material/Language";
 import CircularProgress from "@mui/material/CircularProgress";
+import LinearProgress from "@mui/material/LinearProgress";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import AddIcon from "@mui/icons-material/Add";
 import SettingsIcon from "@mui/icons-material/Settings";
@@ -144,6 +147,21 @@ export default function LogViewerPage() {
   const [searchPanelHeight, setSearchPanelHeight] = useState(220);
   const resizingRef = useRef(false);
   const resizeStartRef = useRef({ y: 0, h: 0 });
+  /** Admin-only remote CPE log bundle download (two-phase Celery job). */
+  const [remoteSerial, setRemoteSerial] = useState("");
+  const [remoteStartDate, setRemoteStartDate] = useState("");
+  const [remoteEndDate, setRemoteEndDate] = useState("");
+  const [remoteRegistryBearer, setRemoteRegistryBearer] = useState("");
+  const [remoteCrashBearer, setRemoteCrashBearer] = useState("");
+  const [activeRemoteFetchJobId, setActiveRemoteFetchJobId] = useState<string | null>(null);
+  const [remoteFetchError, setRemoteFetchError] = useState<string | null>(null);
+  /** Additional crash-portal date ranges (same fetch job). Primary range uses remoteStartDate/remoteEndDate. */
+  const [remoteExtraRanges, setRemoteExtraRanges] = useState<{ start: string; end: string }[]>([]);
+  /** Upload wizard: local files vs crash-portal fetch (admins only for both choices). */
+  const [uploadWizardOpen, setUploadWizardOpen] = useState(false);
+  const [uploadWizardMode, setUploadWizardMode] = useState<"local_files" | "remote_fetch">(
+    "local_files",
+  );
 
   const { data: filesRaw, isLoading: filesLoading } = useQuery({ queryKey: ["files", projectId, cpeId], queryFn: async () => (await filesApi.list(projectId!, cpeId)).data, enabled: !!projectId });
   const files = Array.isArray(filesRaw) ? filesRaw : [];
@@ -255,6 +273,105 @@ export default function LogViewerPage() {
   });
   const isIndexing = indexStatus?.is_indexing ?? false;
 
+  const { data: adminProjectMeta } = useQuery({
+    queryKey: ["project", projectId, "meta"],
+    queryFn: async () => (await projectsApi.get(projectId!)).data as { project_type?: string },
+    enabled: !!projectId && !!user?.is_admin,
+  });
+  const showRemoteLogPanel =
+    !!user?.is_admin && !!projectId && (adminProjectMeta?.project_type ?? "normal") === "normal";
+
+  const remoteFetchJobQuery = useQuery({
+    queryKey: ["remoteLogFetchJob", projectId, activeRemoteFetchJobId],
+    queryFn: async () =>
+      (await cpeRemoteLogsApi.getJob(projectId!, activeRemoteFetchJobId!)).data,
+    enabled: !!projectId && !!activeRemoteFetchJobId,
+    refetchInterval: (q) => {
+      const st = q.state.data?.job?.status;
+      if (!st || st === "completed" || st === "failed") return false;
+      return 4000;
+    },
+  });
+
+  const remoteFetchSucceeded = useMemo(() => {
+    const d = remoteFetchJobQuery.data;
+    if (!d) return false;
+    const st = String(d.job.status ?? "").toLowerCase();
+    if (st !== "completed" || !d.units.length) return false;
+    return d.units.every(
+      (u) =>
+        u.download_status !== "failed" && u.process_status !== "failed",
+    );
+  }, [remoteFetchJobQuery.data]);
+
+  /** True while job is running (or status not yet loaded). */
+  const remoteFetchInFlight = useMemo(() => {
+    const d = remoteFetchJobQuery.data;
+    if (!d) return true;
+    return !["completed", "failed"].includes(String(d.job.status ?? "").toLowerCase());
+  }, [remoteFetchJobQuery.data]);
+
+  const startRemoteFetchMutation = useMutation({
+    mutationFn: async () => {
+      const ranges = [
+        { start: remoteStartDate, end: remoteEndDate },
+        ...remoteExtraRanges.filter((r) => r.start.length === 10 && r.end.length === 10),
+      ];
+      return cpeRemoteLogsApi.startNormal(projectId!, {
+        serial_number: remoteSerial.trim(),
+        ranges,
+        device_registry_bearer: remoteRegistryBearer,
+        crash_portal_bearer: remoteCrashBearer,
+      });
+    },
+    onSuccess: (res) => {
+      setRemoteFetchError(null);
+      const id = res.data.fetch_job_id;
+      if (typeof id === "string") setActiveRemoteFetchJobId(id);
+      setUploadWizardOpen(false);
+    },
+    onError: (e: unknown) => {
+      let msg = "Failed to start remote download.";
+      if (e && typeof e === "object" && "response" in e) {
+        const r = (e as { response?: { data?: { error?: string } } }).response;
+        if (r?.data?.error) msg = r.data.error;
+      }
+      setRemoteFetchError(msg);
+    },
+  });
+
+  useEffect(() => {
+    const st = remoteFetchJobQuery.data?.job?.status;
+    if (st === "completed" && projectId) {
+      qc.invalidateQueries({ queryKey: ["files", projectId, cpeId] });
+      qc.invalidateQueries({ queryKey: ["cpes", projectId] });
+      qc.invalidateQueries({ queryKey: ["indexingStatus", projectId, cpeId] });
+    }
+    if (st === "failed") {
+      setRemoteFetchError(remoteFetchJobQuery.data?.job?.error_message ?? "Remote fetch job failed.");
+    }
+  }, [
+    cpeId,
+    projectId,
+    qc,
+    remoteFetchJobQuery.data?.job?.error_message,
+    remoteFetchJobQuery.data?.job?.status,
+  ]);
+
+  useEffect(() => {
+    if (!remoteFetchSucceeded) return;
+    setActiveRemoteFetchJobId(null);
+  }, [remoteFetchSucceeded]);
+
+  useEffect(() => {
+    if (!uploadWizardOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setUploadWizardOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [uploadWizardOpen]);
+
   // If jump-to-line is outside the loaded window, load the page that contains it.
   useEffect(() => {
     if (scrollToLine === null || !selectedFile || logFeed.totalLines <= 0) return;
@@ -331,6 +448,7 @@ export default function LogViewerPage() {
     setProcessingStatus("Uploading files...");
     try {
       const res = await filesApi.upload(projectId, acceptedFiles);
+      setUploadWizardOpen(false);
 
       if (res.status === 202 && res.data.processing) {
         // Background processing — switch to polling
@@ -348,7 +466,9 @@ export default function LogViewerPage() {
       setTimeout(() => { setProcessingStatus(null); setIsUploading(false); }, 3000);
     }
   }, [projectId, qc, setCPE, cpeId, pollProcessingStatus]);
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
+  const { getRootProps, getInputProps, isDragActive, open: openLocalFilePicker } = useDropzone({
+    onDrop,
+  });
 
   const doSearch = (p?: string) => {
     const pat = p || searchPattern;
@@ -941,11 +1061,277 @@ export default function LogViewerPage() {
           </button>
         )}
         {!hasFiles && (
-          <div {...getRootProps()} className="cursor-pointer"><input {...getInputProps()} />
-            <button className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-muted-foreground hover:bg-muted font-medium"><CloudUploadIcon style={{ fontSize: 13 }} /> {isUploading ? "Uploading..." : "Upload"}</button>
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (showRemoteLogPanel) {
+                setUploadWizardMode("local_files");
+                setUploadWizardOpen(true);
+              } else {
+                openLocalFilePicker?.();
+              }
+            }}
+            disabled={isUploading}
+            className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-muted-foreground hover:bg-muted font-medium disabled:opacity-50"
+          >
+            <CloudUploadIcon style={{ fontSize: 13 }} /> {isUploading ? "Uploading..." : "Upload"}
+          </button>
         )}
       </div>
+
+      {showRemoteLogPanel &&
+        Boolean(activeRemoteFetchJobId) &&
+        !remoteFetchSucceeded && (
+        <div className="border-b border-border bg-muted/15 px-3 py-2 text-[10px] shrink-0">
+          {remoteFetchJobQuery.isLoading || !remoteFetchJobQuery.data ? (
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <CircularProgress size={12} />
+              Remote fetch — preparing…
+            </span>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+                <span className="font-semibold uppercase tracking-wide text-[10px] text-foreground/80">
+                  Remote fetch
+                </span>
+                {remoteFetchInFlight ? (
+                  <CircularProgress size={12} className="text-primary" />
+                ) : null}
+                <span className="capitalize">{remoteFetchJobQuery.data.job.status}</span>
+              </div>
+              {remoteFetchInFlight ? (
+                <LinearProgress className="h-0.5 rounded-full bg-muted" color="primary" />
+              ) : null}
+              {remoteFetchError ? (
+                <span className="text-destructive block text-[11px]" role="alert">
+                  {remoteFetchError}
+                </span>
+              ) : null}
+              <div className="space-y-1 text-muted-foreground pt-0.5 border-t border-border/60">
+                {remoteFetchJobQuery.data.units.map((u) => (
+                  <div key={u.id} className="flex gap-2 flex-wrap text-[10px]">
+                    <span>#{u.ordinal}</span>
+                    <span className="font-medium text-foreground">{u.serial_number}</span>
+                    {u.requested_date_from && u.requested_date_to ? (
+                      <span title="Dates from fetch request">
+                        {u.requested_date_from}–{u.requested_date_to}
+                      </span>
+                    ) : null}
+                    <span>dl: {u.download_status}</span>
+                    <span>proc: {u.process_status}</span>
+                    {u.last_error ? (
+                      <span className="inline-block min-w-0">
+                        <RemoteLogLastErrorInline lastError={u.last_error} variant="block" />
+                      </span>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {uploadWizardOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
+            role="presentation"
+            onClick={() => setUploadWizardOpen(false)}
+          >
+            <div
+              role="dialog"
+              aria-labelledby="single-cpe-upload-wizard-title"
+              aria-modal="true"
+              className="bg-card border border-border rounded-xl shadow-xl w-full max-w-2xl max-h-[92vh] overflow-y-auto mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-6 space-y-4">
+                <div className="flex justify-between gap-3 items-start">
+                  <div>
+                    <h2 id="single-cpe-upload-wizard-title" className="text-xl font-semibold">
+                      Add logs
+                    </h2>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Choose how logs should arrive for this viewer (single CPE).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUploadWizardOpen(false)}
+                    className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground shrink-0"
+                    aria-label="Close"
+                  >
+                    <CloseIcon style={{ fontSize: 22 }} />
+                  </button>
+                </div>
+
+                {showRemoteLogPanel ? (
+                  <div className="mb-1">
+                    <label className="block text-sm font-medium mb-2">Method</label>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-x-8 sm:gap-y-1">
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="radio"
+                          name="single-cpe-upload-mode"
+                          value="local_files"
+                          className="mr-2 shrink-0"
+                          checked={uploadWizardMode === "local_files"}
+                          onChange={() => setUploadWizardMode("local_files")}
+                          disabled={isUploading}
+                        />
+                        <span className="text-sm">Local file upload</span>
+                      </label>
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="radio"
+                          name="single-cpe-upload-mode"
+                          value="remote_fetch"
+                          className="mr-2 shrink-0"
+                          checked={uploadWizardMode === "remote_fetch"}
+                          onChange={() => setUploadWizardMode("remote_fetch")}
+                          disabled={isUploading}
+                        />
+                        <span className="text-sm">Log download</span>
+                      </label>
+                    </div>
+                    {uploadWizardMode === "remote_fetch" && (
+                      <p className="text-[11px] text-muted-foreground mt-2 leading-relaxed">
+                        Bearer tokens are used only for this request and are{" "}
+                        <strong className="font-medium text-foreground">not stored</strong> on the server.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {(!showRemoteLogPanel || uploadWizardMode === "local_files") && (
+                  <div className="rounded-xl border border-dashed border-border bg-muted/25 px-4 py-8 text-center space-y-3">
+                    <p className="text-sm text-muted-foreground px-2">
+                      Choose files below, or drag archives onto the sidebar drop zone.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={isUploading}
+                      onClick={() => openLocalFilePicker?.()}
+                      className="inline-flex items-center gap-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground px-5 py-2.5 disabled:opacity-50 hover:bg-primary/90 transition-colors"
+                    >
+                      <CloudUploadIcon style={{ fontSize: 18 }} /> Choose files…
+                    </button>
+                  </div>
+                )}
+
+                {showRemoteLogPanel && uploadWizardMode === "remote_fetch" && (
+                  <div className="space-y-4 pt-1">
+                    <label className="block text-xs">
+                      <span className="text-muted-foreground">Serial number</span>
+                      <input
+                        value={remoteSerial}
+                        onChange={(e) => setRemoteSerial(e.target.value)}
+                        className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        placeholder="Device serial"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="block text-xs">
+                      <span className="text-muted-foreground">Date range</span>
+                      <RangeDatePickerField
+                        startDate={remoteStartDate}
+                        endDate={remoteEndDate}
+                        disabled={isUploading || startRemoteFetchMutation.isPending}
+                        placeholder="YYYY-MM-DD – YYYY-MM-DD (click to choose)"
+                        onChange={(start, end) => {
+                          setRemoteStartDate(start);
+                          setRemoteEndDate(end);
+                        }}
+                      />
+                    </label>
+                    {remoteExtraRanges.map((row, idx) => (
+                      <div key={`xr-${idx}`} className="space-y-1 rounded-lg border border-border/80 p-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-muted-foreground">Additional range {idx + 1}</span>
+                          <button
+                            type="button"
+                            className="text-[11px] text-destructive hover:underline"
+                            onClick={() =>
+                              setRemoteExtraRanges((prev) => prev.filter((_, j) => j !== idx))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <RangeDatePickerField
+                          startDate={row.start}
+                          endDate={row.end}
+                          disabled={isUploading || startRemoteFetchMutation.isPending}
+                          placeholder="YYYY-MM-DD – YYYY-MM-DD"
+                          onChange={(start, end) => {
+                            setRemoteExtraRanges((prev) => {
+                              const next = [...prev];
+                              next[idx] = { start, end };
+                              return next;
+                            });
+                          }}
+                        />
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="text-xs text-primary hover:underline font-medium"
+                      onClick={() => setRemoteExtraRanges((prev) => [...prev, { start: "", end: "" }])}
+                    >
+                      + Add another date range
+                    </button>
+                    <label className="block text-xs">
+                      <span className="text-muted-foreground">Device registry bearer token</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={remoteRegistryBearer}
+                        onChange={(e) => setRemoteRegistryBearer(e.target.value)}
+                        className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        placeholder="Not stored on server"
+                      />
+                    </label>
+                    <label className="block text-xs">
+                      <span className="text-muted-foreground">Crash portal bearer token</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={remoteCrashBearer}
+                        onChange={(e) => setRemoteCrashBearer(e.target.value)}
+                        className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        placeholder="Not stored on server"
+                      />
+                    </label>
+                    <div className="flex flex-wrap items-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        disabled={
+                          startRemoteFetchMutation.isPending ||
+                          !remoteSerial.trim() ||
+                          !remoteStartDate ||
+                          !remoteEndDate ||
+                          !remoteRegistryBearer.trim() ||
+                          !remoteCrashBearer.trim()
+                        }
+                        onClick={() => void startRemoteFetchMutation.mutateAsync()}
+                        className="text-sm font-medium rounded-lg bg-primary text-primary-foreground px-5 py-2.5 disabled:opacity-50 hover:bg-primary/90 transition-colors"
+                      >
+                        {startRemoteFetchMutation.isPending ? "Starting…" : "Download & ingest"}
+                      </button>
+                      {remoteFetchError ? (
+                        <span className="text-sm text-destructive flex-1 min-w-[12rem]" role="alert">
+                          {remoteFetchError}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
 
       {/* ===== BODY ===== */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -980,8 +1366,25 @@ export default function LogViewerPage() {
           <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-0.5">
             {filesLoading && <p className="text-[10px] text-muted-foreground p-2">Loading...</p>}
             {!hasFiles && !filesLoading && (
-              <div {...getRootProps()} className={cn("border border-dashed rounded-lg p-3 text-center cursor-pointer text-[10px] text-muted-foreground", isDragActive && "border-primary bg-accent")}>
-                <input {...getInputProps()} /><CloudUploadIcon style={{ fontSize: 20 }} className="mx-auto mb-1 opacity-50" /><p>Drop files here</p>
+              <div
+                {...getRootProps({ noClick: true })}
+                role="presentation"
+                onClick={() => {
+                  if (showRemoteLogPanel) {
+                    setUploadWizardMode("local_files");
+                    setUploadWizardOpen(true);
+                  } else {
+                    openLocalFilePicker?.();
+                  }
+                }}
+                className={cn(
+                  "border border-dashed rounded-lg p-3 text-center cursor-pointer text-[10px] text-muted-foreground transition-colors",
+                  isDragActive && "border-primary bg-accent",
+                )}
+              >
+                <input {...getInputProps()} />
+                <CloudUploadIcon style={{ fontSize: 20 }} className="mx-auto mb-1 opacity-50" />
+                <p>Drop files here</p>
               </div>
             )}
             {(fileSearchQuery.trim()

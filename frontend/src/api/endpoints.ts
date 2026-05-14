@@ -52,6 +52,75 @@ export const projectsApi = {
   delete: (id: string) => api.delete(`/projects/${id}`),
 };
 
+// ---------- Remote CPE log bundle fetch (admin-only API) ----------
+export interface RemoteLogFetchJobSummary {
+  id: string;
+  batch_job_id: string | null;
+  status: string;
+  staging_relpath: string;
+  created_at: string | null;
+  error_message: string | null;
+}
+
+export interface RemoteLogFetchUnitDto {
+  id: string;
+  ordinal: number;
+  serial_number: string;
+  ranges_json: string;
+  /** Min/max dates from ``ranges_json`` (device-list JSON union of requested ranges). */
+  requested_date_from: string | null;
+  requested_date_to: string | null;
+  download_status: string;
+  process_status: string;
+  bundle_relpath: string | null;
+  last_error: string | null;
+}
+
+export const cpeRemoteLogsApi = {
+  listJobs: (projectId: string) =>
+    api.get<RemoteLogFetchJobSummary[]>(`/projects/${projectId}/cpe-remote-logs/jobs`),
+  getJob: (projectId: string, fetchJobId: string) =>
+    api.get<{ job: RemoteLogFetchJobSummary; units: RemoteLogFetchUnitDto[] }>(
+      `/projects/${projectId}/cpe-remote-logs/jobs/${fetchJobId}`
+    ),
+  startNormal: (
+    projectId: string,
+    body: {
+      serial_number: string;
+      device_registry_bearer: string;
+      crash_portal_bearer: string;
+      date_start?: string;
+      date_end?: string;
+      /** Preferred: one or more UTC day ranges (crash portal listing). */
+      ranges?: { start: string; end: string }[];
+    },
+  ) => api.post(`/projects/${projectId}/cpe-remote-logs/start-normal`, body),
+  startBulk: (projectId: string, formData: FormData) =>
+    api.post<{ fetch_job_id: string; batch_job_id: string; unit_count: number }>(
+      `/projects/${projectId}/cpe-remote-logs/start-bulk`,
+      formData,
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 600_000,
+      },
+    ),
+  retryFailed: (
+    projectId: string,
+    fetchJobId: string,
+    body: { device_registry_bearer: string; crash_portal_bearer: string },
+  ) =>
+    api.post(`/projects/${projectId}/cpe-remote-logs/jobs/${fetchJobId}/retry-failed`, body),
+  restart: (
+    projectId: string,
+    fetchJobId: string,
+    body: {
+      device_registry_bearer: string;
+      crash_portal_bearer: string;
+      wipe_artifacts?: boolean;
+    },
+  ) => api.post(`/projects/${projectId}/cpe-remote-logs/jobs/${fetchJobId}/restart`, body),
+};
+
 // ---------- CPEs ----------
 export const cpesApi = {
   list: (projectId: string) => api.get(`/projects/${projectId}/cpes`),
@@ -1069,6 +1138,8 @@ export interface NatcoInfo {
   code: string;
   name: string;
   description?: string;
+  /** API tenant id for remote CPE log bundle download (maps to HTTP x-tenant-id). */
+  remote_log_tenant_id?: string;
 }
 
 export const natcoApi = {
@@ -1186,10 +1257,17 @@ export const adminApi = {
 
   // NATCO management
   listNatcos: () => api.get<AdminNatco[]>("/admin/natcos"),
-  createNatco: (code: string, name: string, description?: string) =>
-    api.post("/admin/natcos", { code, name, description }),
-  updateNatco: (id: number, data: { code?: string; name?: string; description?: string }) =>
-    api.put(`/admin/natcos/${id}`, data),
+  createNatco: (code: string, name: string, description?: string, remote_log_tenant_id?: string) =>
+    api.post("/admin/natcos", { code, name, description, remote_log_tenant_id }),
+  updateNatco: (
+    id: number,
+    data: {
+      code?: string;
+      name?: string;
+      description?: string;
+      remote_log_tenant_id?: string | null;
+    }
+  ) => api.put(`/admin/natcos/${id}`, data),
   deleteNatco: (id: number) => api.delete(`/admin/natcos/${id}`),
 
   // Global patterns
