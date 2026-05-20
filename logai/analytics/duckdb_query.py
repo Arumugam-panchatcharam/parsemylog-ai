@@ -254,6 +254,7 @@ def _fleet_summary_from_flat_parquet_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "firmware_analysis": {
             "version_distribution": {},
             "unique_versions": int(row.get("unique_firmware_versions") or 0),
+            "device_serials_with_empty_firmware": [],
         },
         "error_analysis": {
             "top_templates_by_domain": {},

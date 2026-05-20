@@ -1,0 +1,54 @@
+# Generic Pattern Lab starter — teaches events + rules without domain-specific WiFi jargon.
+# Events label log lines; rules detect patterns in labeled timelines (preview/ETL use your project's logs).
+
+events:
+  APP_STARTED:
+    matchers:
+      - logline_contains: "application started"
+      - logline_contains: "service started"
+    sta_mac:
+      logline_regex: "(?i)([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
+
+  APP_STOPPED:
+    matchers:
+      - logline_contains: "application stopped"
+      - logline_contains: "service stopped"
+
+  ERROR_LINE:
+    matchers:
+      - logline_contains: " error"
+      - logline_contains: " ERROR "
+      - template_contains: error
+
+issues:
+  stop_without_recent_start:
+    category: lifecycle
+    severity: medium
+    rca_hint: A stop was seen but no matching start within the time window (possible crash or missing logs).
+    detect:
+      type: missing_followup
+      trigger: APP_STARTED
+      expect: APP_STOPPED
+      group_by: [sta_mac, ifname]
+      within_sec: 300
+
+  error_burst:
+    category: reliability
+    severity: high
+    rca_hint: Many error lines in a short period — possible instability or retry storm.
+    detect:
+      type: burst_count
+      event: ERROR_LINE
+      min_occurrence: 5
+      window_sec: 60
+      group_by: [sta_mac, ifname]
+
+  start_error_stop_sequence:
+    category: lifecycle
+    severity: medium
+    rca_hint: Start, then errors, then stop within a short window — typical unhealthy shutdown path.
+    detect:
+      type: ordered_sequence
+      sequence: [APP_STARTED, ERROR_LINE, APP_STOPPED]
+      max_gap_sec: 120
+      group_by: [sta_mac, ifname]

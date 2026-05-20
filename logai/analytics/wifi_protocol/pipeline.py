@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import polars as pl
 import yaml
@@ -55,6 +55,15 @@ def _load_event_issue_yaml(path: Path | None = None) -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _event_issue_from_source(
+    yaml_path: Path | None,
+    event_issue_doc: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if event_issue_doc is not None:
+        return dict(event_issue_doc)
+    return _load_event_issue_yaml(yaml_path)
+
+
 def coerce_timestamp(df: pl.DataFrame) -> pl.DataFrame:
     if df.height == 0 or "timestamp" not in df.columns:
         return df
@@ -79,14 +88,18 @@ def run_wifi_sta_issues(
     device_serial: str,
     write_labeled_debug: bool = False,
     yaml_path: Path | None = None,
+    event_issue_doc: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
     Load ``wireless_rg.parquet`` for CPE ``serial``, label events, extract Drain3
     parameters, run issue detectors, return ``sta_issues`` and summary stats.
+
+    If ``event_issue_doc`` is set, it is used as the YAML root (``events`` / ``issues``)
+    instead of reading from ``yaml_path`` or the repository default.
     """
     cpe_dir = layout.get_cpe_source_dir(serial)
     wireless_pq = cpe_dir / "wireless_rg.parquet"
-    raw = _load_event_issue_yaml(yaml_path)
+    raw = _event_issue_from_source(yaml_path, event_issue_doc)
     events = raw.get("events") or {}
     issues = raw.get("issues") or {}
 

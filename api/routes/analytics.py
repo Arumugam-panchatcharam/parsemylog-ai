@@ -7,9 +7,26 @@ Provides fleet-level insights, WiFi STA issues, and SelfHeal signals.
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 import logging
 
+from api.app import dbm
+from api.auth import get_user_id
+from api.pattern_lab_validation import validate_pattern_lab
+from api.pattern_lab_storage import (
+    delete_profile,
+    doc_from_request_body,
+    duplicate_from_request_body,
+    duplicate_profile,
+    get_pattern_lab_state,
+    list_profiles,
+    load_active_or_starter,
+    load_profile,
+    load_starter_example,
+    save_profile,
+    set_active_profile,
+)
+from logai.analytics.pattern_lab_paths import read_active_profile_id, sanitize_profile_id
 from logai.analytics.duckdb_query import (
     get_fleet_summary,
     get_sta_issues_analysis,
@@ -18,8 +35,18 @@ from logai.analytics.duckdb_query import (
     execute_custom_query,
     get_analytics_schema
 )
+from logai.analytics.pattern_lab_preview import preview_pattern_lab
 
 logger = logging.getLogger(__name__)
+
+
+def _verify_project_access(project_id: str, user_id: int) -> Tuple[Optional[Any], Optional[Any]]:
+    project = dbm.get_project_by_id(project_id)
+    if not project:
+        return None, (jsonify({"success": False, "error": "Project not found"}), 404)
+    if project.user_id != user_id:
+        return None, (jsonify({"success": False, "error": "Access denied"}), 403)
+    return project, None
 
 # Create Blueprint
 analytics_bp = Blueprint('analytics', __name__)
@@ -272,4 +299,242 @@ def get_project_analytics_schema(project_id: str):
             "success": False,
             "error": str(e)
         }), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab', methods=['GET'])
+@jwt_required()
+def get_pattern_lab(project_id: str):
+    """Load active profile for project, or generic starter example if none selected."""
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+        profile_q = (request.args.get("profile") or "").strip()
+        if profile_q:
+            pid = sanitize_profile_id(profile_q)
+            if not pid:
+                return jsonify({"success": False, "error": "Invalid profile name"}), 400
+            doc = load_profile(user_id, pid)
+            if doc is None:
+                return jsonify({"success": False, "error": "Profile not found"}), 404
+            profiles = list_profiles(user_id)
+            active = read_active_profile_id(user_id, project_id)
+            return jsonify(
+                {
+                    "success": True,
+                    "data": doc,
+                    "source": "profile",
+                    "active_profile": active,
+                    "loaded_profile": pid,
+                    "profiles": profiles,
+                }
+            )
+        data, source, active, profiles = get_pattern_lab_state(user_id, project_id)
+        return jsonify(
+            {
+                "success": True,
+                "data": data,
+                "source": source,
+                "active_profile": active,
+                "loaded_profile": active if source == "profile" else None,
+                "profiles": profiles,
+            }
+        )
+    except Exception as e:
+        logger.error("pattern-lab GET error for %s: %s", project_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab/active', methods=['POST'])
+@jwt_required()
+def set_pattern_lab_active(project_id: str):
+    """Set active profile for this project."""
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+        body = request.get_json(silent=True)
+        profile_raw = body.get("profile") if isinstance(body, dict) else None
+        if not isinstance(profile_raw, str):
+            return jsonify({"success": False, "error": "profile is required"}), 400
+        pid = sanitize_profile_id(profile_raw)
+        if not pid:
+            return jsonify({"success": False, "error": "Invalid profile name"}), 400
+        try:
+            active = set_active_profile(user_id, project_id, pid)
+        except ValueError as ve:
+            return jsonify({"success": False, "error": str(ve)}), 400
+        data, source, _active, profiles = get_pattern_lab_state(user_id, project_id)
+        return jsonify(
+            {
+                "success": True,
+                "active_profile": active,
+                "data": data,
+                "source": source,
+                "profiles": profiles,
+            }
+        )
+    except Exception as e:
+        logger.error("pattern-lab active POST error for %s: %s", project_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab', methods=['PUT'])
+@jwt_required()
+def put_pattern_lab(project_id: str):
+    """Save pattern lab to a named user profile and set it active for this project."""
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+        body = request.get_json(silent=True)
+        doc, parse_err, profile_id = doc_from_request_body(body)
+        if parse_err:
+            return jsonify({"success": False, "error": parse_err}), 400
+        if not profile_id:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "profile name is required (letters, numbers, underscore, hyphen)",
+                }
+            ), 400
+        ok, msg = validate_pattern_lab(doc)
+        if not ok:
+            return jsonify({"success": False, "error": msg}), 400
+        try:
+            path = save_profile(user_id, profile_id, doc)
+            set_active_profile(user_id, project_id, profile_id)
+        except ValueError as ve:
+            return jsonify({"success": False, "error": str(ve)}), 400
+        return jsonify({"success": True, "path": str(path), "profile": profile_id})
+    except Exception as e:
+        logger.error("pattern-lab PUT error for %s: %s", project_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab/profile', methods=['DELETE'])
+@jwt_required()
+def delete_pattern_lab_profile(project_id: str):
+    """Delete one user profile and unset active profile if it points to it."""
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+        profile_q = (request.args.get("profile") or "").strip()
+        pid = sanitize_profile_id(profile_q)
+        if not pid:
+            return jsonify({"success": False, "error": "profile query parameter is required"}), 400
+        active = read_active_profile_id(user_id, project_id)
+        deleted = delete_profile(user_id, pid)
+        if not deleted:
+            return jsonify({"success": False, "error": "Profile not found"}), 404
+        if active == pid:
+            from logai.analytics.pattern_lab_paths import project_active_profile_path
+            ap = project_active_profile_path(user_id, project_id)
+            if ap.is_file():
+                ap.unlink()
+        data, source, active_now, profiles = get_pattern_lab_state(user_id, project_id)
+        return jsonify(
+            {
+                "success": True,
+                "deleted_profile": pid,
+                "active_profile": active_now,
+                "data": data,
+                "source": source,
+                "profiles": profiles,
+            }
+        )
+    except Exception as e:
+        logger.error("pattern-lab profile DELETE error for %s: %s", project_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab/profile/duplicate', methods=['POST'])
+@jwt_required()
+def duplicate_pattern_lab_profile(project_id: str):
+    """Clone a saved profile or the current editor document into a new profile name."""
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+        body = request.get_json(silent=True)
+        target_id, source_id, doc, parse_err = duplicate_from_request_body(body)
+        if parse_err:
+            return jsonify({"success": False, "error": parse_err}), 400
+        try:
+            path = duplicate_profile(user_id, target_id, source_id=source_id, doc=doc)
+        except ValueError as ve:
+            return jsonify({"success": False, "error": str(ve)}), 400
+        profiles = list_profiles(user_id)
+        return jsonify(
+            {
+                "success": True,
+                "profile": target_id,
+                "path": str(path),
+                "profiles": profiles,
+            }
+        )
+    except Exception as e:
+        logger.error("pattern-lab duplicate error for %s: %s", project_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab-preview', methods=['POST'])
+@jwt_required()
+def post_pattern_lab_preview(project_id: str):
+    """
+    Run issue detectors for one CPE using request body or saved lab file.
+
+    Query: cpe_serial (required, CPE folder id). use_saved=1 uses active profile for this project.
+    Body (when use_saved is not set): JSON { "events": {...}, "issues": {...} }.
+    """
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+
+        cpe_serial = (request.args.get("cpe_serial") or "").strip()
+        if not cpe_serial:
+            return jsonify({"success": False, "error": "cpe_serial query parameter is required"}), 400
+
+        use_saved = request.args.get("use_saved", "").lower() in ("1", "true", "yes")
+        if use_saved:
+            doc = load_active_or_starter(user_id, project_id)
+        else:
+            body = request.get_json(silent=True)
+            doc, parse_err, _profile_id = doc_from_request_body(body)
+            if parse_err:
+                return jsonify({"success": False, "error": parse_err}), 400
+
+        ok, msg = validate_pattern_lab(doc)
+        if not ok:
+            return jsonify({"success": False, "error": msg}), 400
+
+        rows, stats = preview_pattern_lab(str(user_id), project_id, cpe_serial, doc)
+        return jsonify({"success": True, "data": rows, "stats": stats, "count": len(rows)})
+    except Exception as e:
+        logger.error("pattern-lab-preview error for %s: %s", project_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@analytics_bp.route('/projects/<project_id>/analytics/pattern-lab-defaults', methods=['GET'])
+@jwt_required()
+def get_pattern_lab_defaults(project_id: str):
+    """Return generic starter example events/issues for quick onboarding."""
+    try:
+        user_id = get_user_id()
+        _project, err = _verify_project_access(project_id, user_id)
+        if err:
+            return err
+        data = load_starter_example()
+        return jsonify({"success": True, "data": data, "source": "starter"})
+    except Exception as e:
+        logger.error("pattern-lab-defaults GET error: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 

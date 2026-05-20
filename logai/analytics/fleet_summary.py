@@ -221,6 +221,37 @@ def _load_and_aggregate_fleet_data(
     return fleet_summary
 
 
+def _device_serials_with_empty_firmware(device_health_df: pl.DataFrame) -> List[str]:
+    """
+    Serials where firmware_version is null or blank after fleet enrichment.
+
+    Used in the Analytics UI to identify CPEs that still lack version metadata.
+    """
+    if len(device_health_df) == 0:
+        return []
+    if "device_serial" not in device_health_df.columns:
+        return []
+    if "firmware_version" not in device_health_df.columns:
+        return []
+    stripped = (
+        device_health_df.select(
+            [
+                pl.col("device_serial"),
+                pl.col("firmware_version")
+                .cast(pl.Utf8, strict=False)
+                .fill_null("")
+                .str.strip_chars()
+                .alias("_fw"),
+            ]
+        )
+        .filter(pl.col("_fw") == "")
+    )
+    raw = stripped["device_serial"].unique().to_list()
+    return sorted(
+        str(s).strip() for s in raw if s is not None and str(s).strip()
+    )
+
+
 def _generate_fleet_aggregations(reboot_features_df: pl.DataFrame,
                                 device_health_df: pl.DataFrame,
                                 signals_df: pl.DataFrame,
@@ -256,6 +287,8 @@ def _generate_fleet_aggregations(reboot_features_df: pl.DataFrame,
             row["firmware_version"]: row["count"]
             for row in firmware_summary.to_dicts()
         }
+
+    empty_fw_serials = _device_serials_with_empty_firmware(device_health_df)
     
     # Top error templates by domain
     top_templates = {}
@@ -305,7 +338,8 @@ def _generate_fleet_aggregations(reboot_features_df: pl.DataFrame,
         },
         "firmware_analysis": {
             "version_distribution": firmware_distribution,
-            "unique_versions": len(firmware_distribution)
+            "unique_versions": len(firmware_distribution),
+            "device_serials_with_empty_firmware": empty_fw_serials,
         },
         "error_analysis": {
             "top_templates_by_domain": top_templates,

@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { FullPageLoading } from "@/components/ui/Loading";
 import { PageHeader } from "@/components/ui/PageHeader";
+import PatternLabTab from "@/components/analytics/PatternLabTab";
 
 /** Match Syslog/Telemetry: full content width (no max-w-7xl). */
 const ANALYTICS_LAYOUT_CLASS =
@@ -85,6 +86,7 @@ interface FleetSummary {
   firmware_analysis: {
     version_distribution: Record<string, number>;
     unique_versions: number;
+    device_serials_with_empty_firmware?: string[];
   };
   module_graph_version: string;
 }
@@ -92,7 +94,7 @@ interface FleetSummary {
 function AnalyticsPage() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"overview" | "wifi-sta" | "self-heal">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "wifi-sta" | "pattern-lab" | "self-heal">("overview");
   /** Shared CPE serial filter for both WiFi STA and SelfHeal lists (substring match on serial). */
   const [fleetSignalsCpeSearch, setFleetSignalsCpeSearch] = useState<string>("");
   /** Wi‑Fi STA: substring search on issue type */
@@ -470,7 +472,7 @@ function AnalyticsPage() {
             CPE Analytics
           </span>
         }
-        description="Fleet overview, WiFi STA detail, and SelfHeal detail"
+        description="Fleet overview, WiFi STA detail, pattern lab, and SelfHeal detail"
         actions={
           <Button
             variant="outline"
@@ -510,6 +512,7 @@ function AnalyticsPage() {
             [
               ["overview", "Overview"],
               ["wifi-sta", "WiFi STA"],
+              ["pattern-lab", "Pattern lab"],
               ["self-heal", "SelfHeal"],
             ] as const
           ).map(([id, label]) => (
@@ -608,25 +611,58 @@ function AnalyticsPage() {
             <div className="bg-muted/50 rounded-lg p-6">
               <h3 className="text-lg font-medium mb-4">Firmware Versions</h3>
               <div className="space-y-3">
-                {Object.entries(fleetData.firmware_analysis.version_distribution)
-                  .sort(([, a], [, b]) => b - a)
-                  .slice(0, 5)
-                  .map(([version, count]) => (
-                    <div key={version} className="flex items-center justify-between">
-                      <span className="text-sm font-mono">{version}</span>
-                      <div className="flex items-center gap-2">
-                        <div className="w-24 bg-muted rounded-full h-2">
-                          <div
-                            className="bg-emerald-600 dark:bg-emerald-500 h-2 rounded-full"
-                            style={{
-                              width: `${(count / Math.max(...Object.values(fleetData.firmware_analysis.version_distribution))) * 100}%`,
-                            }}
-                          />
+                {(() => {
+                  const fwDist = fleetData.firmware_analysis.version_distribution;
+                  const fwMax = Math.max(1, ...Object.values(fwDist));
+                  const emptySerials =
+                    fleetData.firmware_analysis.device_serials_with_empty_firmware ?? [];
+                  return Object.entries(fwDist)
+                    .sort(([, a], [, b]) => b - a)
+                    .slice(0, 5)
+                    .map(([version, count]) => {
+                      const isEmptyLabel = !version || !String(version).trim();
+                      return (
+                        <div
+                          key={version || "__empty_firmware__"}
+                          className="flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="text-sm font-mono break-all">
+                              {isEmptyLabel ? (
+                                <span className="text-amber-700 dark:text-amber-400">
+                                  (missing firmware)
+                                </span>
+                              ) : (
+                                version
+                              )}
+                            </span>
+                            {isEmptyLabel ? (
+                              emptySerials.length > 0 ? (
+                                <p className="text-xs text-muted-foreground mt-1 break-words">
+                                  CPE: {emptySerials.join(", ")}
+                                </p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  Regenerate fleet summary to list affected CPE serials.
+                                </p>
+                              )
+                            ) : null}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="w-24 bg-muted rounded-full h-2">
+                              <div
+                                className="bg-emerald-600 dark:bg-emerald-500 h-2 rounded-full"
+                                style={{
+                                  width: `${(count / fwMax) * 100}%`,
+                                }}
+                              />
+                            </div>
+                            <span className="text-sm text-muted-foreground tabular-nums">{count}</span>
+                          </div>
                         </div>
-                        <span className="text-sm text-muted-foreground">{count}</span>
-                      </div>
-                    </div>
-                  ))}
+                      );
+                    });
+                })()}
               </div>
             </div>
           </div>
@@ -825,8 +861,9 @@ function AnalyticsPage() {
         </div>
 
         <p className="text-sm text-muted-foreground">
-          Open <span className="font-medium">WiFi STA</span> or <span className="font-medium">SelfHeal</span>{" "}
-          for Polars ETL, filters, and per-CPE detail.
+          Open <span className="font-medium">WiFi STA</span>,{" "}
+          <span className="font-medium">Pattern lab</span>, or <span className="font-medium">SelfHeal</span> for
+          Polars ETL, filters, and per-CPE detail.
         </p>
           </>
         ) : activeTab === "wifi-sta" ? (
@@ -995,6 +1032,8 @@ function AnalyticsPage() {
               </section>
             </div>
           </div>
+        ) : activeTab === "pattern-lab" ? (
+          <PatternLabTab etlBanner={renderSignalsEtlBanner()} />
         ) : (
           <div className="bg-card rounded-lg border border-border shadow-sm">
             {renderSignalsEtlBanner()}

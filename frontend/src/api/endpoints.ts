@@ -1915,6 +1915,7 @@ export interface AnalyticsFleetSummary {
   firmware_analysis: {
     version_distribution: Record<string, number>;
     unique_versions: number;
+    device_serials_with_empty_firmware?: string[];
   };
   error_analysis: {
     top_templates_by_domain: Record<string, Array<{ template: string; count: number }>>;
@@ -1987,6 +1988,31 @@ export interface AnalyticsStaIssueGroup {
   sta_list: AnalyticsStaIssueStaEntry[];
 }
 
+/** Pattern lab: editable events/issues (e.g. auth/assoc map shape). */
+export interface PatternLabDoc {
+  events: Record<string, unknown>;
+  issues: Record<string, unknown>;
+}
+
+/** Pipeline stats returned with pattern-lab preview. */
+export interface PatternLabPreviewStats {
+  device_serial?: string;
+  wireless_rows?: number;
+  labeled_events?: number;
+  labeled_with_sta_mac?: number;
+  sta_issues_rows?: number;
+  sta_mac_rate?: number;
+  skipped?: boolean;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+export interface PatternLabProfileInfo {
+  id: string;
+  name: string;
+  updated_at?: string | null;
+}
+
 export const analyticsApi = {
   /**
    * Backfill Polars ETL + fleet summary. Pass `force_polars_etl: true` to re-run ETL
@@ -2032,6 +2058,88 @@ export const analyticsApi = {
     api.get<AnalyticsSelfHealInsight[]>(`/projects/${projectId}/analytics/selfheal-insights`, {
       params: options,
     }),
+
+  getPatternLab: (projectId: string) =>
+    api.get<{
+      success: boolean;
+      data?: PatternLabDoc;
+      source?: "profile" | "starter";
+      active_profile?: string | null;
+      loaded_profile?: string | null;
+      profiles?: PatternLabProfileInfo[];
+      error?: string;
+    }>(`/projects/${projectId}/analytics/pattern-lab`),
+
+  getPatternLabDefaults: (projectId: string) =>
+    api.get<{ success: boolean; data?: PatternLabDoc; error?: string }>(
+      `/projects/${projectId}/analytics/pattern-lab-defaults`,
+    ),
+
+  putPatternLab: (projectId: string, doc: PatternLabDoc, profile: string) =>
+    api.put<{ success: boolean; path?: string; profile?: string; error?: string }>(
+      `/projects/${projectId}/analytics/pattern-lab`,
+      { ...doc, profile },
+    ),
+
+  setPatternLabActive: (projectId: string, profile: string) =>
+    api.post<{
+      success: boolean;
+      active_profile?: string | null;
+      data?: PatternLabDoc;
+      source?: "profile" | "starter";
+      profiles?: PatternLabProfileInfo[];
+      error?: string;
+    }>(`/projects/${projectId}/analytics/pattern-lab/active`, { profile }),
+
+  deletePatternLabProfile: (projectId: string, profile: string) =>
+    api.delete<{
+      success: boolean;
+      deleted_profile?: string;
+      active_profile?: string | null;
+      data?: PatternLabDoc;
+      source?: "profile" | "starter";
+      profiles?: PatternLabProfileInfo[];
+      error?: string;
+    }>(`/projects/${projectId}/analytics/pattern-lab/profile`, { params: { profile } }),
+
+  duplicatePatternLabProfile: (
+    projectId: string,
+    payload: {
+      target_profile: string;
+      source_profile?: string;
+      events?: Record<string, unknown>;
+      issues?: Record<string, unknown>;
+    },
+  ) =>
+    api.post<{
+      success: boolean;
+      profile?: string;
+      path?: string;
+      profiles?: PatternLabProfileInfo[];
+      error?: string;
+    }>(`/projects/${projectId}/analytics/pattern-lab/profile/duplicate`, payload),
+
+  previewPatternLab: (
+    projectId: string,
+    opts: { cpe_serial: string; use_saved?: boolean },
+    doc?: PatternLabDoc,
+  ) =>
+    api.post<{
+      success: boolean;
+      data?: AnalyticsStaIssue[];
+      stats?: PatternLabPreviewStats;
+      count?: number;
+      error?: string;
+    }>(
+      `/projects/${projectId}/analytics/pattern-lab-preview`,
+      doc ?? {},
+      {
+        params: {
+          cpe_serial: opts.cpe_serial,
+          ...(opts.use_saved ? { use_saved: 1 } : {}),
+        },
+      },
+    ),
 
   executeCustomQuery: (projectId: string, sql: string) =>
     api.post<{ data: any[]; count: number }>(`/projects/${projectId}/analytics/custom-query`, {
