@@ -79,6 +79,17 @@ class DeviceRegistryClient:
             if r.status_code == 401:
                 ec = remote_err_codes.DEVICE_REGISTRY_UNAUTHORIZED
                 rem = remote_err_codes.REMEDIATION_REGISTRY_BEARER
+            elif r.status_code == 403:
+                ec = remote_err_codes.DEVICE_REGISTRY_FORBIDDEN
+                rem = (
+                    f"{remote_err_codes.REMEDIATION_REGISTRY_TENANT} "
+                    f"{remote_err_codes.REMEDIATION_REGISTRY_BEARER}"
+                )
+            logger.warning(
+                "[RemoteFetch] Registry deep-link failed HTTP %s (x-tenant-id=%s)",
+                r.status_code,
+                self._tenant,
+            )
             raise RemoteLogFetchError(msg, error_code=ec, remediation=rem)
         try:
             data = json.loads(r.content.decode("utf-8"))
@@ -108,6 +119,17 @@ class DeviceRegistryClient:
             if r2.status_code == 401:
                 ec2 = remote_err_codes.DEVICE_REGISTRY_UNAUTHORIZED
                 rem2 = remote_err_codes.REMEDIATION_REGISTRY_BEARER
+            elif r2.status_code == 403:
+                ec2 = remote_err_codes.DEVICE_REGISTRY_FORBIDDEN
+                rem2 = (
+                    f"{remote_err_codes.REMEDIATION_REGISTRY_TENANT} "
+                    f"{remote_err_codes.REMEDIATION_REGISTRY_BEARER}"
+                )
+            logger.warning(
+                "[RemoteFetch] Registry cpe detail failed HTTP %s (x-tenant-id=%s)",
+                r2.status_code,
+                self._tenant,
+            )
             raise RemoteLogFetchError(msg, error_code=ec2, remediation=rem2)
         try:
             info2 = json.loads(r2.content.decode("utf-8")).get("info") or {}

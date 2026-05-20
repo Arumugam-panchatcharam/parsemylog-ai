@@ -24,6 +24,12 @@ from api.services.cpe_remote_log.device_registry import DeviceRegistryClient
 from api.services.cpe_remote_log.errors import RemoteLogFetchError
 from api.services.cpe_remote_log.http_client import http_request
 from api.services.cpe_remote_log.http_hints import bundle_post_hint, crash_log_list_hint
+from api.services.cpe_remote_log.range_datetime import (
+    DEFAULT_END_TIME,
+    DEFAULT_START_TIME,
+    build_crash_date_filter_json,
+    split_range_bound,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +80,7 @@ def _list_log_ids_page(
     date_end: str,
     page: int,
 ) -> tuple[int, list[str]]:
-    payload = json.dumps({"startDate": date_start[:10], "endDate": date_end[:10]})
+    payload = build_crash_date_filter_json(date_start, date_end)
     enc = quote(payload, safe="")
     page_size = clamp_page_size()
     qs = (
@@ -134,6 +140,79 @@ def _list_log_ids_page(
     return 200, page_ids
 
 
+def _list_log_ids_registry_page(
+    *,
+    cfg: RemoteLogHttpConfig,
+    tenant_id: str,
+    registry_bearer: str,
+    cpe_numeric_id: str,
+    date_start: str,
+    date_end: str,
+    page: int,
+) -> tuple[int, list[str]]:
+    """
+    List log file IDs via device registry ``v1/cpe/{id}/logInfo`` (same bearer as registry lookups).
+
+    Used when crash-portal bearer and/or ``CPE_REMOTE_LOG_CRASH_NATCO_KEY`` are not configured.
+    """
+    cpe_id = str(cpe_numeric_id or "").strip()
+    if not cpe_id:
+        return 400, []
+    payload = build_crash_date_filter_json(date_start, date_end)
+    enc = quote(payload, safe="")
+    page_size = clamp_page_size()
+    qs = f"size={page_size}&page={page}&dateFilter={enc}"
+    url = device_registry_api_url(
+        cdn_base=cfg.cdn_base,
+        device_registry_path=cfg.device_registry_path,
+        route=f"v1/cpe/{cpe_id}/logInfo?{qs}",
+    )
+    portal = (cfg.portal_origin or cfg.cdn_base or "").strip().rstrip("/")
+    origin = portal or (cfg.cdn_base or "").strip()
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "en-US,en;q=0.9",
+        "authorization": f"Bearer {registry_bearer}",
+        "origin": origin,
+        "referer": f"{origin}/",
+        "user-agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        ),
+        "x-tenant-id": tenant_id.strip().lower(),
+    }
+    r = http_request(
+        "GET",
+        url,
+        headers={k: str(v) for k, v in headers.items()},
+        timeout_sec=cfg.http_timeout_sec,
+        label=f"registry-logInfo-{page}",
+    )
+    if r.status_code == 204:
+        return 204, []
+    if r.status_code != 200:
+        return r.status_code, []
+    if not r.content:
+        return 200, []
+    try:
+        tree = json.loads(r.content.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        if _crash_debug_body_enabled():
+            snippet = r.content[:1200].decode("utf-8", errors="replace")
+            logger.warning("[RemoteFetch] Registry logInfo JSON decode failed page=%s: %s", page, snippet)
+        return 200, []
+    page_ids = extract_log_ids_from_json(tree)
+    if not page_ids and _crash_debug_body_enabled():
+        snippet = r.content[:1200].decode("utf-8", errors="replace")
+        logger.warning(
+            "[RemoteFetch] Registry logInfo parsed 0 file IDs — page=%s len=%s head=%s",
+            page,
+            len(r.content),
+            snippet,
+        )
+    return 200, page_ids
+
+
 def _peek_crash_list_mac_variant(
     *,
     cfg: RemoteLogHttpConfig,
@@ -148,8 +227,10 @@ def _peek_crash_list_mac_variant(
     variants = _crash_portal_mac_id_variants(mac_lower)
     fallback = variants[0] if variants else mac_lower
 
-    ps, pe = probe_start[:10], probe_end[:10]
-    if len(ps) != 10 or len(pe) != 10:
+    try:
+        split_range_bound(probe_start, DEFAULT_START_TIME)
+        split_range_bound(probe_end, DEFAULT_END_TIME)
+    except ValueError:
         return fallback
 
     for cand in variants:
@@ -159,8 +240,8 @@ def _peek_crash_list_mac_variant(
             crash_bearer=crash_bearer,
             natco_key=natco_key,
             mac_lower=cand,
-            date_start=ps,
-            date_end=pe,
+            date_start=probe_start,
+            date_end=probe_end,
             page=0,
         )
         if probe_ids:
@@ -169,7 +250,7 @@ def _peek_crash_list_mac_variant(
             return cand
 
         if code0 not in (200, 204):
-            span = f"{ps}–{pe}"
+            span = f"{probe_start}–{probe_end}"
             _raise_crash_listing_http(http_code=code0, date_span=span, page=0)
 
     return fallback
@@ -269,20 +350,20 @@ def download_serial_bundle_to_zip(
     cfg = load_remote_log_http_config()
     if not cfg.cdn_base:
         raise RemoteLogFetchError("CPE_REMOTE_LOG_CDN_BASE is not configured.")
-    natco_key = resolve_crash_natco_key_for_code(natco_code)
-    if not natco_key:
+    if not (cfg.device_registry_path or "").strip():
         raise RemoteLogFetchError(
-            "CPE_REMOTE_LOG_CRASH_NATCO_KEY (or CPE_REMOTE_LOG_CRASH_NATCO_KEY__NATCO) missing."
+            "CPE_REMOTE_LOG_DEVICE_REGISTRY_PATH is not configured "
+            "(path segment between CDN host and v1/cpe/... routes)."
         )
-    """
-    if not (cfg.cms_cookie and cfg.cms_x_dtpc and cfg.cms_x_dtreferer):
+    natco_key = resolve_crash_natco_key_for_code(natco_code)
+    use_crash_portal = bool((crash_portal_bearer or "").strip()) and bool(natco_key)
+    if use_crash_portal and not (cfg.cms_cookie and cfg.cms_x_dtpc and cfg.cms_x_dtreferer):
         logger.warning(
             "[RemoteFetch] Crash-portal CMS headers are incomplete "
             "(set CPE_REMOTE_LOG_CMS_COOKIE, CPE_REMOTE_LOG_CMS_X_DTPC, "
             "CPE_REMOTE_LOG_CMS_X_DTREFERER). Without them the crash log list endpoint often responds "
             "with HTTP 204 or empty payloads even when logs exist."
         )
-    """
     staging_dir.mkdir(parents=True, exist_ok=True)
     safe_serial_tag = "".join(ch if ch.isalnum() else "_" for ch in serial.strip())[:240] or "device"
     work_root = staging_dir / f"_work_{safe_serial_tag}"
@@ -311,6 +392,14 @@ def download_serial_bundle_to_zip(
     if resolved is None:
         raise RemoteLogFetchError(f"Could not resolve device serial '{serial}'.")
 
+    if not use_crash_portal:
+        logger.info(
+            "[RemoteFetch] Resolved cpeId=%s; registry logInfo listing (no crash bearer / crash NATCO key). "
+            "x-tenant-id=%s",
+            resolved.cpe_numeric_id,
+            tenant_id.strip().lower(),
+        )
+
     # Final zip must match batch CPE record serial (original JSON line).
     zip_stem = (bundle_filename or serial.strip()).removesuffix(".zip")
     safe_stem = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in zip_stem)[:200]
@@ -325,37 +414,59 @@ def download_serial_bundle_to_zip(
         raise RemoteLogFetchError("No date ranges for device.")
 
     rng0 = ranges[0]
-    probe_s = str(rng0.get("start") or "").strip()[:10]
-    probe_e = str(rng0.get("end") or "").strip()[:10]
+    probe_start_raw = str(rng0.get("start") or "").strip()
+    probe_end_raw = str(rng0.get("end") or "").strip()
     crash_mac_id = resolved.mac_lower
-    if len(probe_s) == 10 and len(probe_e) == 10:
-        crash_mac_id = _peek_crash_list_mac_variant(
-            cfg=cfg,
-            tenant_id=tenant_id,
-            crash_bearer=crash_portal_bearer,
-            natco_key=natco_key,
-            mac_lower=resolved.mac_lower,
-            probe_start=probe_s,
-            probe_end=probe_e,
-        )
-
-    for rng in ranges:
-        start_d = str(rng.get("start") or "").strip()[:10]
-        end_d = str(rng.get("end") or "").strip()[:10]
-        if len(start_d) != 10 or len(end_d) != 10:
-            raise RemoteLogFetchError(f"Invalid range {rng!r} — use YYYY-MM-DD.")
-        page = 0
-        while True:
-            code, page_ids = _list_log_ids_page(
+    if use_crash_portal:
+        try:
+            probe_s, _ = split_range_bound(probe_start_raw, DEFAULT_START_TIME)
+            probe_e, _ = split_range_bound(probe_end_raw, DEFAULT_END_TIME)
+        except ValueError:
+            probe_s, probe_e = "", ""
+        if probe_s and probe_e:
+            crash_mac_id = _peek_crash_list_mac_variant(
                 cfg=cfg,
-                _tenant_id=tenant_id,
+                tenant_id=tenant_id,
                 crash_bearer=crash_portal_bearer,
                 natco_key=natco_key,
-                mac_lower=crash_mac_id,
-                date_start=start_d,
-                date_end=end_d,
-                page=page,
+                mac_lower=resolved.mac_lower,
+                probe_start=probe_start_raw,
+                probe_end=probe_end_raw,
             )
+
+    for rng in ranges:
+        start_raw = str(rng.get("start") or "").strip()
+        end_raw = str(rng.get("end") or "").strip()
+        try:
+            start_d, _ = split_range_bound(start_raw, DEFAULT_START_TIME)
+            end_d, _ = split_range_bound(end_raw, DEFAULT_END_TIME)
+        except ValueError as exc:
+            raise RemoteLogFetchError(
+                f"Invalid range {rng!r} — use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS."
+            ) from exc
+        page = 0
+        while True:
+            if use_crash_portal:
+                code, page_ids = _list_log_ids_page(
+                    cfg=cfg,
+                    _tenant_id=tenant_id,
+                    crash_bearer=crash_portal_bearer,
+                    natco_key=natco_key,
+                    mac_lower=crash_mac_id,
+                    date_start=start_raw,
+                    date_end=end_raw,
+                    page=page,
+                )
+            else:
+                code, page_ids = _list_log_ids_registry_page(
+                    cfg=cfg,
+                    tenant_id=tenant_id,
+                    registry_bearer=device_registry_bearer,
+                    cpe_numeric_id=resolved.cpe_numeric_id,
+                    date_start=start_raw,
+                    date_end=end_raw,
+                    page=page,
+                )
             if page == 0:
                 listing_first_page.append(
                     (start_d, end_d, code, len(page_ids)),
@@ -366,7 +477,12 @@ def download_serial_bundle_to_zip(
                 break
             if code != 200:
                 span = f"{start_d}…{end_d}"
-                _raise_crash_listing_http(http_code=code, date_span=span, page=page)
+                if use_crash_portal:
+                    _raise_crash_listing_http(http_code=code, date_span=span, page=page)
+                raise RemoteLogFetchError(
+                    f"Registry logInfo listing failed (HTTP {code}) for range {span} page={page}. "
+                    "Check device registry bearer, x-tenant-id (NATCO remote_log_tenant_id), and date range."
+                )
             if not page_ids:
                 break
 
@@ -392,57 +508,75 @@ def download_serial_bundle_to_zip(
     if downloaded_chunks == 0:
         shutil.rmtree(work_root, ignore_errors=True)
         range_summary = "; ".join(
-            f'{str(rng.get("start") or "")[:10]}→{str(rng.get("end") or "")[:10]}' for rng in ranges
+            f'{str(rng.get("start") or "")}→{str(rng.get("end") or "")}' for rng in ranges
         )
         probe_detail = "; ".join(
             f"{a}→{b}: HTTP {c}, ids_on_first_page={n}"
             for a, b, c, n in listing_first_page
         )
-        cms_incomplete = not (cfg.cms_cookie and cfg.cms_x_dtpc and cfg.cms_x_dtreferer)
+        cms_incomplete = use_crash_portal and not (
+            cfg.cms_cookie and cfg.cms_x_dtpc and cfg.cms_x_dtreferer
+        )
         only_204 = bool(listing_first_page) and all(x[2] == 204 for x in listing_first_page)
         empty_200 = any(x[2] == 200 and x[3] == 0 for x in listing_first_page)
 
         reasons: list[str] = []
-        if only_204:
-            reasons.append(
-                "The crash log list returned HTTP 204 (no content) on the first page for every range. "
-                "The CDN does this when the crash-portal session is not accepted — paste a fresh "
-                "crash_portal_bearer (CMS crash UI session token) and copy "
-                "CPE_REMOTE_LOG_CMS_COOKIE, CPE_REMOTE_LOG_CMS_X_DTPC, and CPE_REMOTE_LOG_CMS_X_DTREFERER "
-                "from DevTools → Network on a request that lists crashes successfully in the browser."
-            )
-        elif empty_200:
-            reasons.append(
-                "Listing returned HTTP 200 but 0 file IDs were extracted — upstream JSON may differ, "
-                "or filters exclude all files. Set CPE_REMOTE_LOG_DEBUG_BODY=1 on the worker to log "
-                "truncated crash listing responses."
-            )
-        if cms_incomplete:
-            reasons.append(
-                "All three CMS header env vars are not set; without them the list endpoint often "
-                "returns HTTP 204 or empty payload even when logs exist in the UI."
-            )
+        if use_crash_portal:
+            if only_204:
+                reasons.append(
+                    "The crash log list returned HTTP 204 (no content) on the first page for every range. "
+                    "The CDN does this when the crash-portal session is not accepted — paste a fresh "
+                    "crash_portal_bearer (CMS crash UI session token) and copy "
+                    "CPE_REMOTE_LOG_CMS_COOKIE, CPE_REMOTE_LOG_CMS_X_DTPC, and CPE_REMOTE_LOG_CMS_X_DTREFERER "
+                    "from DevTools → Network on a request that lists crashes successfully in the browser."
+                )
+            elif empty_200:
+                reasons.append(
+                    "Listing returned HTTP 200 but 0 file IDs were extracted — upstream JSON may differ, "
+                    "or filters exclude all files. Set CPE_REMOTE_LOG_DEBUG_BODY=1 on the worker to log "
+                    "truncated crash listing responses."
+                )
+            if cms_incomplete:
+                reasons.append(
+                    "All three CMS header env vars are not set; without them the list endpoint often "
+                    "returns HTTP 204 or empty payload even when logs exist in the UI."
+                )
+        else:
+            if only_204 or empty_200:
+                reasons.append(
+                    "Registry logInfo returned no log file IDs for this range. "
+                    "Verify device registry bearer, tenant id, and date/time bounds; "
+                    "set CPE_REMOTE_LOG_DEBUG_BODY=1 for response snippets."
+                )
 
         extra = (" " + " ".join(reasons)) if reasons else ""
+        id_label = f"macId={crash_mac_id}" if use_crash_portal else f"cpeId={resolved.cpe_numeric_id}"
         detail_msg = (
-            "No crash log file IDs matched for this device/listing filters for "
-            f"date window(s): {range_summary}. "
-            f"(macId={crash_mac_id}; first-page listing: {probe_detail or 'none'}.)"
+            ("No crash log file IDs matched" if use_crash_portal else "No registry logInfo file IDs matched")
+            + f" for this device/listing filters for date window(s): {range_summary}. "
+            f"({id_label}; first-page listing: {probe_detail or 'none'}.)"
             f"{extra} "
-            "Also verify: CPE_REMOTE_LOG_CRASH_NATCO_KEY (or per-NATCO suffix), NATCO remote_log_tenant_id, "
-            "and UTC date bounds. See worker logs for [RemoteFetch] CMS / crash-portal warnings."
+            + (
+                "Also verify: CPE_REMOTE_LOG_CRASH_NATCO_KEY (or per-NATCO suffix), NATCO remote_log_tenant_id, "
+                "and UTC date bounds. See worker logs for [RemoteFetch] CMS / crash-portal warnings."
+                if use_crash_portal
+                else "Also verify NATCO remote_log_tenant_id and UTC date bounds."
+            )
         )
         session_fix = (
             f"{remote_err_codes.REMEDIATION_UPDATE_CRASH_BEARER} "
             f"{remote_err_codes.REMEDIATION_CMS_ENV_WORKER}"
         )
-        if cms_incomplete:
-            no_match_remediation = (
-                f"{session_fix} (CMS env vars are unset; the worker log should show [RemoteFetch] "
-                "Crash-portal CMS headers are incomplete.)"
-            )
+        if use_crash_portal:
+            if cms_incomplete:
+                no_match_remediation = (
+                    f"{session_fix} (CMS env vars are unset; the worker log should show [RemoteFetch] "
+                    "Crash-portal CMS headers are incomplete.)"
+                )
+            else:
+                no_match_remediation = session_fix
         else:
-            no_match_remediation = session_fix
+            no_match_remediation = remote_err_codes.REMEDIATION_REGISTRY_BEARER
         raise RemoteLogFetchError(
             detail_msg,
             error_code=remote_err_codes.CRASH_LISTING_NO_MATCH,

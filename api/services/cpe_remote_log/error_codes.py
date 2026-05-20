@@ -12,6 +12,7 @@ CRASH_CMS_HEADERS_RECOMMENDED = "crash_cms_headers_recommended"
 
 # Device registry / bundle POST
 DEVICE_REGISTRY_UNAUTHORIZED = "device_registry_unauthorized"
+DEVICE_REGISTRY_FORBIDDEN = "device_registry_forbidden"
 
 REMEDIATION_UPDATE_CRASH_BEARER = (
     "Paste a fresh crash portal bearer into this form (or retry bulk/restart with a new value): "
@@ -27,4 +28,10 @@ REMEDIATION_CMS_ENV_WORKER = (
 
 REMEDIATION_REGISTRY_BEARER = (
     "Update the device registry bearer (Device registry token aligned with this NATCO / x-tenant-id)."
+)
+
+REMEDIATION_REGISTRY_TENANT = (
+    "Set Admin → NATCO → Remote log tenant id to the exact x-tenant-id value from a successful "
+    "device registry request in DevTools (not the crash-portal natcoKey). Re-paste the device registry bearer "
+    "from that same browser session and ensure the project uses that NATCO."
 )

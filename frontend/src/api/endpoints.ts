@@ -67,7 +67,7 @@ export interface RemoteLogFetchUnitDto {
   ordinal: number;
   serial_number: string;
   ranges_json: string;
-  /** Min/max dates from ``ranges_json`` (device-list JSON union of requested ranges). */
+  /** Earliest range start and latest range end from ``ranges_json`` (includes time when present). */
   requested_date_from: string | null;
   requested_date_to: string | null;
   download_status: string;
@@ -88,7 +88,8 @@ export const cpeRemoteLogsApi = {
     body: {
       serial_number: string;
       device_registry_bearer: string;
-      crash_portal_bearer: string;
+      /** Optional CMS crash session; omitted uses device registry logInfo listing. */
+      crash_portal_bearer?: string;
       date_start?: string;
       date_end?: string;
       /** Preferred: one or more UTC day ranges (crash portal listing). */
@@ -107,7 +108,7 @@ export const cpeRemoteLogsApi = {
   retryFailed: (
     projectId: string,
     fetchJobId: string,
-    body: { device_registry_bearer: string; crash_portal_bearer: string },
+    body: { device_registry_bearer: string; crash_portal_bearer?: string },
   ) =>
     api.post(`/projects/${projectId}/cpe-remote-logs/jobs/${fetchJobId}/retry-failed`, body),
   restart: (
@@ -115,7 +116,7 @@ export const cpeRemoteLogsApi = {
     fetchJobId: string,
     body: {
       device_registry_bearer: string;
-      crash_portal_bearer: string;
+      crash_portal_bearer?: string;
       wipe_artifacts?: boolean;
     },
   ) => api.post(`/projects/${projectId}/cpe-remote-logs/jobs/${fetchJobId}/restart`, body),

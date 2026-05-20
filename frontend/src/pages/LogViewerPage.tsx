@@ -152,7 +152,6 @@ export default function LogViewerPage() {
   const [remoteStartDate, setRemoteStartDate] = useState("");
   const [remoteEndDate, setRemoteEndDate] = useState("");
   const [remoteRegistryBearer, setRemoteRegistryBearer] = useState("");
-  const [remoteCrashBearer, setRemoteCrashBearer] = useState("");
   const [activeRemoteFetchJobId, setActiveRemoteFetchJobId] = useState<string | null>(null);
   const [remoteFetchError, setRemoteFetchError] = useState<string | null>(null);
   /** Additional crash-portal date ranges (same fetch job). Primary range uses remoteStartDate/remoteEndDate. */
@@ -321,7 +320,6 @@ export default function LogViewerPage() {
         serial_number: remoteSerial.trim(),
         ranges,
         device_registry_bearer: remoteRegistryBearer,
-        crash_portal_bearer: remoteCrashBearer,
       });
     },
     onSuccess: (res) => {
@@ -1113,7 +1111,7 @@ export default function LogViewerPage() {
                     <span>#{u.ordinal}</span>
                     <span className="font-medium text-foreground">{u.serial_number}</span>
                     {u.requested_date_from && u.requested_date_to ? (
-                      <span title="Dates from fetch request">
+                      <span title="Date/time from fetch request (ranges)">
                         {u.requested_date_from}–{u.requested_date_to}
                       </span>
                     ) : null}
@@ -1292,17 +1290,6 @@ export default function LogViewerPage() {
                         placeholder="Not stored on server"
                       />
                     </label>
-                    <label className="block text-xs">
-                      <span className="text-muted-foreground">Crash portal bearer token</span>
-                      <input
-                        type="password"
-                        autoComplete="off"
-                        value={remoteCrashBearer}
-                        onChange={(e) => setRemoteCrashBearer(e.target.value)}
-                        className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
-                        placeholder="Not stored on server"
-                      />
-                    </label>
                     <div className="flex flex-wrap items-center gap-3 pt-2">
                       <button
                         type="button"
@@ -1311,8 +1298,7 @@ export default function LogViewerPage() {
                           !remoteSerial.trim() ||
                           !remoteStartDate ||
                           !remoteEndDate ||
-                          !remoteRegistryBearer.trim() ||
-                          !remoteCrashBearer.trim()
+                          !remoteRegistryBearer.trim()
                         }
                         onClick={() => void startRemoteFetchMutation.mutateAsync()}
                         className="text-sm font-medium rounded-lg bg-primary text-primary-foreground px-5 py-2.5 disabled:opacity-50 hover:bg-primary/90 transition-colors"

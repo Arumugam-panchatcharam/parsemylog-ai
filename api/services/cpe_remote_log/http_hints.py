@@ -20,8 +20,9 @@ def registry_step_hint(status_code: int, *, step: str) -> str | None:
         )
     if status_code == 403:
         return (
-            "HTTP 403 — forbidden for this registry call. NATCO mismatch (wrong project NATCO?) "
-            "or token lacks registry scope."
+            f"HTTP 403 — device registry {step} forbidden. "
+            "x-tenant-id does not match the device registry bearer (set NATCO remote_log_tenant_id in Admin, "
+            "not CPE_REMOTE_LOG_CRASH_NATCO_KEY). Wrong project NATCO or expired token also cause this."
         )
     if status_code == 404:
         if step == "deep_link":

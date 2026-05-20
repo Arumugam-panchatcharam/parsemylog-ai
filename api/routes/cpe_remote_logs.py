@@ -18,8 +18,15 @@ from flask import Blueprint, jsonify, request
 from api.app import dbm
 from api.auth import admin_required, get_user_id
 from api.services.cpe_remote_log.bulk_device_list import (
+    build_device_list_from_serials,
     iso_bounds_from_ranges_payload,
     parse_bulk_device_list_json,
+    parse_serial_numbers_text,
+)
+from api.services.cpe_remote_log.range_datetime import (
+    DEFAULT_END_TIME,
+    DEFAULT_START_TIME,
+    canonical_range_bound,
 )
 from logai.utils.constants import UPLOAD_DIRECTORY
 
@@ -47,7 +54,15 @@ def _resolve_tenant_id(project) -> str | None:
     tid = (getattr(natco, "remote_log_tenant_id", None) or "").strip().lower()
     if tid:
         return tid
-    return natco.code.strip().lower()
+    fallback = natco.code.strip().lower()
+    if fallback:
+        logger.warning(
+            "[RemoteFetch] NATCO %s has no remote_log_tenant_id; using code %r as x-tenant-id. "
+            "Set Admin → NATCO → Remote log tenant id to the x-tenant-id header value if registry returns HTTP 403.",
+            getattr(natco, "code", "?"),
+            fallback,
+        )
+    return fallback
 
 
 def _serialize_unit(u) -> dict[str, Any]:
@@ -150,24 +165,59 @@ def start_normal_remote_fetch(project_id: str):
         for item in ranges_in:
             if not isinstance(item, dict):
                 continue
-            s = str(item.get("start") or "").strip()[:10]
-            e = str(item.get("end") or "").strip()[:10]
-            if len(s) == 10 and len(e) == 10:
-                cleaned.append({"start": s, "end": e})
+            start_raw = str(item.get("start") or "").strip()
+            end_raw = str(item.get("end") or "").strip()
+            if not start_raw or not end_raw:
+                continue
+            try:
+                cleaned.append(
+                    {
+                        "start": canonical_range_bound(start_raw, DEFAULT_START_TIME),
+                        "end": canonical_range_bound(end_raw, DEFAULT_END_TIME),
+                    }
+                )
+            except ValueError:
+                continue
         if not cleaned:
-            return jsonify({"error": "ranges must include objects with start, end (YYYY-MM-DD)"}), 400
+            return (
+                jsonify(
+                    {
+                        "error": "ranges must include objects with start, end "
+                        "(YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)"
+                    }
+                ),
+                400,
+            )
         ranges_json = json.dumps(cleaned)
     else:
-        date_start = str(data.get("date_start") or "").strip()[:10]
-        date_end = str(data.get("date_end") or "").strip()[:10]
-        if len(date_start) != 10 or len(date_end) != 10:
-            return jsonify({"error": "serial_number, date_start, date_end (YYYY-MM-DD) required, or use ranges[]"}), 400
-        ranges_json = json.dumps([{"start": date_start, "end": date_end}])
+        date_start = str(data.get("date_start") or "").strip()
+        date_end = str(data.get("date_end") or "").strip()
+        if not date_start or not date_end:
+            return (
+                jsonify(
+                    {
+                        "error": "serial_number, date_start, date_end required, or use ranges[] "
+                        "(dates may include time: YYYY-MM-DDTHH:MM:SS)"
+                    }
+                ),
+                400,
+            )
+        try:
+            ranges_json = json.dumps(
+                [
+                    {
+                        "start": canonical_range_bound(date_start, DEFAULT_START_TIME),
+                        "end": canonical_range_bound(date_end, DEFAULT_END_TIME),
+                    }
+                ]
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     if not serial:
         return jsonify({"error": "serial_number required"}), 400
-    if not dre or not cpe:
-        return jsonify({"error": "device_registry_bearer and crash_portal_bearer required"}), 400
+    if not dre:
+        return jsonify({"error": "device_registry_bearer required"}), 400
 
     if getattr(project, "project_type", "normal") != "normal":
         return jsonify({"error": "Project must be normal type"}), 400
@@ -227,24 +277,47 @@ def start_bulk_remote_fetch(project_id: str):
 
     dre = str(request.form.get("device_registry_bearer") or "").strip()
     cpe = str(request.form.get("crash_portal_bearer") or "").strip()
+    bulk_input_mode = str(request.form.get("bulk_input_mode") or "json_file").strip().lower()
     ds = request.form.get("default_date_start")
     de = request.form.get("default_date_end")
-    f = request.files.get("device_list_json")
-    if not f:
-        return jsonify({"error": "device_list_json file required"}), 400
-    if not dre or not cpe:
-        return jsonify({"error": "device_registry_bearer and crash_portal_bearer fields required"}), 400
+    ds_time = request.form.get("default_date_start_time")
+    de_time = request.form.get("default_date_end_time")
+    if not dre:
+        return jsonify({"error": "device_registry_bearer field required"}), 400
 
-    try:
-        raw = f.read()
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return jsonify({"error": f"Invalid JSON: {exc}"}), 400
+    payload: Any
+    if bulk_input_mode == "serial_list":
+        serials_raw = str(request.form.get("serial_numbers") or "")
+        range_start = str(request.form.get("range_start") or "").strip()
+        range_end = str(request.form.get("range_end") or "").strip()
+        serials, serial_err = parse_serial_numbers_text(serials_raw)
+        if serial_err:
+            return jsonify({"error": serial_err}), 400
+        if not range_start or not range_end:
+            return jsonify({"error": "range_start and range_end are required for serial list mode"}), 400
+        try:
+            canonical_range_bound(range_start, DEFAULT_START_TIME)
+            canonical_range_bound(range_end, DEFAULT_END_TIME)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        assert serials is not None
+        payload = build_device_list_from_serials(serials, range_start, range_end)
+    else:
+        f = request.files.get("device_list_json")
+        if not f:
+            return jsonify({"error": "device_list_json file required"}), 400
+        try:
+            raw = f.read()
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return jsonify({"error": f"Invalid JSON: {exc}"}), 400
 
     parsed, parse_err = parse_bulk_device_list_json(
         payload,
-        str(ds or "").strip()[:10],
-        str(de or "").strip()[:10],
+        str(ds or "").strip()[:10] if ds else None,
+        str(de or "").strip()[:10] if de else None,
+        default_start_time=str(ds_time or "").strip() or None,
+        default_end_time=str(de_time or "").strip() or None,
     )
     if parse_err:
         return jsonify({"error": parse_err}), 400
@@ -313,8 +386,8 @@ def retry_failed_remote_job(project_id: str, fetch_job_id: str):
     data = request.get_json(silent=True) or {}
     dre = str(data.get("device_registry_bearer") or "").strip()
     cpe = str(data.get("crash_portal_bearer") or "").strip()
-    if not dre or not cpe:
-        return jsonify({"error": "device_registry_bearer and crash_portal_bearer required"}), 400
+    if not dre:
+        return jsonify({"error": "device_registry_bearer required"}), 400
 
     proj = dbm.get_project_by_id(project_id)
     tenant = _resolve_tenant_id(proj)
@@ -362,8 +435,8 @@ def restart_remote_job(project_id: str, fetch_job_id: str):
     cpe = str(data.get("crash_portal_bearer") or "").strip()
     wipe = bool(data.get("wipe_artifacts"))
 
-    if not dre or not cpe:
-        return jsonify({"error": "device_registry_bearer and crash_portal_bearer required"}), 400
+    if not dre:
+        return jsonify({"error": "device_registry_bearer required"}), 400
 
     proj = dbm.get_project_by_id(project_id)
     tenant = _resolve_tenant_id(proj)

@@ -19,7 +19,10 @@ def _env_float(name: str, default: float) -> float:
 
 def _normalize_subpath(raw: str | None, default: str) -> str:
     s = (raw or "").strip().strip("/")
-    return s if s else default
+    if s:
+        return s
+    d = (default or "").strip().strip("/")
+    return d
 
 
 def device_registry_api_url(*, cdn_base: str, device_registry_path: str, route: str) -> str:
@@ -54,10 +57,10 @@ def load_remote_log_http_config() -> RemoteLogHttpConfig:
         os.environ.get("CPE_REMOTE_LOG_CDN_BASE", "").strip()
         or os.environ.get("CPE_REMOTE_LOG_CDN_HOST", "").strip()
     ).rstrip("/")
-    portal = os.environ.get("CPE_REMOTE_LOG_PORTAL_ORIGIN", "").strip().rstrip("/")
-    dr_raw = (
-        os.environ.get("CPE_REMOTE_LOG_DEVICE_REGISTRY_PATH")
+    portal = (
+        os.environ.get("CPE_REMOTE_LOG_PORTAL_ORIGIN", "").strip().rstrip("/") or base
     )
+    dr_raw = os.environ.get("CPE_REMOTE_LOG_DEVICE_REGISTRY_PATH")
     device_registry_path = _normalize_subpath(dr_raw, "")
     return RemoteLogHttpConfig(
         cdn_base=base,

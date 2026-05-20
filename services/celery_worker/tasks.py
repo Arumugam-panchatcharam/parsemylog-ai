@@ -971,14 +971,22 @@ def _project_staging_abs(user_id: int, project_id: str, staging_relpath: str) ->
 
 
 def _parse_ranges_bounds(ranges: list[dict[str, str]]) -> tuple[str, str]:
+    from api.services.cpe_remote_log.range_datetime import (
+        DEFAULT_END_TIME,
+        DEFAULT_START_TIME,
+        date_only_from_bound,
+    )
+
     dates: list[str] = []
     for r in ranges:
-        s = str(r.get("start") or "").strip()[:10]
-        e = str(r.get("end") or "").strip()[:10]
-        if len(s) == 10:
-            dates.append(s)
-        if len(e) == 10:
-            dates.append(e)
+        for key, default_t in (("start", DEFAULT_START_TIME), ("end", DEFAULT_END_TIME)):
+            raw = str(r.get(key) or "").strip()
+            if not raw:
+                continue
+            try:
+                dates.append(date_only_from_bound(raw))
+            except ValueError:
+                continue
     if not dates:
         return "", ""
     return min(dates), max(dates)

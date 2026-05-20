@@ -21,12 +21,24 @@ import CircularProgress from "@mui/material/CircularProgress";
 import LinearProgress from "@mui/material/LinearProgress";
 import { RemoteLogLastErrorInline } from "@/components/RemoteLogLastErrorInline";
 
+type BulkDeviceInputMode = "json_file" | "serial_list";
+
+function combineDateAndTime(datePart: string, timePart: string): string {
+  const date = datePart.trim();
+  if (!date) return "";
+  let time = timePart.trim() || "00:00:00";
+  if (time.length === 5) {
+    time = `${time}:00`;
+  }
+  return `${date}T${time}`;
+}
+
 export default function BatchJobsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  /** Crash-portal/CDN bulk device-list fetch — API is admin-only. */
+  /** Remote CPE log bulk fetch — API is admin-only. */
   const allowRemoteDeviceList = Boolean(user?.is_admin);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [cpeFolderPath, setCpeFolderPath] = useState("");
@@ -35,11 +47,15 @@ export default function BatchJobsPage() {
   /** Avoid showing remote UI or wrong primary action before state resets (non-admin). */
   const effectiveUploadMode: "folder" | "file" | "deviceJson" =
     !allowRemoteDeviceList && uploadMode === "deviceJson" ? "folder" : uploadMode;
+  const [bulkDeviceInputMode, setBulkDeviceInputMode] =
+    useState<BulkDeviceInputMode>("json_file");
   const [remoteDeviceJsonFile, setRemoteDeviceJsonFile] = useState<File | null>(null);
-  const [bulkDefaultStart, setBulkDefaultStart] = useState("");
-  const [bulkDefaultEnd, setBulkDefaultEnd] = useState("");
+  const [bulkSerialNumbers, setBulkSerialNumbers] = useState("");
+  const [bulkRangeStartDate, setBulkRangeStartDate] = useState("");
+  const [bulkRangeEndDate, setBulkRangeEndDate] = useState("");
+  const [bulkRangeStartTime, setBulkRangeStartTime] = useState("00:00:00");
+  const [bulkRangeEndTime, setBulkRangeEndTime] = useState("23:59:00");
   const [bulkDreBearer, setBulkDreBearer] = useState("");
-  const [bulkCrashBearer, setBulkCrashBearer] = useState("");
   const [remoteBulkError, setRemoteBulkError] = useState<string | null>(null);
   const [focusFetchJobId, setFocusFetchJobId] = useState<string | null>(null);
   const [restartWipeArtifacts, setRestartWipeArtifacts] = useState(false);
@@ -146,15 +162,25 @@ export default function BatchJobsPage() {
 
   const startRemoteBulkMutation = useMutation({
     mutationFn: async () => {
-      if (!remoteDeviceJsonFile || !projectId) {
-        throw new Error("Choose a JSON file");
+      if (!projectId) {
+        throw new Error("Missing project");
       }
       const fd = new FormData();
+      fd.append("bulk_input_mode", bulkDeviceInputMode);
       fd.append("device_registry_bearer", bulkDreBearer.trim());
-      fd.append("crash_portal_bearer", bulkCrashBearer.trim());
-      if (bulkDefaultStart.trim()) fd.append("default_date_start", bulkDefaultStart.trim().slice(0, 10));
-      if (bulkDefaultEnd.trim()) fd.append("default_date_end", bulkDefaultEnd.trim().slice(0, 10));
-      fd.append("device_list_json", remoteDeviceJsonFile);
+      if (bulkDeviceInputMode === "serial_list") {
+        fd.append("serial_numbers", bulkSerialNumbers);
+        fd.append(
+          "range_start",
+          combineDateAndTime(bulkRangeStartDate, bulkRangeStartTime),
+        );
+        fd.append("range_end", combineDateAndTime(bulkRangeEndDate, bulkRangeEndTime));
+      } else {
+        if (!remoteDeviceJsonFile) {
+          throw new Error("Choose a JSON file");
+        }
+        fd.append("device_list_json", remoteDeviceJsonFile);
+      }
       return cpeRemoteLogsApi.startBulk(projectId, fd);
     },
     onSuccess: (res) => {
@@ -166,6 +192,7 @@ export default function BatchJobsPage() {
       queryClient.invalidateQueries({ queryKey: ["remoteLogFetchDetail", projectId] });
       setShowCreateDialog(false);
       setRemoteDeviceJsonFile(null);
+      setBulkSerialNumbers("");
     },
     onError: (e: unknown) => {
       let msg = "Failed to start remote fetch.";
@@ -181,7 +208,6 @@ export default function BatchJobsPage() {
     mutationFn: async (fetchJobId: string) =>
       cpeRemoteLogsApi.retryFailed(projectId!, fetchJobId, {
         device_registry_bearer: bulkDreBearer.trim(),
-        crash_portal_bearer: bulkCrashBearer.trim(),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["remoteLogFetchJobs", projectId] });
@@ -207,7 +233,6 @@ export default function BatchJobsPage() {
     }) =>
       cpeRemoteLogsApi.restart(projectId!, fetchJobId, {
         device_registry_bearer: bulkDreBearer.trim(),
-        crash_portal_bearer: bulkCrashBearer.trim(),
         wipe_artifacts: wipe,
       }),
     onSuccess: () => {
@@ -257,12 +282,22 @@ export default function BatchJobsPage() {
     }
 
     setRemoteBulkError(null);
-    if (!remoteDeviceJsonFile) {
+    if (bulkDeviceInputMode === "json_file" && !remoteDeviceJsonFile) {
       alert("Select a device list JSON file.");
       return;
     }
-    if (!bulkDreBearer.trim() || !bulkCrashBearer.trim()) {
-      alert("Provide both bearer tokens.");
+    if (bulkDeviceInputMode === "serial_list") {
+      if (!bulkSerialNumbers.trim()) {
+        alert("Enter at least one serial number.");
+        return;
+      }
+      if (!bulkRangeStartDate.trim() || !bulkRangeEndDate.trim()) {
+        alert("Provide range start and end dates.");
+        return;
+      }
+    }
+    if (!bulkDreBearer.trim()) {
+      alert("Provide the device registry bearer token.");
       return;
     }
     try {
@@ -291,6 +326,8 @@ export default function BatchJobsPage() {
     setCpeFolderPath("");
     setSelectedFile(null);
     setRemoteDeviceJsonFile(null);
+    setBulkSerialNumbers("");
+    setBulkDeviceInputMode("json_file");
     setRemoteBulkError(null);
     reset();
   };
@@ -459,7 +496,7 @@ export default function BatchJobsPage() {
                   </select>
                 </label>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <div className="mb-4">
                 <label className="block text-xs">
                   <span className="text-muted-foreground">Device registry bearer</span>
                   <input
@@ -467,17 +504,6 @@ export default function BatchJobsPage() {
                     autoComplete="off"
                     value={bulkDreBearer}
                     onChange={(e) => setBulkDreBearer(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
-                    placeholder="For retry / restart"
-                  />
-                </label>
-                <label className="block text-xs">
-                  <span className="text-muted-foreground">Crash portal bearer</span>
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    value={bulkCrashBearer}
-                    onChange={(e) => setBulkCrashBearer(e.target.value)}
                     className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
                     placeholder="For retry / restart"
                   />
@@ -498,7 +524,6 @@ export default function BatchJobsPage() {
                   disabled={
                     !focusFetchJobId ||
                     !bulkDreBearer.trim() ||
-                    !bulkCrashBearer.trim() ||
                     retryRemoteFailedMutation.isPending ||
                     restartRemoteJobMutation.isPending
                   }
@@ -513,7 +538,6 @@ export default function BatchJobsPage() {
                   disabled={
                     !focusFetchJobId ||
                     !bulkDreBearer.trim() ||
-                    !bulkCrashBearer.trim() ||
                     retryRemoteFailedMutation.isPending ||
                     restartRemoteJobMutation.isPending
                   }
@@ -568,7 +592,7 @@ export default function BatchJobsPage() {
                         <tr>
                           <th className="px-2 py-1.5 font-medium">#</th>
                           <th className="px-2 py-1.5 font-medium">Serial</th>
-                          <th className="px-2 py-1.5 font-medium">Dates (from JSON)</th>
+                          <th className="px-2 py-1.5 font-medium">Date/time (from JSON)</th>
                           <th className="px-2 py-1.5 font-medium">Download</th>
                           <th className="px-2 py-1.5 font-medium">Process</th>
                           <th className="px-2 py-1.5 font-medium">Error</th>
@@ -579,7 +603,7 @@ export default function BatchJobsPage() {
                           <tr key={u.id} className="border-t border-border/60">
                             <td className="px-2 py-1">{u.ordinal}</td>
                             <td className="px-2 py-1 font-mono">{u.serial_number}</td>
-                            <td className="px-2 py-1 whitespace-nowrap" title={u.ranges_json}>
+                            <td className="px-2 py-1 max-w-[min(100vw-2rem,28rem)] align-top" title={u.ranges_json}>
                               {u.requested_date_from && u.requested_date_to
                                 ? `${u.requested_date_from} – ${u.requested_date_to}`
                                 : "—"}
@@ -660,9 +684,11 @@ export default function BatchJobsPage() {
               </div>
               {effectiveUploadMode === "deviceJson" && allowRemoteDeviceList && (
                 <p className="text-[11px] text-muted-foreground mt-2">
-                  Each entry uses <code className="text-xs bg-muted px-1 rounded">serialnumber</code> plus{" "}
-                  <code className="text-xs bg-muted px-1 rounded">ranges</code> (start/end ISO dates).
-                  Rows with empty ranges use the optional default dates below. Example:{" "}
+                  Device registry bearer token is required (log listing uses registry{" "}
+                  <code className="text-xs bg-muted px-1 rounded">logInfo</code>). <strong>JSON file:</strong> put
+                  start/end date-time in each entry&apos;s <code className="text-xs bg-muted px-1 rounded">ranges</code>{" "}
+                  (e.g. <code className="text-xs bg-muted px-1 rounded">YYYY-MM-DDTHH:MM:SS</code>).{" "}
+                  <strong>Serial list:</strong> set one shared range (date + time) below. Example:{" "}
                   <a
                     href={`${import.meta.env.BASE_URL}examples/device_list_example.json`}
                     className="text-primary underline"
@@ -754,29 +780,104 @@ export default function BatchJobsPage() {
               </div>
             ) : (
               <div className="mb-4 space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="block text-xs">
-                    <span className="text-muted-foreground">Default range start (optional)</span>
-                    <input
-                      type="date"
-                      value={bulkDefaultStart}
-                      onChange={(e) => setBulkDefaultStart(e.target.value)}
-                      className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
-                    />
-                  </label>
-                  <label className="block text-xs">
-                    <span className="text-muted-foreground">Default range end (optional)</span>
-                    <input
-                      type="date"
-                      value={bulkDefaultEnd}
-                      onChange={(e) => setBulkDefaultEnd(e.target.value)}
-                      className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
-                    />
-                  </label>
+                <div>
+                  <span className="block text-sm font-medium mb-2">Device list source</span>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="bulkDeviceInputMode"
+                        value="json_file"
+                        checked={bulkDeviceInputMode === "json_file"}
+                        onChange={() => setBulkDeviceInputMode("json_file")}
+                        className="mr-2"
+                      />
+                      JSON file
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="bulkDeviceInputMode"
+                        value="serial_list"
+                        checked={bulkDeviceInputMode === "serial_list"}
+                        onChange={() => setBulkDeviceInputMode("serial_list")}
+                        className="mr-2"
+                      />
+                      Serial numbers (comma-separated)
+                    </label>
+                  </div>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Applied only when an entry omits ranges or ranges are invalid; otherwise each row uses its own dates.
-                </p>
+
+                {bulkDeviceInputMode === "json_file" ? (
+                  <>
+                    <p className="text-[11px] text-muted-foreground">
+                      Each device&apos;s window comes from the JSON <code className="text-xs bg-muted px-1 rounded">ranges</code>{" "}
+                      only. Rows with empty <code className="text-xs bg-muted px-1 rounded">ranges</code> are rejected
+                      unless you add valid ranges in the file.
+                    </p>
+                    <label className="block text-sm font-medium mb-1">Device list JSON</label>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleDeviceJsonSelect}
+                      className="w-full px-3 py-2 border border-border rounded-lg"
+                    />
+                    {remoteDeviceJsonFile && (
+                      <p className="text-xs text-muted-foreground">
+                        Selected: {remoteDeviceJsonFile.name}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <label className="block text-sm font-medium mb-1">Serial numbers</label>
+                    <textarea
+                      value={bulkSerialNumbers}
+                      onChange={(e) => setBulkSerialNumbers(e.target.value)}
+                      rows={8}
+                      placeholder="CP12345678, CP87654321&#10;or one serial per line"
+                      className="w-full min-h-[120px] px-3 py-2 border border-border rounded-lg bg-background text-sm font-mono resize-y"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Separate with commas, semicolons, or new lines. No length limit.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="block text-xs">
+                        <span className="text-muted-foreground">Range start</span>
+                        <input
+                          type="date"
+                          value={bulkRangeStartDate}
+                          onChange={(e) => setBulkRangeStartDate(e.target.value)}
+                          className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        />
+                        <input
+                          type="time"
+                          step={1}
+                          value={bulkRangeStartTime}
+                          onChange={(e) => setBulkRangeStartTime(e.target.value)}
+                          className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        <span className="text-muted-foreground">Range end</span>
+                        <input
+                          type="date"
+                          value={bulkRangeEndDate}
+                          onChange={(e) => setBulkRangeEndDate(e.target.value)}
+                          className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        />
+                        <input
+                          type="time"
+                          step={1}
+                          value={bulkRangeEndTime}
+                          onChange={(e) => setBulkRangeEndTime(e.target.value)}
+                          className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
+                        />
+                      </label>
+                    </div>
+                  </>
+                )}
+
                 <label className="block text-xs">
                   <span className="text-muted-foreground">Device registry bearer token</span>
                   <input
@@ -788,29 +889,6 @@ export default function BatchJobsPage() {
                     placeholder="Not stored on server"
                   />
                 </label>
-                <label className="block text-xs">
-                  <span className="text-muted-foreground">Crash portal bearer token</span>
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    value={bulkCrashBearer}
-                    onChange={(e) => setBulkCrashBearer(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 border border-border rounded-lg bg-background text-sm"
-                    placeholder="Not stored on server"
-                  />
-                </label>
-                <label className="block text-sm font-medium mb-1">Device list JSON</label>
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={handleDeviceJsonSelect}
-                  className="w-full px-3 py-2 border border-border rounded-lg"
-                />
-                {remoteDeviceJsonFile && (
-                  <p className="text-xs text-muted-foreground">
-                    Selected: {remoteDeviceJsonFile.name}
-                  </p>
-                )}
                 {remoteBulkError && (
                   <p className="text-sm text-destructive">{remoteBulkError}</p>
                 )}
@@ -871,9 +949,12 @@ export default function BatchJobsPage() {
                   (effectiveUploadMode === "folder" && !cpeFolderPath.trim()) ||
                   (effectiveUploadMode === "file" && !selectedFile) ||
                   (effectiveUploadMode === "deviceJson" &&
-                    (!remoteDeviceJsonFile ||
-                      !bulkDreBearer.trim() ||
-                      !bulkCrashBearer.trim()))
+                    (!bulkDreBearer.trim() ||
+                      (bulkDeviceInputMode === "json_file" && !remoteDeviceJsonFile) ||
+                      (bulkDeviceInputMode === "serial_list" &&
+                        (!bulkSerialNumbers.trim() ||
+                          !bulkRangeStartDate.trim() ||
+                          !bulkRangeEndDate.trim()))))
                 }
                 className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
               >

@@ -3,63 +3,151 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, List, Tuple
 
+from api.services.cpe_remote_log.range_datetime import (
+    DEFAULT_END_TIME,
+    DEFAULT_START_TIME,
+    canonical_range_bound,
+    split_range_bound,
+)
+
 EntryRow = Tuple[int, str, str]
+
+_SERIAL_SPLIT_RE = re.compile(r"[,;\n\r\t]+")
+
+
+def parse_serial_numbers_text(raw: str) -> Tuple[List[str] | None, str | None]:
+    """Parse comma/newline/semicolon-separated serials; preserve order, dedupe."""
+    text = str(raw or "").strip()
+    if not text:
+        return None, "At least one serial number is required"
+    seen: set[str] = set()
+    out: List[str] = []
+    for part in _SERIAL_SPLIT_RE.split(text):
+        serial = part.strip()
+        if not serial:
+            continue
+        key = serial.lower()
+        if key in seen:
+            return None, f"Duplicate serial in list: {serial}"
+        seen.add(key)
+        out.append(serial)
+    if not out:
+        return None, "At least one serial number is required"
+    return out, None
+
+
+def build_device_list_from_serials(
+    serials: List[str],
+    range_start: str,
+    range_end: str,
+) -> List[dict[str, Any]]:
+    """Build device-list JSON array for one shared datetime range."""
+    start_canon = canonical_range_bound(range_start, DEFAULT_START_TIME)
+    end_canon = canonical_range_bound(range_end, DEFAULT_END_TIME)
+    return [
+        {
+            "serialnumber": serial,
+            "ranges": [{"start": start_canon, "end": end_canon}],
+        }
+        for serial in serials
+    ]
 
 
 def iso_bounds_from_ranges_payload(ranges: Any) -> tuple[str | None, str | None]:
     """
-    Min/max ISO date strings (YYYY-MM-DD) across a list of {start,end} dicts.
+    Earliest ``start`` and latest ``end`` across a list of range dicts (as stored in JSON).
 
-    Matches how ``ranges_json`` is stored after ``parse_bulk_device_list_json``.
+    Values are typically ``YYYY-MM-DDTHH:MM:SS`` after normalization; date-only strings are supported.
     """
     if not isinstance(ranges, list):
         return None, None
-    dates: list[str] = []
+    starts: list[str] = []
+    ends: list[str] = []
     for r in ranges:
         if not isinstance(r, dict):
             continue
-        s = str(r.get("start") or "").strip()[:10]
-        e = str(r.get("end") or "").strip()[:10]
-        if len(s) == 10:
-            dates.append(s)
-        if len(e) == 10:
-            dates.append(e)
-    if not dates:
+        s = str(r.get("start") or r.get("date_start") or "").strip()
+        e = str(r.get("end") or r.get("date_end") or "").strip()
+        if s:
+            starts.append(s)
+        if e:
+            ends.append(e)
+    if not starts or not ends:
         return None, None
-    return min(dates), max(dates)
+    return min(starts), max(ends)
+
+
+def _normalize_range_item(obj: dict) -> dict[str, str] | None:
+    start_raw = str(obj.get("start") or obj.get("date_start") or "").strip()
+    end_raw = str(obj.get("end") or obj.get("date_end") or "").strip()
+    if not start_raw or not end_raw:
+        return None
+    try:
+        start_canon = canonical_range_bound(start_raw, DEFAULT_START_TIME)
+        end_canon = canonical_range_bound(end_raw, DEFAULT_END_TIME)
+    except ValueError:
+        return None
+    return {"start": start_canon, "end": end_canon}
+
+
+def _fallback_range(
+    default_start: str | None,
+    default_end: str | None,
+    *,
+    default_start_time: str | None = None,
+    default_end_time: str | None = None,
+) -> List[dict[str, str]]:
+    ds = str(default_start or "").strip()
+    de = str(default_end or "").strip()
+    if len(ds) < 10 or len(de) < 10:
+        return []
+    start_val = ds[:10]
+    end_val = de[:10]
+    st = str(default_start_time or DEFAULT_START_TIME).strip() or DEFAULT_START_TIME
+    et = str(default_end_time or DEFAULT_END_TIME).strip() or DEFAULT_END_TIME
+    if len(st) == 5:
+        st = f"{st}:00"
+    if len(et) == 5:
+        et = f"{et}:00"
+    try:
+        return [
+            {
+                "start": canonical_range_bound(f"{start_val}T{st}", DEFAULT_START_TIME),
+                "end": canonical_range_bound(f"{end_val}T{et}", DEFAULT_END_TIME),
+            }
+        ]
+    except ValueError:
+        return []
 
 
 def parse_bulk_device_list_json(
     blob: Any,
     default_start: str | None,
     default_end: str | None,
+    *,
+    default_start_time: str | None = None,
+    default_end_time: str | None = None,
 ) -> Tuple[List[EntryRow] | None, str | None]:
     """
     Return (entries, None) where each entry is (ordinal, serial, ranges_json).
 
-    ranges_json is a JSON array of {\"start\":\"YYYY-MM-DD\",\"end\":\"YYYY-MM-DD\"}.
+    ranges_json is a JSON array of {"start":"YYYY-MM-DDTHH:MM:SS","end":"..."}.
     """
     if not isinstance(blob, list):
         return None, "Device list JSON must be a non-empty array"
     if len(blob) == 0:
         return None, "Device list is empty"
 
-    def _normalize_range_item(obj: dict) -> dict[str, str] | None:
-        s = str(obj.get("start") or obj.get("date_start") or "").strip()[:10]
-        e = str(obj.get("end") or obj.get("date_end") or "").strip()[:10]
-        if len(s) != 10 or len(e) != 10:
-            return None
-        return {"start": s, "end": e}
-
     out: List[EntryRow] = []
-
-    ds = str(default_start or "").strip()[:10] if default_start else ""
-    de = str(default_end or "").strip()[:10] if default_end else ""
-    fallback_range: List[dict[str, str]] = []
-    if len(ds) == 10 and len(de) == 10:
-        fallback_range = [{"start": ds, "end": de}]
+    fallback_range = _fallback_range(
+        default_start,
+        default_end,
+        default_start_time=default_start_time,
+        default_end_time=default_end_time,
+    )
 
     seen_serials: dict[str, int] = {}
 
@@ -90,7 +178,9 @@ def parse_bulk_device_list_json(
             if not normalized and fallback_range:
                 normalized = list(fallback_range)
             elif not normalized:
-                return None, f"Entry {idx}: ranges missing or invalid; provide default dates"
+                return None, (
+                    f"Entry {idx}: ranges missing or invalid; provide default dates/times"
+                )
         elif fallback_range:
             normalized = list(fallback_range)
         else:
