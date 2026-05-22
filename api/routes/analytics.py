@@ -401,7 +401,7 @@ def put_pattern_lab(project_id: str):
                     "error": "profile name is required (letters, numbers, underscore, hyphen)",
                 }
             ), 400
-        ok, msg = validate_pattern_lab(doc)
+        ok, msg = validate_pattern_lab(doc, strict=False)
         if not ok:
             return jsonify({"success": False, "error": msg}), 400
         try:
@@ -516,8 +516,17 @@ def post_pattern_lab_preview(project_id: str):
         if not ok:
             return jsonify({"success": False, "error": msg}), 400
 
-        rows, stats = preview_pattern_lab(str(user_id), project_id, cpe_serial, doc)
-        return jsonify({"success": True, "data": rows, "stats": stats, "count": len(rows)})
+        result, stats = preview_pattern_lab(str(user_id), project_id, cpe_serial, doc)
+        rule_rows = result.get("rule_rows") or []
+        match_count = sum(int(r.get("total_matches") or 0) for r in rule_rows)
+        return jsonify(
+            {
+                "success": True,
+                "data": result,
+                "stats": stats,
+                "count": match_count,
+            }
+        )
     except Exception as e:
         logger.error("pattern-lab-preview error for %s: %s", project_id, e, exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500

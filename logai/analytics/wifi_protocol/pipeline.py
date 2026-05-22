@@ -33,6 +33,7 @@ _STA_ISSUES_SCHEMA: Dict[str, pl.DataType] = {
     "sta_mac": pl.Utf8,
     "ifname": pl.Utf8,
     "wcid": pl.Utf8,
+    "correlation": pl.Utf8,
     "window_start": pl.Utf8,
     "window_end": pl.Utf8,
     "evidence": pl.Utf8,
@@ -40,6 +41,20 @@ _STA_ISSUES_SCHEMA: Dict[str, pl.DataType] = {
     "processing_date": pl.Utf8,
     "occurrence_count": pl.Int64,
 }
+
+
+def _is_pattern_lab_mode(
+    yaml_path: Path | None,
+    event_issue_doc: Optional[Dict[str, Any]],
+) -> bool:
+    if event_issue_doc is not None:
+        return True
+    if yaml_path is None:
+        return False
+    try:
+        return yaml_path.resolve() != wifi_auth_assoc_event_map_path().resolve()
+    except OSError:
+        return True
 
 
 def empty_sta_issues() -> pl.DataFrame:
@@ -89,6 +104,7 @@ def run_wifi_sta_issues(
     write_labeled_debug: bool = False,
     yaml_path: Path | None = None,
     event_issue_doc: Optional[Dict[str, Any]] = None,
+    include_event_diagnostics: bool = False,
 ) -> Tuple[pl.DataFrame, Dict[str, Any]]:
     """
     Load ``wireless_rg.parquet`` for CPE ``serial``, label events, extract Drain3
@@ -102,6 +118,7 @@ def run_wifi_sta_issues(
     raw = _event_issue_from_source(yaml_path, event_issue_doc)
     events = raw.get("events") or {}
     issues = raw.get("issues") or {}
+    pattern_lab_mode = _is_pattern_lab_mode(yaml_path, event_issue_doc)
 
     if not wireless_pq.is_file():
         logger.info("No wireless_rg.parquet for CPE %s", serial)
@@ -121,26 +138,30 @@ def run_wifi_sta_issues(
 
     df = coerce_timestamp(df)
     df = with_event_code_column(df, events)
+    from .field_extracts import filter_event_codes_by_field_conditions
+
+    df = filter_event_codes_by_field_conditions(df, events)
     df = add_parameter_list_column(df, cpe_dir, domain="wireless")
     df = enrich_correlation_columns(df, events)
 
-    iface_yaml = load_interface_map_yaml()
-    if model_matches_device(iface_yaml, device_info):
-        iface_tbl = build_interface_table(device_info, iface_yaml)
-    else:
-        iface_tbl = pl.DataFrame(
-            schema={"ifname": pl.Utf8, "role": pl.Utf8, "bssid": pl.Utf8}
-        )
-    if iface_tbl.height > 0 and "ifname" in df.columns:
-        df = df.join(
-            iface_tbl.select(["ifname", "role", "bssid"]).rename(
-                {"role": "bss_role", "bssid": "expected_bssid"}
-            ),
-            on="ifname",
-            how="left",
-        )
-    df = scrub_sta_mac_matching_expected_bssid(df)
-    df = forward_fill_sta_mac_by_partition(df)
+    if not pattern_lab_mode:
+        iface_yaml = load_interface_map_yaml()
+        if model_matches_device(iface_yaml, device_info):
+            iface_tbl = build_interface_table(device_info, iface_yaml)
+        else:
+            iface_tbl = pl.DataFrame(
+                schema={"ifname": pl.Utf8, "role": pl.Utf8, "bssid": pl.Utf8}
+            )
+        if iface_tbl.height > 0 and "ifname" in df.columns:
+            df = df.join(
+                iface_tbl.select(["ifname", "role", "bssid"]).rename(
+                    {"role": "bss_role", "bssid": "expected_bssid"}
+                ),
+                on="ifname",
+                how="left",
+            )
+        df = scrub_sta_mac_matching_expected_bssid(df)
+        df = forward_fill_sta_mac_by_partition(df)
 
     labeled_for_detect = df.filter(pl.col("event_code").is_not_null())
     raw_issues = run_issue_detectors(
@@ -151,23 +172,26 @@ def run_wifi_sta_issues(
     else:
         sta_issues = aggregate_sta_issues_by_mac(raw_issues)
 
-    labeled_ct = int(df.filter(pl.col("event_code").is_not_null()).height)
-    sta_mac_ct = int(
-        df.filter(pl.col("event_code").is_not_null())
-        .filter(pl.col("sta_mac") != "")
-        .height
-    )
+    labeled_ct = int(labeled_for_detect.height)
+    total_rows = int(df.height)
     stats: Dict[str, Any] = {
         "device_serial": device_serial,
-        "wireless_rows": int(df.height),
+        "pattern_lab_mode": pattern_lab_mode,
+        "wireless_rows": total_rows,
+        "total_log_lines": total_rows,
         "labeled_events": labeled_ct,
-        "labeled_with_sta_mac": sta_mac_ct,
+        "labeled_log_lines": labeled_ct,
+        "unlabeled_log_lines": total_rows - labeled_ct,
         "sta_issues_rows": int(sta_issues.height),
     }
-    if labeled_ct > 0:
-        stats["sta_mac_rate"] = sta_mac_ct / labeled_ct
-    else:
-        stats["sta_mac_rate"] = 0.0
+
+    if include_event_diagnostics:
+        from .preview_diagnostics import build_preview_diagnostics
+
+        diag = build_preview_diagnostics(
+            df, events, issues, labeled_for_detect, raw_issues, sta_issues
+        )
+        stats.update(diag)
 
     if write_labeled_debug and df.height > 0:
         debug_path = layout.consolidated_parquet_path("wifi_labeled_events")

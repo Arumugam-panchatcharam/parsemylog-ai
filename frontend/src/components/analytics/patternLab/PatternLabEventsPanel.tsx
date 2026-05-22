@@ -1,19 +1,25 @@
 import { useMemo, useState } from "react";
 import type { PatternLabDoc } from "@/api/endpoints";
-import { Button } from "@/components/ui/Button";
+import PatternLabIconButton from "@/components/analytics/patternLab/PatternLabIconButton";
+import { cn } from "@/lib/utils";
 import {
+  applyFieldExtractsToBody,
+  collectMatcherRegexOptions,
+  eventSourceFileGlob,
   matchersToOrGroups,
   nextCustomEventKey,
   newEmptyEvent,
   normalizePatternLabDoc,
   orGroupsToMatchers,
+  parseFieldExtracts,
   renameEventInDoc,
+  serializeFieldExtracts,
+  summarizeEventBodyLines,
 } from "@/lib/patternLabTransforms";
+import FieldExtractEditor from "@/components/analytics/patternLab/FieldExtractEditor";
 import MatcherGroupEditor from "@/components/analytics/patternLab/MatcherGroupEditor";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 
 interface PatternLabEventsPanelProps {
   doc: PatternLabDoc;
@@ -22,7 +28,7 @@ interface PatternLabEventsPanelProps {
 
 export default function PatternLabEventsPanel({ doc, setDoc }: PatternLabEventsPanelProps) {
   const sortedKeys = useMemo(() => Object.keys(doc.events).sort(), [doc.events]);
-  const [openAdvanced, setOpenAdvanced] = useState<Record<string, boolean>>({});
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   const setEventRaw = (key: string, body: Record<string, unknown>) => {
     const events = { ...doc.events, [key]: body };
@@ -33,202 +39,184 @@ export default function PatternLabEventsPanel({ doc, setDoc }: PatternLabEventsP
     const key = nextCustomEventKey(doc);
     const events = { ...doc.events, [key]: newEmptyEvent() };
     setDoc(normalizePatternLabDoc({ ...doc, events }));
+    setExpandedKey(key);
   };
 
   const removeEvent = (key: string) => {
     const events = { ...doc.events };
     delete events[key];
     setDoc(normalizePatternLabDoc({ ...doc, events }));
+    if (expandedKey === key) setExpandedKey(null);
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap justify-between gap-2 items-start">
-        <p className="text-xs text-muted-foreground max-w-2xl">
-          Each <strong>event code</strong> labels matching log lines so issues can reference them (sequences,
-          triggers, bursts).
-        </p>
-        <Button type="button" variant="outline" size="sm" onClick={addEvent}>
-          <AddIcon style={{ fontSize: 18, marginRight: 4 }} />
-          Add event
-        </Button>
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {sortedKeys.map((key) => {
+          const raw = doc.events[key];
+          const body =
+            raw && typeof raw === "object" && !Array.isArray(raw)
+              ? (raw as Record<string, unknown>)
+              : {};
+          const isOpen = expandedKey === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setExpandedKey((prev) => (prev === key ? null : key))}
+              className={cn(
+                "text-left rounded-lg border p-3 transition-colors min-h-[6.5rem] flex flex-col gap-1",
+                isOpen
+                  ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                  : "border-border bg-card hover:bg-muted/30",
+              )}
+            >
+              <span className="font-mono text-sm font-medium truncate">{key}</span>
+              <div className="flex flex-col gap-0.5 min-w-0">
+                {summarizeEventBodyLines(body).map((line, i) => (
+                  <span
+                    key={i}
+                    className="text-[11px] text-muted-foreground line-clamp-2 leading-snug"
+                    title={line}
+                  >
+                    {line}
+                  </span>
+                ))}
+              </div>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={addEvent}
+          className="rounded-lg border border-dashed border-border bg-transparent hover:bg-muted/30 transition-colors min-h-[5.5rem] flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-foreground"
+        >
+          <AddIcon style={{ fontSize: 24 }} />
+          <span className="text-sm font-medium">Add event</span>
+        </button>
       </div>
 
-      {sortedKeys.length === 0 ? (
-        <p className="text-sm text-muted-foreground border border-border rounded-lg p-6 text-center">
-          No events defined. Add an event or use Reset to defaults.
-        </p>
-      ) : (
-        <ul className="space-y-3">
-          {sortedKeys.map((key) => {
-            const raw = doc.events[key];
-            const body =
-              raw && typeof raw === "object" && !Array.isArray(raw)
-                ? (raw as Record<string, unknown>)
-                : {};
-            const groups = matchersToOrGroups(body.matchers);
-            const advOpen = !!openAdvanced[key];
+      {expandedKey && doc.events[expandedKey] ? (
+        <EventEditor
+          key={expandedKey}
+          eventKey={expandedKey}
+              body={
+                doc.events[expandedKey] &&
+                typeof doc.events[expandedKey] === "object" &&
+                !Array.isArray(doc.events[expandedKey])
+                  ? (doc.events[expandedKey] as Record<string, unknown>)
+                  : {}
+              }
+              onRemove={() => removeEvent(expandedKey)}
+              onRename={(nk) => {
+            if (nk && nk !== expandedKey) {
+              setDoc(renameEventInDoc(doc, expandedKey, nk));
+              setExpandedKey(nk);
+            }
+          }}
+          onChange={(nextBody) => setEventRaw(expandedKey, nextBody)}
+        />
+      ) : null}
+    </div>
+  );
+}
 
-            const sta = body.sta_mac;
-            const staMac =
-              sta && typeof sta === "object" && !Array.isArray(sta)
-                ? (sta as Record<string, unknown>)
-                : {};
-            const ifname =
-              body.ifname && typeof body.ifname === "object" && !Array.isArray(body.ifname)
-                ? (body.ifname as Record<string, unknown>)
-                : {};
-            const wcid =
-              body.wcid && typeof body.wcid === "object" && !Array.isArray(body.wcid)
-                ? (body.wcid as Record<string, unknown>)
-                : {};
+function EventEditor({
+  eventKey,
+  body,
+  onRemove,
+  onRename,
+  onChange,
+}: {
+  eventKey: string;
+  body: Record<string, unknown>;
+  onRemove: () => void;
+  onRename: (newKey: string) => void;
+  onChange: (body: Record<string, unknown>) => void;
+}) {
+  const groups = matchersToOrGroups(body.matchers);
+  const fieldRules = parseFieldExtracts(body);
+  const fileGlob = eventSourceFileGlob(body);
+  const regexOptions = collectMatcherRegexOptions(groups);
 
-            return (
-              <li key={key} className="rounded-lg border border-border bg-card overflow-hidden">
-                <div className="px-3 py-2 bg-muted/40 border-b border-border flex flex-wrap gap-2 items-center">
-                    <label className="flex flex-col gap-0.5 flex-1 min-w-[12rem]">
-                      <span className="text-[10px] uppercase text-muted-foreground">Event code</span>
-                      <input
-                        type="text"
-                        className="px-2 py-1 border border-input rounded-md text-sm font-mono bg-background"
-                        key={key}
-                        defaultValue={key}
-                        onBlur={(e) => {
-                          const nk = e.target.value.trim().replace(/\s+/g, "_");
-                          if (nk && nk !== key) setDoc(renameEventInDoc(doc, key, nk));
-                        }}
-                      />
-                    </label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="text-destructive"
-                    onClick={() => removeEvent(key)}
-                  >
-                    <DeleteOutlineIcon style={{ fontSize: 18 }} />
-                  </Button>
-                </div>
-                <div className="p-3 space-y-4">
-                  <MatcherGroupEditor
-                    groups={groups}
-                    onChange={(g) =>
-                      setEventRaw(key, {
-                        ...body,
-                        matchers: orGroupsToMatchers(g),
-                      })
-                    }
-                  />
-                  <div>
-                    <button
-                      type="button"
-                      className="flex items-center gap-1 text-xs font-medium text-primary"
-                      onClick={() => setOpenAdvanced((m) => ({ ...m, [key]: !m[key] }))}
-                    >
-                      {advOpen ? (
-                        <ExpandLessIcon style={{ fontSize: 18 }} />
-                      ) : (
-                        <ExpandMoreIcon style={{ fontSize: 18 }} />
-                      )}
-                      Field extraction (optional)
-                    </button>
-                    {advOpen ? (
-                      <div className="mt-3 space-y-3 pl-2 border-l-2 border-border">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <label className="flex flex-col gap-0.5">
-                            <span className="text-xs text-muted-foreground">STA MAC regex (capture)</span>
-                            <input
-                              type="text"
-                              className="px-2 py-1 border border-input rounded-md text-xs font-mono bg-background"
-                              placeholder="(?i)from (...mac...)"
-                              value={staMac.logline_regex != null ? String(staMac.logline_regex) : ""}
-                              onChange={(e) => {
-                                const rx = e.target.value;
-                                const nextSta: Record<string, unknown> = {};
-                                if (rx.trim()) nextSta.logline_regex = rx;
-                                if (staMac.param_index !== undefined && typeof staMac.param_index === "number")
-                                  nextSta.param_index = staMac.param_index;
-                                const nextBody: Record<string, unknown> = {
-                                  ...body,
-                                  matchers: orGroupsToMatchers(groups),
-                                };
-                                if (Object.keys(nextSta).length > 0) nextBody.sta_mac = nextSta;
-                                else delete nextBody.sta_mac;
-                                setEventRaw(key, nextBody);
-                              }}
-                            />
-                          </label>
-                          <label className="flex flex-col gap-0.5">
-                            <span className="text-xs text-muted-foreground">
-                              Drain param index <span className="tabular-nums">(optional)</span>
-                            </span>
-                            <input
-                              type="number"
-                              min={0}
-                              step={1}
-                              className="px-2 py-1 border border-input rounded-md text-xs bg-background"
-                              value={staMac.param_index !== undefined ? Number(staMac.param_index) : ""}
-                              placeholder="e.g. 3"
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                const n = v === "" ? undefined : parseInt(v, 10);
-                                const nextSta: Record<string, unknown> = {};
-                                if (staMac.logline_regex) nextSta.logline_regex = staMac.logline_regex;
-                                if (n !== undefined && !Number.isNaN(n)) nextSta.param_index = n;
-                                const nextBody: Record<string, unknown> = {
-                                  ...body,
-                                  matchers: orGroupsToMatchers(groups),
-                                };
-                                if (Object.keys(nextSta).length > 0) nextBody.sta_mac = nextSta;
-                                else delete nextBody.sta_mac;
-                                setEventRaw(key, nextBody);
-                              }}
-                            />
-                          </label>
-                        </div>
-                        <label className="flex flex-col gap-0.5 max-w-xl">
-                          <span className="text-xs text-muted-foreground">Interface name regex</span>
-                          <input
-                            type="text"
-                            className="px-2 py-1 border border-input rounded-md text-xs font-mono bg-background"
-                            value={ifname.logline_regex != null ? String(ifname.logline_regex) : ""}
-                            onChange={(e) => {
-                              const nextBody: Record<string, unknown> = {
-                                ...body,
-                                matchers: orGroupsToMatchers(groups),
-                              };
-                              if (e.target.value.trim()) nextBody.ifname = { logline_regex: e.target.value };
-                              else delete nextBody.ifname;
-                              setEventRaw(key, nextBody);
-                            }}
-                          />
-                        </label>
-                        <label className="flex flex-col gap-0.5 max-w-xl">
-                          <span className="text-xs text-muted-foreground">WCID regex</span>
-                          <input
-                            type="text"
-                            className="px-2 py-1 border border-input rounded-md text-xs font-mono bg-background"
-                            value={wcid.logline_regex != null ? String(wcid.logline_regex) : ""}
-                            onChange={(e) => {
-                              const nextBody: Record<string, unknown> = {
-                                ...body,
-                                matchers: orGroupsToMatchers(groups),
-                              };
-                              if (e.target.value.trim()) nextBody.wcid = { logline_regex: e.target.value };
-                              else delete nextBody.wcid;
-                              setEventRaw(key, nextBody);
-                            }}
-                          />
-                        </label>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+  const persistMatchers = (g: ReturnType<typeof matchersToOrGroups>) => {
+    const opts = collectMatcherRegexOptions(g);
+    onChange({
+      ...body,
+      source_file_glob: fileGlob,
+      matchers: orGroupsToMatchers(g),
+      field_extracts: serializeFieldExtracts(fieldRules, opts),
+    });
+  };
+
+  return (
+    <div className="rounded-lg border border-primary/40 bg-card overflow-hidden flex flex-col lg:flex-row">
+      <div className="resize-x overflow-auto min-w-[20rem] lg:w-[60%] flex flex-col border-b lg:border-b-0 lg:border-r border-border bg-card pb-2">
+        <div className="px-3 py-2 bg-muted/40 border-b border-border space-y-1.5">
+          <div className="flex flex-wrap gap-2 items-end">
+            <label className="flex flex-col gap-0.5 flex-1 min-w-[10rem]">
+              <span className="text-[10px] uppercase text-muted-foreground">Event code</span>
+              <input
+                type="text"
+                className="px-2 py-1 border border-input rounded-md text-sm font-mono bg-background h-8"
+                defaultValue={eventKey}
+                onBlur={(e) => {
+                  const nk = e.target.value.trim().replace(/\s+/g, "_");
+                  if (nk) onRename(nk);
+                }}
+              />
+            </label>
+            <label className="flex flex-col gap-0.5 flex-[2] min-w-[12rem]">
+              <span className="text-[10px] uppercase text-muted-foreground">Log filename (glob)</span>
+              <input
+                type="text"
+                className="px-2 py-1 border border-input rounded-md text-xs font-mono bg-background h-8"
+                value={fileGlob}
+                placeholder="e.g. *wireless* or syslog*.txt"
+                onChange={(e) =>
+                  onChange({
+                    ...body,
+                    source_file_glob: e.target.value,
+                    matchers: orGroupsToMatchers(groups),
+                    field_extracts: serializeFieldExtracts(fieldRules, regexOptions),
+                  })
+                }
+              />
+            </label>
+            <div className="flex shrink-0 ml-auto">
+              <PatternLabIconButton label="Delete event" variant="destructive" onClick={onRemove}>
+                <DeleteOutlineIcon style={{ fontSize: 18 }} />
+              </PatternLabIconButton>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-3 space-y-4">
+          <section>
+            <h4 className="text-xs font-medium text-foreground mb-2">Match conditions</h4>
+            <MatcherGroupEditor groups={groups} onChange={persistMatchers} />
+          </section>
+
+          <section>
+            <h4 className="text-xs font-medium text-foreground mb-2">Field extraction</h4>
+            <FieldExtractEditor
+              rules={fieldRules}
+              regexOptions={regexOptions}
+              onChange={(rules) => onChange(applyFieldExtractsToBody(body, rules))}
+            />
+          </section>
+        </div>
+      </div>
+      <div className="flex-1 min-w-[15rem] flex flex-col bg-muted/10">
+        <div className="px-3 py-2 bg-muted/40 border-b border-border">
+          <span className="text-[10px] uppercase text-muted-foreground">Raw JSON</span>
+        </div>
+        <div className="p-3 overflow-auto">
+          <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap break-all">
+            {JSON.stringify(body, null, 2)}
+          </pre>
+        </div>
+      </div>
     </div>
   );
 }

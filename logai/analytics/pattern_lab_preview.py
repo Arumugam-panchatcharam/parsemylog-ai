@@ -1,13 +1,13 @@
-"""On-demand pattern lab preview for one CPE (no Parquet writes)."""
+"""On-demand Pattern Lab preview for one CPE (no Parquet writes)."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 from logai.analytics.data_layout import DataLayoutManager
+from logai.analytics.pattern_lab.pipeline import run_pattern_lab
 from logai.analytics.polars_etl import _cpe_identity_serial, _load_device_info
-from logai.analytics.wifi_protocol.pipeline import run_wifi_sta_issues
 
 
 def preview_pattern_lab(
@@ -16,12 +16,12 @@ def preview_pattern_lab(
     cpe_folder_serial: str,
     event_issue_doc: Dict[str, Any],
     processing_date: str | None = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    Run issue detection pipeline with an in-memory event/issue document.
+    Run Pattern Lab labeling + rules for one CPE.
 
     Returns:
-        (issue_rows_as_dicts, pipeline_stats) including skip reasons when data is missing.
+        (result_payload, stats) where result_payload has summary, event_breakdown, rule_rows.
     """
     if processing_date is None:
         processing_date = datetime.now().strftime("%Y-%m-%d")
@@ -30,28 +30,24 @@ def preview_pattern_lab(
     device_info = _load_device_info(layout, cpe_folder_serial)
     device_serial = _cpe_identity_serial(device_info, cpe_folder_serial)
 
-    sta_issues, stats = run_wifi_sta_issues(
+    result = run_pattern_lab(
         layout,
         cpe_folder_serial,
-        device_info,
-        processing_date,
+        event_issue_doc,
         device_serial,
-        write_labeled_debug=False,
-        yaml_path=None,
-        event_issue_doc=event_issue_doc,
+        processing_date,
     )
-
-    if sta_issues.height == 0:
-        return [], stats
-
-    rows = sta_issues.to_dicts()
-    out: List[Dict[str, Any]] = []
-    for row in rows:
-        clean: Dict[str, Any] = {}
-        for k, v in row.items():
-            if hasattr(v, "isoformat"):
-                clean[k] = v.isoformat()
-            else:
-                clean[k] = v
-        out.append(clean)
-    return out, stats
+    stats = dict(result.get("summary") or {})
+    stats["event_breakdown"] = result.get("event_breakdown") or []
+    stats["rule_breakdown"] = [
+        {
+            "issue_key": r.get("rule_key"),
+            "detect_type": r.get("detect_type"),
+            "group_by": r.get("group_by"),
+            "candidate_labeled_rows": r.get("candidate_labeled_rows"),
+            "issue_rows": r.get("total_matches"),
+            "skip_reason": r.get("skip_reason"),
+        }
+        for r in result.get("rule_rows") or []
+    ]
+    return result, stats

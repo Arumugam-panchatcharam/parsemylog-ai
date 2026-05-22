@@ -17,7 +17,6 @@ import logging
 from .consolidated_io import ensure_migrated_from_legacy, upsert_replace_device_serial
 from .data_layout import DataLayoutManager
 from .module_graph import get_module_graph
-from .pattern_lab_paths import resolved_pattern_lab_yaml_path
 from .wifi_protocol import run_wifi_sta_issues
 from logai.analytics.selfheal.cache_io import load_raw_selfheal_dict, migrate_json_cache_if_present
 from logai.analytics.selfheal.insights import build_selfheal_insights_dataframe
@@ -156,8 +155,6 @@ def polars_etl_per_cpe(user_id: str, project_id: str, serial: str,
         cpe_serial = _cpe_identity_serial(device_info, serial)
         layout.ensure_directories(layout.get_consolidated_analytics_dir())
 
-        lab_yaml = resolved_pattern_lab_yaml_path(user_id, project_id)
-
         results = {}
 
         reboot_features = _generate_reboot_features(
@@ -193,14 +190,36 @@ def polars_etl_per_cpe(user_id: str, project_id: str, serial: str,
             processing_date,
             cpe_serial,
             write_labeled_debug=False,
-            yaml_path=lab_yaml,
+            yaml_path=None,
         )
         si_path = layout.consolidated_parquet_path("sta_issues")
-        upsert_replace_device_serial(si_path, sta_issues, cpe_serial)
+        preserve_sta_issues = False
+        if sta_issues.height == 0 and si_path.is_file():
+            try:
+                existing_si = pl.read_parquet(si_path)
+                if (
+                    "device_serial" in existing_si.columns
+                    and existing_si.filter(pl.col("device_serial") == cpe_serial).height > 0
+                ):
+                    preserve_sta_issues = True
+                    wifi_issue_stats = {
+                        **wifi_issue_stats,
+                        "sta_issues_preserved": True,
+                        "sta_issues_preserve_reason": "empty_run_kept_previous",
+                    }
+                    logger.info(
+                        "Preserving existing sta_issues for %s (empty WiFi run)",
+                        cpe_serial,
+                    )
+            except Exception as e:
+                logger.warning("Could not check prior sta_issues for %s: %s", cpe_serial, e)
+        if not preserve_sta_issues:
+            upsert_replace_device_serial(si_path, sta_issues, cpe_serial)
         results["sta_issues"] = {
             "path": str(si_path),
             "rows": sta_issues.height,
             "wifi_stats": wifi_issue_stats,
+            "preserved": preserve_sta_issues,
         }
 
         sh_insights = build_selfheal_insights_dataframe(

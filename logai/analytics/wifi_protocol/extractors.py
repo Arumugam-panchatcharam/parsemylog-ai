@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import polars as pl
 
+from .field_extracts import enrich_field_extract_columns, extract_field_values
 from .interface_map import normalize_mac
 
 _MAC_HEX_LEN = 12
@@ -93,15 +94,13 @@ def enrich_correlation_columns(
     df: pl.DataFrame,
     events_yaml: Dict[str, Any],
 ) -> pl.DataFrame:
-    """Add sta_mac, wcid, ifname columns."""
+    """Add correlation columns from ``field_extracts`` and legacy per-field blocks."""
     if df.height == 0:
-        return df.with_columns(
-            [
-                pl.lit("").alias("sta_mac"),
-                pl.lit("").alias("wcid"),
-                pl.lit("").alias("ifname"),
-            ]
-        )
+        base = df
+        for col in ("sta_mac", "wcid", "ifname"):
+            if col not in base.columns:
+                base = base.with_columns(pl.lit("").alias(col))
+        return enrich_field_extract_columns(base, events_yaml)
 
     has_params = "parameter_list" in df.columns
     rows = df.to_dicts()
@@ -116,9 +115,14 @@ def enrich_correlation_columns(
         if not isinstance(params, list):
             params = None
 
-        sm = _field_for_row(ev, line, params, events_yaml, "sta_mac")
-        wc = _field_for_row(ev, line, params, events_yaml, "wcid")
-        iface = _field_for_row(ev, line, params, events_yaml, "ifname")
+        extracted = extract_field_values(
+            str(ev) if ev is not None else None,
+            line,
+            events_yaml,
+        )
+        sm = extracted.get("sta_mac") or _field_for_row(ev, line, params, events_yaml, "sta_mac")
+        wc = extracted.get("wcid") or _field_for_row(ev, line, params, events_yaml, "wcid")
+        iface = extracted.get("ifname") or _field_for_row(ev, line, params, events_yaml, "ifname")
 
         sta.append(sm)
         wcid.append(wc)
@@ -131,7 +135,7 @@ def enrich_correlation_columns(
             pl.Series("ifname", ifn),
         ]
     )
-    return out
+    return enrich_field_extract_columns(out, events_yaml)
 
 
 def scrub_sta_mac_matching_expected_bssid(df: pl.DataFrame) -> pl.DataFrame:

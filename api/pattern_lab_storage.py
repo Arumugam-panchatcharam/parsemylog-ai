@@ -65,7 +65,7 @@ def save_profile(
     pid = sanitize_profile_id(profile_id)
     if not pid:
         raise ValueError("Invalid profile name")
-    ok, msg = validate_pattern_lab(doc)
+    ok, msg = validate_pattern_lab(doc, strict=False)
     if not ok:
         raise ValueError(msg)
     root = user_pattern_lab_profiles_dir(user_id)
@@ -225,7 +225,7 @@ def duplicate_from_request_body(body: Any) -> Tuple[str | None, Optional[str], D
     doc: Optional[Dict[str, Any]] = None
     if has_doc:
         doc = {"events": body.get("events") or {}, "issues": body.get("issues") or {}}
-        ok, msg = validate_pattern_lab(doc)
+        ok, msg = validate_pattern_lab(doc, strict=False)
         if not ok:
             return None, None, None, msg
 

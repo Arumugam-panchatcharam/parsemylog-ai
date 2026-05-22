@@ -46,11 +46,13 @@ import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CircularProgress from "@mui/material/CircularProgress";
 import LinearProgress from "@mui/material/LinearProgress";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import ScienceIcon from "@mui/icons-material/Science";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import CloseIcon from "@mui/icons-material/Close";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import PatternOverviewTab from "@/pages/PatternOverviewTab";
+import PatternLabTab from "@/components/analytics/PatternLabTab";
 
 // Memoized Plot component to prevent unnecessary re-renders
 const MemoizedPlot = memo(Plot);
@@ -464,11 +466,13 @@ export default function PatternAnalyzerPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [activeTab, setActiveTab] = useState<"cpe" | "overview">("cpe");
+  const [activeTab, setActiveTab] = useState<"cpe" | "overview" | "pattern-lab">("cpe");
 
   useEffect(() => {
     const t = searchParams.get("tab");
-    setActiveTab(t === "overview" ? "overview" : "cpe");
+    if (t === "overview") setActiveTab("overview");
+    else if (t === "pattern-lab") setActiveTab("pattern-lab");
+    else setActiveTab("cpe");
   }, [searchParams]);
 
   // Domain-grouped pattern state
@@ -1417,12 +1421,30 @@ export default function PatternAnalyzerPage() {
           <CompareArrowsIcon style={{ fontSize: 16 }} />
           Cross-CPE Overview
         </button>
+        <button
+          onClick={() => {
+            setActiveTab("pattern-lab");
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.set("tab", "pattern-lab");
+              return next;
+            }, { replace: true });
+          }}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "pattern-lab"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+          }`}
+        >
+          <ScienceIcon style={{ fontSize: 16 }} />
+          Pattern Lab
+        </button>
       </div>
 
-      {/* Cross-CPE Overview tab */}
       {activeTab === "overview" && <PatternOverviewTab />}
 
-      {/* CPE Analysis tab (existing content) */}
+      {activeTab === "pattern-lab" && <PatternLabTab />}
+
       {activeTab === "cpe" && <>
 
       {/* ====== PATTERN MANAGEMENT ====== */}

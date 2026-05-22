@@ -1,13 +1,16 @@
 # Generic Pattern Lab starter — teaches events + rules without domain-specific WiFi jargon.
-# Events label log lines; rules detect patterns in labeled timelines (preview/ETL use your project's logs).
+# Events label log lines; rules detect patterns in labeled timelines (preview uses your project's logs).
+#
+# Optional: restrict which *_rg.parquet domains to scan (default: all present in the CPE folder).
+# domains:
+#   - wireless
+#   - system
 
 events:
   APP_STARTED:
     matchers:
       - logline_contains: "application started"
       - logline_contains: "service started"
-    sta_mac:
-      logline_regex: "(?i)([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2})"
 
   APP_STOPPED:
     matchers:
@@ -29,7 +32,7 @@ issues:
       type: missing_followup
       trigger: APP_STARTED
       expect: APP_STOPPED
-      group_by: [sta_mac, ifname]
+      group_by: []
       within_sec: 300
 
   error_burst:
@@ -41,7 +44,7 @@ issues:
       event: ERROR_LINE
       min_occurrence: 5
       window_sec: 60
-      group_by: [sta_mac, ifname]
+      group_by: []
 
   start_error_stop_sequence:
     category: lifecycle
@@ -51,4 +54,4 @@ issues:
       type: ordered_sequence
       sequence: [APP_STARTED, ERROR_LINE, APP_STOPPED]
       max_gap_sec: 120
-      group_by: [sta_mac, ifname]
+      group_by: []

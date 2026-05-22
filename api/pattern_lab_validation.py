@@ -16,7 +16,9 @@ def _serialized_byte_size(events: Dict[str, Any], issues: Dict[str, Any]) -> int
     )
 
 
-def _validate_detect_block(issue_key: str, detect: Dict[str, Any]) -> Tuple[bool, str]:
+def _validate_detect_block(
+    issue_key: str, detect: Dict[str, Any], *, strict: bool
+) -> Tuple[bool, str]:
     if not isinstance(detect, dict):
         return False, f"issue {issue_key}: detect must be an object"
     dtype = detect.get("type")
@@ -25,6 +27,8 @@ def _validate_detect_block(issue_key: str, detect: Dict[str, Any]) -> Tuple[bool
             False,
             f"issue {issue_key}: detect.type must be one of {sorted(ALLOWED_DETECT_TYPES)}",
         )
+    if not strict:
+        return True, ""
     if dtype == "ordered_sequence":
         seq = detect.get("sequence") or []
         if not isinstance(seq, list) or len(seq) < 2:
@@ -44,9 +48,9 @@ def _validate_detect_block(issue_key: str, detect: Dict[str, Any]) -> Tuple[bool
 
 
 def _validate_event_codes_in_sequence(
-    events: Dict[str, Any], issues: Dict[str, Any]
+    events: Dict[str, Any], issues: Dict[str, Any], *, strict: bool
 ) -> Tuple[bool, str]:
-    if not events:
+    if not strict or not events:
         return True, ""
     codes = set(events.keys())
     for ik, meta in issues.items():
@@ -77,7 +81,7 @@ def _validate_event_codes_in_sequence(
     return True, ""
 
 
-def validate_pattern_lab(doc: Dict[str, Any]) -> Tuple[bool, str]:
+def validate_pattern_lab(doc: Dict[str, Any], *, strict: bool = True) -> Tuple[bool, str]:
     if not isinstance(doc, dict):
         return False, "body must be a JSON object"
     extra = set(doc.keys()) - {"events", "issues"}
@@ -108,11 +112,11 @@ def validate_pattern_lab(doc: Dict[str, Any]) -> Tuple[bool, str]:
             return False, f"issue {issue_key} must be an object"
         det = meta.get("detect")
         if det is not None:
-            ok, err = _validate_detect_block(issue_key, det)
+            ok, err = _validate_detect_block(issue_key, det, strict=strict)
             if not ok:
                 return False, err
 
-    ok, err = _validate_event_codes_in_sequence(events, issues)
+    ok, err = _validate_event_codes_in_sequence(events, issues, strict=strict)
     if not ok:
         return False, err
 

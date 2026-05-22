@@ -1,4 +1,7 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo } from "react";
+import PatternDistributionDetailTable, {
+  type PatternDistributionRow,
+} from "@/components/patternAnalyzer/PatternDistributionDetailTable";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   cpeOverviewApi,
@@ -17,8 +20,6 @@ import CircularProgress from "@mui/material/CircularProgress";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
-import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
@@ -88,8 +89,6 @@ interface PatternRow {
   perCpeCounts: { serial: string; count: number }[];
 }
 
-type SortKey = "name" | "cpesAffected" | "pctAffected" | "totalMatches";
-
 /* ---------------------------------------------------------------- Constants */
 
 /**
@@ -125,20 +124,6 @@ function escapeHtmlForPlotlyHover(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function severityClass(pct: number): string {
-  if (pct >= 80) return "bg-red-50 dark:bg-red-900/15 border-red-200 dark:border-red-800";
-  if (pct >= 50) return "bg-orange-50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800";
-  if (pct >= 25) return "bg-yellow-50 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-800";
-  return "border-border";
-}
-
-function severityBadge(pct: number): string {
-  if (pct >= 80) return "text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30";
-  if (pct >= 50) return "text-orange-700 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30";
-  if (pct >= 25) return "text-yellow-700 dark:text-yellow-400 bg-yellow-100 dark:bg-yellow-900/30";
-  return "text-muted-foreground bg-muted";
-}
-
 /** Human-readable numeric rule for export (e.g. "<=200"). */
 function formatNumericCompareSummary(vc: PatternValueCompare | null | undefined): string {
   if (!vc?.enabled) return "";
@@ -169,9 +154,6 @@ export default function PatternOverviewTab() {
   const queryClient = useQueryClient();
   const mergePlot = usePlotlyLayoutMerge();
 
-  const [sortKey, setSortKey] = useState<SortKey>("pctAffected");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [expandedPattern, setExpandedPattern] = useState<string | null>(null);
   const [domainFilter, setDomainFilter] = useState<string>("all");
   const [rebootWindowMinutes, setRebootWindowMinutes] = useState<number>(60); // Default 1 hour
   const [enableRebootFilter, setEnableRebootFilter] = useState<boolean>(false);
@@ -280,26 +262,41 @@ export default function PatternOverviewTab() {
 
   const filteredRows = useMemo(() => {
     let r = domainFilter === "all" ? rows : rows.filter((p) => p.domain === domainFilter);
-    r = r.filter((p) => p.totalMatches > 0);
-    r = [...r].sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
-      if (typeof av === "string" && typeof bv === "string") {
-        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-      }
-      return sortDir === "asc" ? (av as number) - (bv as number) : (bv as number) - (av as number);
-    });
-    return r;
-  }, [rows, sortKey, sortDir, domainFilter]);
+    return r.filter((p) => p.totalMatches > 0);
+  }, [rows, domainFilter]);
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("desc");
-    }
-  };
+  const matchFilterHints = useMemo(() => {
+    const hints: string[] = [];
+    if (enableFrequencyFilter) hints.push("freq");
+    if (enableRebootFilter) hints.push("reboot");
+    return hints;
+  }, [enableFrequencyFilter, enableRebootFilter]);
+
+  const distributionTableRows: PatternDistributionRow[] = useMemo(
+    () =>
+      filteredRows.map((row) => ({
+        key: `${row.domain}::${row.name}`,
+        domain: row.domain,
+        name: row.name,
+        cpesAffected: row.cpesAffected,
+        pctAffected: row.pctAffected,
+        totalMatches: row.totalMatches,
+        perCpeCounts: row.perCpeCounts,
+        valueComparePattern: row.valueComparePattern,
+        matchFilterHints: matchFilterHints.length > 0 ? matchFilterHints : undefined,
+      })),
+    [filteredRows, matchFilterHints],
+  );
+
+  const matchesColumnTitle =
+    "For numeric-threshold patterns, totals sum 0/1 pass flags per CPE. " +
+    (enableFrequencyFilter && enableRebootFilter
+      ? "Otherwise: total matches after frequency and reboot filters."
+      : enableFrequencyFilter
+        ? "Otherwise: total matches after frequency filter."
+        : enableRebootFilter
+          ? "Otherwise: total matches after reboot timeline filter."
+          : "Otherwise: total matches across all CPEs.");
 
   const downloadDistributionExcel = () => {
     if (!projectId || filteredRows.length === 0) return;
@@ -444,13 +441,6 @@ export default function PatternOverviewTab() {
         console.error("Pattern distribution Excel export failed", err);
       }
     })();
-  };
-
-  const SortIcon = ({ col }: { col: SortKey }) => {
-    if (sortKey !== col) return null;
-    return sortDir === "asc"
-      ? <ArrowUpwardIcon style={{ fontSize: 12 }} />
-      : <ArrowDownwardIcon style={{ fontSize: 12 }} />;
   };
 
   /* ---- Chart data ---- */
@@ -770,197 +760,31 @@ export default function PatternOverviewTab() {
         </div>
       )}
 
-      {/* Detail table */}
       <div className="flex justify-center">
-        <div className="bg-card border border-border rounded-xl overflow-hidden inline-block">
-        <div className="px-3 py-1 border-b border-border bg-muted/30 flex items-center justify-between gap-2">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Pattern Distribution Detail
-          </h3>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              downloadDistributionExcel();
-            }}
-            disabled={filteredRows.length === 0}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border border-border bg-background hover:bg-muted/80 disabled:opacity-45 disabled:pointer-events-none text-foreground shrink-0"
-            title="Download table as Excel (.xlsx): all CPE rows for visible patterns"
-          >
-            <FileDownloadIcon style={{ fontSize: 14 }} />
-            Excel
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="text-[11px] border-collapse">
-            <colgroup>
-              <col style={{ width: "140px" }} />
-              <col style={{ width: "auto" }} />
-              <col style={{ width: "120px" }} />
-              <col style={{ width: "80px" }} />
-              <col style={{ width: "100px" }} />
-              <col style={{ width: "60px" }} />
-            </colgroup>
-            <thead>
-              <tr className="border-b border-border bg-muted/20">
-                <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Domain</th>
-                <th
-                  className="text-left px-2 py-1 font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none"
-                  onClick={() => handleSort("name")}
-                >
-                  Pattern <SortIcon col="name" />
-                </th>
-                <th
-                  className="text-right px-2 py-1 font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap"
-                  onClick={() => handleSort("cpesAffected")}
-                >
-                  CPEs <SortIcon col="cpesAffected" />
-                </th>
-                <th
-                  className="text-right px-2 py-1 font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap"
-                  onClick={() => handleSort("pctAffected")}
-                >
-                  % <SortIcon col="pctAffected" />
-                </th>
-                <th
-                  className="text-right px-2 py-1 font-semibold text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap"
-                  onClick={() => handleSort("totalMatches")}
-                  title={
-                    "For numeric-threshold patterns, totals sum 0/1 pass flags per CPE. " +
-                    (enableFrequencyFilter && enableRebootFilter
-                      ? "Otherwise: total matches after frequency and reboot filters."
-                      : enableFrequencyFilter
-                        ? "Otherwise: total matches after frequency filter."
-                        : enableRebootFilter
-                          ? "Otherwise: total matches after reboot timeline filter."
-                          : "Otherwise: total matches across all CPEs.")
-                  }
-                >
-                  Matches <SortIcon col="totalMatches" />
-                </th>
-                <th className="px-0 py-1"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
-                    No patterns with matches found.
-                  </td>
-                </tr>
-              )}
-              {filteredRows.map((row) => {
-                const key = `${row.domain}::${row.name}`;
-                const isExpanded = expandedPattern === key;
-                const domainColor = DOMAIN_COLORS[domainNames.indexOf(row.domain) % DOMAIN_COLORS.length];
-                return (
-                  <Fragment key={key}>
-                    <tr
-                      className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${severityClass(row.pctAffected)}`}
-                      onClick={() => setExpandedPattern(isExpanded ? null : key)}
-                    >
-                      <td className="px-2 py-1 align-top">
-                        <span
-                          className="inline-block px-1.5 py-px rounded text-[10px] font-medium truncate max-w-[110px] text-foreground border-l-[3px]"
-                          style={{
-                            backgroundColor: `${domainColor}33`,
-                            borderLeftColor: domainColor,
-                          }}
-                        >
-                          {row.domain}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1 font-medium text-foreground">
-                        <div className="flex items-center gap-1 min-w-0">
-                          {row.valueComparePattern && (
-                            <span
-                              className="shrink-0 text-[9px] font-bold px-1 py-px rounded bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-200"
-                              title="Numeric threshold: cell counts are 0 or 1 per CPE"
-                            >
-                              #
-                            </span>
-                          )}
-                          <div className="truncate" title={row.name}>
-                            {row.name}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap align-top">
-                        {row.cpesAffected}/{totalCpes}
-                      </td>
-                      <td className="px-2 py-1 text-right align-top">
-                        <span className={`inline-block px-1.5 py-px rounded text-[10px] font-semibold ${severityBadge(row.pctAffected)}`}>
-                          {row.pctAffected}%
-                        </span>
-                      </td>
-                      <td className="px-2 py-1 text-right tabular-nums font-medium align-top">
-                        <div className="flex flex-col items-end">
-                          <span className="font-semibold">{row.totalMatches.toLocaleString()}</span>
-                          {/* Show specific filter indicators */}
-                          <div className="flex gap-1 flex-wrap justify-end">
-                            {enableFrequencyFilter && (
-                              <span className="text-[9px] text-muted-foreground bg-blue-50 px-1 rounded">freq</span>
-                            )}
-                            {enableRebootFilter && (
-                              <span className="text-[9px] text-muted-foreground bg-orange-50 px-1 rounded">reboot</span>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-0 py-1 text-muted-foreground align-top">
-                        {isExpanded
-                          ? <ExpandLessIcon style={{ fontSize: 14 }} />
-                          : <ExpandMoreIcon style={{ fontSize: 14 }} />
-                        }
-                      </td>
-                    </tr>
-                    {isExpanded && (
-                      <tr className="border-b bg-muted/10" onClick={(e) => e.stopPropagation()}>
-                        <td colSpan={6} className="px-3 py-2">
-                          <div className="bg-muted/30 rounded-lg p-2 max-h-[240px] overflow-y-auto">
-                            <div className="flex items-center justify-between mb-2">
-                              <p className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide">
-                                {row.valueComparePattern ? "CPE pass list (numeric)" : "Per-CPE Breakdown"}
-                              </p>
-                              <div className="text-[9px] text-muted-foreground bg-background px-2 py-0.5 rounded border">
-                                {row.valueComparePattern ? (
-                                  <>
-                                    {row.totalMatches.toLocaleString()} CPEs passed • cap 1/CPE
-                                  </>
-                                ) : (
-                                  <>
-                                    {row.perCpeCounts.filter((c) => c.count > 0).length} CPEs • {row.totalMatches.toLocaleString()}{" "}
-                                    total matches
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1">
-                              {row.perCpeCounts
-                                .filter((c) => c.count > 0)
-                                .map((c) => (
-                                  <div
-                                    key={c.serial}
-                                    className="flex items-center justify-between px-1.5 py-0.5 rounded bg-background border border-border text-[10px]"
-                                  >
-                                    <span className="font-mono truncate mr-1">{c.serial}</span>
-                                    <span className="font-semibold tabular-nums">{c.count.toLocaleString()}</span>
-                                  </div>
-                                ))}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="inline-block max-w-full">
+          <PatternDistributionDetailTable
+            rows={distributionTableRows}
+            totalCpes={totalCpes}
+            domainColors={DOMAIN_COLORS}
+            matchesColumnTitle={matchesColumnTitle}
+            headerActions={
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  downloadDistributionExcel();
+                }}
+                disabled={filteredRows.length === 0}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border border-border bg-background hover:bg-muted/80 disabled:opacity-45 disabled:pointer-events-none text-foreground shrink-0"
+                title="Download table as Excel (.xlsx): all CPE rows for visible patterns"
+              >
+                <FileDownloadIcon style={{ fontSize: 14 }} />
+                Excel
+              </button>
+            }
+          />
         </div>
       </div>
-    </div>
     </div>
   );
 }

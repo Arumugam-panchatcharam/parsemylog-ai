@@ -1944,6 +1944,8 @@ export interface AnalyticsStaIssue {
   sta_mac: string;
   ifname: string;
   wcid: string;
+  /** JSON object of group_by field values (Pattern Lab). */
+  correlation?: string;
   window_start: string;
   window_end: string;
   evidence: string;
@@ -1995,16 +1997,68 @@ export interface PatternLabDoc {
   issues: Record<string, unknown>;
 }
 
-/** Pipeline stats returned with pattern-lab preview. */
-export interface PatternLabPreviewStats {
+export interface PatternLabRuleRow {
+  rule_key: string;
+  detect_type?: string;
+  group_by?: string[];
+  total_matches: number;
+  candidate_labeled_rows?: number;
+  skip_reason?: string;
+  samples?: Array<{ timestamp?: string; source_file?: string; logline?: string }>;
+  per_cpe?: Array<{ serial: string; count: number }>;
+}
+
+export interface PatternLabPreviewSummary {
   device_serial?: string;
-  wireless_rows?: number;
-  labeled_events?: number;
-  labeled_with_sta_mac?: number;
-  sta_issues_rows?: number;
-  sta_mac_rate?: number;
+  domains_scanned?: string[];
+  total_log_lines?: number;
+  labeled_log_lines?: number;
+  unlabeled_log_lines?: number;
+  parquet_log_lines?: number;
+  raw_log_lines?: number;
+  raw_files_scanned?: string[];
+  rules_with_matches?: number;
   skipped?: boolean;
   reason?: string;
+  [key: string]: unknown;
+}
+
+export interface PatternLabPreviewData {
+  summary: PatternLabPreviewSummary;
+  event_breakdown: Array<{
+    event_code: string;
+    match_count: number;
+    samples?: Array<{ timestamp?: string; source_file?: string; logline?: string }>;
+  }>;
+  rule_rows: PatternLabRuleRow[];
+}
+
+/** Pipeline stats returned with pattern-lab preview (mirrors summary + diagnostics). */
+export interface PatternLabPreviewStats {
+  device_serial?: string;
+  pattern_lab_mode?: boolean;
+  wireless_rows?: number;
+  total_log_lines?: number;
+  labeled_events?: number;
+  labeled_log_lines?: number;
+  unlabeled_log_lines?: number;
+  sta_issues_rows?: number;
+  skipped?: boolean;
+  reason?: string;
+  event_breakdown?: Array<{
+    event_code: string;
+    match_count: number;
+    samples?: Array<{ timestamp?: string; source_file?: string; logline?: string }>;
+  }>;
+  rule_breakdown?: Array<{
+    issue_key: string;
+    detect_type?: string;
+    group_by?: string[];
+    candidate_labeled_rows?: number;
+    issue_rows_raw?: number;
+    issue_rows?: number;
+    skip_reason?: string;
+  }>;
   [key: string]: unknown;
 }
 
@@ -2127,7 +2181,7 @@ export const analyticsApi = {
   ) =>
     api.post<{
       success: boolean;
-      data?: AnalyticsStaIssue[];
+      data?: PatternLabPreviewData;
       stats?: PatternLabPreviewStats;
       count?: number;
       error?: string;

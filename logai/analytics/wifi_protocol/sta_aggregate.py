@@ -1,4 +1,4 @@
-"""Roll up STA issue rows per (device, STA MAC, issue_key)."""
+"""Roll up issue rows per device, issue_key, and correlation group."""
 
 from __future__ import annotations
 
@@ -55,17 +55,25 @@ def _flatten_evidence_cells(cells: Any) -> str:
 
 def aggregate_sta_issues_by_mac(sta_issues: pl.DataFrame) -> pl.DataFrame:
     """
-    One row per ``device_serial`` + ``sta_mac`` + ``issue_key`` with counts and merged evidence.
+    One row per ``device_serial`` + ``issue_key`` + ``correlation`` with counts and merged evidence.
 
     ``window_start`` / ``window_end`` use min/max over non-empty ISO timestamps.
+    Falls back to ``sta_mac`` grouping when ``correlation`` column is absent (legacy frames).
     """
     if sta_issues.height == 0:
         return sta_issues
 
-    keys = ["device_serial", "sta_mac", "issue_key"]
+    if "correlation" in sta_issues.columns:
+        keys = ["device_serial", "issue_key", "correlation"]
+    else:
+        keys = ["device_serial", "sta_mac", "issue_key"]
+
     for k in keys:
         if k not in sta_issues.columns:
             return sta_issues
+
+    if "correlation" not in sta_issues.columns:
+        sta_issues = sta_issues.with_columns(pl.lit("{}").alias("correlation"))
 
     ws = _col_iso_to_datetime_us("window_start").alias("_ws")
     we = _col_iso_to_datetime_us("window_end").alias("_we")
@@ -79,6 +87,7 @@ def aggregate_sta_issues_by_mac(sta_issues: pl.DataFrame) -> pl.DataFrame:
             pl.col("category").first().alias("category"),
             pl.col("severity").first().alias("severity"),
             pl.col("rca_hint").first().alias("rca_hint"),
+            pl.col("sta_mac").first().alias("sta_mac"),
             pl.col("ifname").first().alias("ifname"),
             pl.col("wcid").first().alias("wcid"),
             pl.col("processing_date").sort(descending=True).first().alias("processing_date"),
@@ -114,6 +123,7 @@ def aggregate_sta_issues_by_mac(sta_issues: pl.DataFrame) -> pl.DataFrame:
             "sta_mac",
             "ifname",
             "wcid",
+            "correlation",
             "window_start",
             "window_end",
             "evidence",

@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { FullPageLoading } from "@/components/ui/Loading";
 import { PageHeader } from "@/components/ui/PageHeader";
-import PatternLabTab from "@/components/analytics/PatternLabTab";
 
 /** Match Syslog/Telemetry: full content width (no max-w-7xl). */
 const ANALYTICS_LAYOUT_CLASS =
@@ -94,7 +93,7 @@ interface FleetSummary {
 function AnalyticsPage() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"overview" | "wifi-sta" | "pattern-lab" | "self-heal">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "wifi-sta" | "self-heal">("overview");
   /** Shared CPE serial filter for both WiFi STA and SelfHeal lists (substring match on serial). */
   const [fleetSignalsCpeSearch, setFleetSignalsCpeSearch] = useState<string>("");
   /** Wi‑Fi STA: substring search on issue type */
@@ -356,61 +355,103 @@ function AnalyticsPage() {
     return { tagDistribution, restartingProcesses, leakingProcesses };
   }, [selfHealInsights]);
 
-  const renderSignalsEtlBanner = () => (
-    <div className="border-b border-border px-6 py-4">
-      <h2 className="text-lg font-medium text-foreground">Polars ETL &amp; signal extracts</h2>
-      <p className="text-sm text-muted-foreground mt-1 max-w-4xl">
-        Refreshes <code className="text-xs bg-muted px-1 rounded">sta_issues.parquet</code> and{" "}
-        <code className="text-xs bg-muted px-1 rounded">selfheal_insights.parquet</code> for devices with
-        RG output.
-      </p>
-      <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={forcePolarsEtlMutation.isPending}
-          onClick={() => forcePolarsEtlMutation.mutate()}
-        >
-          <RefreshIcon className="w-4 h-4 mr-1" />
-          {forcePolarsEtlMutation.isPending ? "Re-running ETL…" : "Re-run Polars ETL"}
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          Recomputes consolidated Parquet for every device with RG output.
-        </span>
-      </div>
-      {forcePolarsEtlMutation.isError ? (
-        <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {String(forcePolarsEtlMutation.error)}
-        </div>
-      ) : null}
-      {forcePolarsEtlMutation.isSuccess &&
-      forcePolarsEtlMutation.data &&
-      typeof forcePolarsEtlMutation.data === "object" &&
-      "backfill" in forcePolarsEtlMutation.data &&
-      forcePolarsEtlMutation.data.backfill ? (
-        <div
-          className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100"
-          role="status"
-        >
-          Polars ETL completed:{" "}
-          <span className="font-medium tabular-nums">
-            {Number(forcePolarsEtlMutation.data.backfill.backfilled_count ?? 0)}
-          </span>{" "}
-          device(s) processed
-          {Number(forcePolarsEtlMutation.data.backfill.failed_count ?? 0) > 0 ? (
-            <>
-              ,{" "}
-              <span className="font-medium text-destructive tabular-nums">
-                {Number(forcePolarsEtlMutation.data.backfill.failed_count)} failed
-              </span>
-            </>
+  const renderSignalsEtlBanner = (compact = false) => {
+    const etlTooltip =
+      "Re-run Polars ETL: refreshes sta_issues.parquet and selfheal_insights.parquet for devices with RG output";
+    if (compact) {
+      return (
+        <div className="border-b border-border px-3 py-1.5 flex flex-wrap items-center gap-2 min-h-[2.25rem]">
+          <span className="text-xs font-medium text-foreground shrink-0">Polars ETL</span>
+          <button
+            type="button"
+            title={etlTooltip}
+            aria-label={etlTooltip}
+            disabled={forcePolarsEtlMutation.isPending}
+            onClick={() => forcePolarsEtlMutation.mutate()}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background hover:bg-muted disabled:opacity-50"
+          >
+            <RefreshIcon className={cn("h-4 w-4", forcePolarsEtlMutation.isPending && "animate-spin")} />
+          </button>
+          {forcePolarsEtlMutation.isError ? (
+            <span className="text-xs text-destructive truncate max-w-md" title={String(forcePolarsEtlMutation.error)}>
+              {String(forcePolarsEtlMutation.error)}
+            </span>
           ) : null}
-          .
+          {forcePolarsEtlMutation.isSuccess &&
+          forcePolarsEtlMutation.data &&
+          typeof forcePolarsEtlMutation.data === "object" &&
+          "backfill" in forcePolarsEtlMutation.data &&
+          forcePolarsEtlMutation.data.backfill ? (
+            <span
+              className="text-xs text-emerald-700 dark:text-emerald-400 tabular-nums"
+              role="status"
+              title="Polars ETL completed"
+            >
+              {Number(forcePolarsEtlMutation.data.backfill.backfilled_count ?? 0)} ok
+              {Number(forcePolarsEtlMutation.data.backfill.failed_count ?? 0) > 0
+                ? ` · ${Number(forcePolarsEtlMutation.data.backfill.failed_count)} failed`
+                : null}
+            </span>
+          ) : null}
         </div>
-      ) : null}
-    </div>
-  );
+      );
+    }
+    return (
+      <div className="border-b border-border px-6 py-4">
+        <h2 className="text-lg font-medium text-foreground">Polars ETL &amp; signal extracts</h2>
+        <p className="text-sm text-muted-foreground mt-1 max-w-4xl">
+          Refreshes <code className="text-xs bg-muted px-1 rounded">sta_issues.parquet</code> and{" "}
+          <code className="text-xs bg-muted px-1 rounded">selfheal_insights.parquet</code> for devices with
+          RG output.
+        </p>
+        <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={forcePolarsEtlMutation.isPending}
+            onClick={() => forcePolarsEtlMutation.mutate()}
+          >
+            <RefreshIcon className="w-4 h-4 mr-1" />
+            {forcePolarsEtlMutation.isPending ? "Re-running ETL…" : "Re-run Polars ETL"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Recomputes consolidated Parquet for every device with RG output.
+          </span>
+        </div>
+        {forcePolarsEtlMutation.isError ? (
+          <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {String(forcePolarsEtlMutation.error)}
+          </div>
+        ) : null}
+        {forcePolarsEtlMutation.isSuccess &&
+        forcePolarsEtlMutation.data &&
+        typeof forcePolarsEtlMutation.data === "object" &&
+        "backfill" in forcePolarsEtlMutation.data &&
+        forcePolarsEtlMutation.data.backfill ? (
+          <div
+            className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100"
+            role="status"
+          >
+            Polars ETL completed:{" "}
+            <span className="font-medium tabular-nums">
+              {Number(forcePolarsEtlMutation.data.backfill.backfilled_count ?? 0)}
+            </span>{" "}
+            device(s) processed
+            {Number(forcePolarsEtlMutation.data.backfill.failed_count ?? 0) > 0 ? (
+              <>
+                ,{" "}
+                <span className="font-medium text-destructive tabular-nums">
+                  {Number(forcePolarsEtlMutation.data.backfill.failed_count)} failed
+                </span>
+              </>
+            ) : null}
+            .
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   if (!projectId) {
     return (
@@ -512,7 +553,6 @@ function AnalyticsPage() {
             [
               ["overview", "Overview"],
               ["wifi-sta", "WiFi STA"],
-              ["pattern-lab", "Pattern lab"],
               ["self-heal", "SelfHeal"],
             ] as const
           ).map(([id, label]) => (
@@ -1032,8 +1072,6 @@ function AnalyticsPage() {
               </section>
             </div>
           </div>
-        ) : activeTab === "pattern-lab" ? (
-          <PatternLabTab etlBanner={renderSignalsEtlBanner()} />
         ) : (
           <div className="bg-card rounded-lg border border-border shadow-sm">
             {renderSignalsEtlBanner()}
