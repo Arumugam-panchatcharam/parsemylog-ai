@@ -1233,6 +1233,38 @@ export interface AdminNatco extends NatcoInfo {
   created_at: string;
 }
 
+export interface DeploymentCommitSummary {
+  full_sha: string;
+  sha: string;
+  subject: string;
+  author: string;
+  date_relative: string;
+}
+
+export interface DeploymentUpdateStatus {
+  enabled: boolean;
+  version?: string;
+  phase: string;
+  state: string;
+  step: string | null;
+  error: string | null;
+  current_sha?: string;
+  pre_sha?: string;
+  post_sha?: string;
+  upstream_sha?: string;
+  upstream_ref?: string;
+  behind_count?: number;
+  commits?: DeploymentCommitSummary[];
+  diff_stat?: string;
+  preview_ready?: boolean;
+  updated_at?: string;
+  log_tail?: string;
+  project_root?: string;
+  last_update_at?: string;
+  last_update_by?: string;
+  last_update_status?: string;
+}
+
 export interface PatternSubmission {
   id: number;
   user_id: number;
@@ -1293,6 +1325,14 @@ export const adminApi = {
     }>("/admin/settings/llm"),
   setLlmSettings: (enabled: boolean) =>
     api.put<{ enabled: boolean; message: string }>("/admin/settings/llm", { enabled }),
+
+  // Deployment update (admin, server upgrade)
+  getDeploymentStatus: () =>
+    api.get<DeploymentUpdateStatus>("/admin/deployment/status"),
+  previewDeployment: () =>
+    api.post<DeploymentUpdateStatus>("/admin/deployment/preview"),
+  applyDeployment: () =>
+    api.post<DeploymentUpdateStatus>("/admin/deployment/apply", { confirm: true }),
 
   // Submissions
   listSubmissions: (status?: string) =>

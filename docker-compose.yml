@@ -28,6 +28,9 @@ services:
       - logai_data:/app/data
       # Batch CPE logs - shared with host
       - batch_cpe_logs:/app/batch_cpe_logs
+      # In-app deployment update (admin): full repo + Docker socket when enabled in .env
+      - ${DEPLOY_PROJECT_ROOT:-.}:/deploy:rw
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: always
     env_file:
       - .env
@@ -35,6 +38,12 @@ services:
       - DB_PATH=/app/data/logai_users.db
       - REDIS_URL=redis://redis:6379/0
       - GUNICORN_TIMEOUT=1800
+      - DEPLOY_UPDATE_ENABLED=${DEPLOY_UPDATE_ENABLED:-0}
+      - DEPLOY_PROJECT_ROOT=${DEPLOY_PROJECT_ROOT:-/deploy}
+      - DEPLOY_STATUS_FILE=/app/data/deploy_update_status.json
+      - APP_PORT=${APP_PORT:-40901}
+      - DEPLOY_HEALTH_CHECK_URL=http://host.docker.internal:${APP_PORT:-40901}/api/auth/health
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
       # Cross-CPE overview + Pattern Analyzer “Cross-CPE Overview” (parallel rg). Set 0 to disable.
       - CPE_OVERVIEW_ENABLED=1
       # Cross-CPE pattern scan: fewer workers reduces RAM/disk contention; tune timeouts if rg still logs timeouts

@@ -12,7 +12,8 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file
 
 from api.app import dbm
-from api.auth import admin_required
+from api.auth import admin_required, get_user_id
+from api.services import deployment_update as deploy_svc
 from api.routes.regex_analyzer import (
     _scan_progress_path,
     _scan_result_path,
@@ -217,6 +218,67 @@ def update_llm_settings():
         "enabled": bool(enabled),
         "message": f"LLM {'enabled' if enabled else 'disabled'} successfully",
     }), 200
+
+
+# =====================================================================
+# Deployment update (admin — in-app server upgrade)
+# =====================================================================
+
+
+@admin_bp.route("/deployment/status", methods=["GET"])
+@admin_required
+def get_deployment_status():
+    """Return current deployment preview/apply job status."""
+    try:
+        status = deploy_svc.public_status(dbm=dbm)
+        st = status.get("state", "idle")
+        if st in ("completed", "failed", "rolled_back") and status.get("phase") == "apply":
+            deploy_svc.record_apply_finished(dbm, st)
+        return jsonify(status), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/deployment/preview", methods=["POST"])
+@admin_required
+def deployment_preview():
+    """Fetch upstream changes and summarize (git fetch only; no pull)."""
+    try:
+        status = deploy_svc.start_preview()
+        return jsonify(status), 202
+    except deploy_svc.DeploymentUpdateError as e:
+        return jsonify({"error": e.message}), e.status_code
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route("/deployment/apply", methods=["POST"])
+@admin_required
+def deployment_apply():
+    """
+    Apply upgrade after preview: git pull, frontend build, service restart.
+
+    Body: { "confirm": true } (required)
+    """
+    data = request.get_json(silent=True) or {}
+    if not data.get("confirm"):
+        return jsonify({"error": "'confirm': true is required to proceed"}), 400
+
+    user = dbm.get_user_by_id(get_user_id())
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    try:
+        status = deploy_svc.start_apply(user.id, user.username, dbm)
+        return jsonify(status), 202
+    except deploy_svc.DeploymentUpdateError as e:
+        return jsonify({"error": e.message}), e.status_code
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # =====================================================================

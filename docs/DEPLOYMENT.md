@@ -192,7 +192,53 @@ curl http://localhost:40901/api/auth/health
 # ⚠️ IMPORTANT: Change admin password immediately!
 ```
 
-### 7. SSL/TLS Setup (Recommended)
+### 8. In-app deployment update (admin)
+
+Admins can upgrade the server from **Admin → Settings → Application Update** when enabled.
+
+**Enable in `.env`:**
+
+```bash
+DEPLOY_UPDATE_ENABLED=1
+# Match your compose project name (see `docker volume ls` → *_logai_data)
+COMPOSE_PROJECT_NAME=parsemylog-ai
+# Optional; compose defaults mount the repo at /deploy
+# DEPLOY_PROJECT_ROOT=/deploy
+```
+
+Restart the stack after changing `.env`:
+
+```bash
+docker compose up -d --build logai-api
+```
+
+**What the upgrade does (after admin confirms):**
+
+1. `git pull` (records current commit for rollback)
+2. `docker compose --profile build up frontend-build`
+3. `docker compose restart nginx celery-worker logai-api`
+4. Health check on `/api/auth/health`
+
+On any failure, the script rolls back with `git reset --hard` to the pre-pull commit, rebuilds the frontend, and restarts services.
+
+**Preview** uses `git fetch` only (working tree unchanged until confirm).
+
+**Requirements:**
+
+- Git remote configured; **clean working tree** (no uncommitted changes)
+- `logai-api` container has repo root and Docker socket mounts (see `docker-compose.yml`)
+- Rebuild API image after enabling (`Dockerfile` includes `git`, `curl`, `docker.io`, `docker-compose-plugin`)
+
+**Security:** Mounting `/var/run/docker.sock` gives the API container Docker control on the host. Use only on trusted production hosts.
+
+**Manual equivalent:**
+
+```bash
+./scripts/server-upgrade.sh preview
+./scripts/server-upgrade.sh apply
+```
+
+### 9. SSL/TLS Setup (Recommended)
 
 #### Option A: Nginx Reverse Proxy (Recommended)
 

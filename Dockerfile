@@ -8,7 +8,8 @@ WORKDIR /app
 # Install ripgrep (required for rg+Drain3 two-stage pipeline) and tshark (required for PCAP analysis)
 RUN apt-get update && \
     echo "wireshark-common wireshark-common/install-setuid boolean false" | debconf-set-selections && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep tshark && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        ripgrep tshark git curl ca-certificates docker.io docker-compose-plugin && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

@@ -30,6 +30,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import { formatDate } from "@/lib/utils";
 import { AdminRegexScanPreview } from "@/components/admin/AdminRegexScanPreview";
+import { DeploymentUpdateCard } from "@/components/admin/DeploymentUpdateCard";
 
 /* ================================================================ Types */
 interface AdminUser {
@@ -1333,9 +1334,15 @@ function SettingsTab() {
         </button>
       </div>
 
-      {/* LLM Settings Card */}
-      <div className="bg-card border border-border rounded-2xl p-6 max-w-2xl">
-        <div className="flex items-start gap-4">
+      {/* 4×4 settings grid: Application Update (1,1), AI Chat (1,3) */}
+      <div className="grid grid-cols-4 grid-rows-4 gap-4 w-full max-w-7xl min-h-[28rem] auto-rows-fr">
+        <div className="col-start-1 row-start-1 col-span-2 row-span-2 min-h-0 flex flex-col">
+          <DeploymentUpdateCard />
+        </div>
+
+        <div className="col-start-3 row-start-1 col-span-2 row-span-2 min-h-0 flex flex-col">
+      <div className="bg-card border border-border rounded-2xl p-6 h-full min-h-0 flex flex-col overflow-auto">
+        <div className="flex items-start gap-4 flex-1 min-h-0">
           <div className="shrink-0 h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
             <SmartToyIcon style={{ fontSize: 28 }} className="text-primary" />
           </div>
@@ -1479,6 +1486,8 @@ function SettingsTab() {
               </div>
             )}
           </div>
+        </div>
+      </div>
         </div>
       </div>
     </>
